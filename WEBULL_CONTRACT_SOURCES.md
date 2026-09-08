@@ -17,4 +17,3 @@ The documented balance contract exposes `account_currency_assets[].buying_power`
 The position contract exposes `quantity`, not a separate stock `sellable_quantity`;
 therefore the v2 pre-Place rule conservatively requires a complete empty
 open-order scan and limits SELL to the freshly read position quantity.
-

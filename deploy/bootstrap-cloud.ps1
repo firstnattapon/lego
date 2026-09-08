@@ -37,4 +37,3 @@ Run @('projects','add-iam-policy-binding',$ProjectId,"--member=serviceAccount:$r
 if (-not $Apply) {
   Write-Output 'DRY RUN ONLY. Re-run with -Apply after reviewing project/environment and authenticating gcloud.'
 }
-

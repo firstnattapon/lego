@@ -384,4 +384,3 @@ def columns_presented(row: dict) -> dict:
         v = row[k]
         out[k] = round(v, 2) if (i in money and isinstance(v, (int, float))) else v
     return out
-

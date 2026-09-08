@@ -736,4 +736,3 @@ def test_dna_headroom_is_measured_from_the_market_ordinal(monkeypatch):
     """bypass:100 at ordinal 43 leaves 56 slots, which is why it passed."""
     assert dna_steps_remaining("bypass:100", PROD_ORDINAL) == 56
     assert math.isclose(FIX_C - PROD_HOLDINGS * PROD_PRICE, -101.50, abs_tol=0.01)
-

@@ -38,4 +38,3 @@ python ops.py check
 ไม่มีคำสั่ง local ใดใน repo นี้ส่ง order เอง การ deploy, UAT Place และ Production
 canary ต้องได้รับ authorization ที่มี environment/account/symbol/side/quantity/วงเงิน
 กำกับใน session ที่ลงมือจริงเสมอ
-

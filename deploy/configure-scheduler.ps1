@@ -28,4 +28,3 @@ $verb = if ($LASTEXITCODE -eq 0) { 'update' } else { 'create' }
 if ($LASTEXITCODE -ne 0) { throw "Failed to $verb Scheduler job" }
 
 Write-Output "Configured $jobName -> $uri with OIDC audience $uri"
-

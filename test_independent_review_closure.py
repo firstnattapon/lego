@@ -157,4 +157,3 @@ def test_outbox_hot_reads_use_query_keys_and_return_only_bounded_work():
     assert len(list_actionable("ck", limit=3)) == 3
     assert {item["run_id"] for item in list_audit_pending("ck", limit=1)} \
         <= {"live-5", "live-6"}
-

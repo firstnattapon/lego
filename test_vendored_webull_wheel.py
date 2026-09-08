@@ -75,4 +75,3 @@ def test_vendored_wheel_only_allows_audited_cryptography_floor():
             f"{DIST_INFO}/licenses/LICENSE" in wheel.namelist()
             and f"{DIST_INFO}/licenses/NOTICE" in wheel.namelist()
         )
-

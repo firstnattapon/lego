@@ -91,4 +91,3 @@ def test_current_slot_matches_the_engine_grid(monkeypatch):
     slot = resolve_market_slot(THURSDAY_1545_ET)
     assert slot.slot_id == f"{session_date.isoformat()}:{index}"
     assert slot.slot_start_utc == start
-

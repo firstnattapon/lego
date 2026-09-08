@@ -39,4 +39,3 @@
 The release manifest hashes the edited snapshot itself. A Git commit is not
 invented for this non-Git directory. Cloud inventory, UAT lifecycle, Production
 observe, and Production canary remain separate evidence gates.
-

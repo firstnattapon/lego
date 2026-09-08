@@ -280,4 +280,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":                       # pragma: no cover - CLI entry
     raise SystemExit(main(sys.argv))
-

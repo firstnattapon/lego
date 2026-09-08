@@ -66,4 +66,3 @@ def validate_page(page: object, *, sequence: int, side_key: str) -> dict:
         raise ValueError("FIFO lot values outside allowed range")
     doc["content_hash"] = claimed
     return doc
-

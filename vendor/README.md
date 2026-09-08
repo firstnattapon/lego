@@ -27,4 +27,3 @@ Provenance and controls:
   runtime-code hash
 
 Do not replace this wheel without repeating UAT contract tests and `pip-audit`.
-

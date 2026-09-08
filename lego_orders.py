@@ -237,4 +237,3 @@ def apply_fill(open_legs: dict | None, side: str, qty: float, price: float,
         target = legs["buys"] if side == "BUY" else legs["sells"]
         target.append([remaining, price, fee_ps])
     return legs, realized
-

@@ -338,4 +338,3 @@ def test_v2_archive_tail_uses_only_bounded_queries(monkeypatch):
     assert ("webull_lego_order_audit", "limit_to_first", 8) in calls
     assert not any(path == "webull_lego_order_outbox" and op == "get"
                    for path, op, _ in calls)
-

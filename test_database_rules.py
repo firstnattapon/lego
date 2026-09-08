@@ -171,4 +171,3 @@ def test_emulator_enforces_anonymous_read_write_matrix():
         assert _emulator_request(f"{path}/record") in {401, 403}
     for path in PUBLIC_READ_PATHS | PRIVATE_PATHS | {"unmatched", "private"}:
         assert _emulator_request(path, method="PUT") in {401, 403}
-

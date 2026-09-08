@@ -206,4 +206,3 @@ def test_module_imports_no_broker_mutation_helper():
     assert called_attributes.isdisjoint({
         "place_order", "replace_order", "cancel_order"
     })
-

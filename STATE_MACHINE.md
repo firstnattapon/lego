@@ -35,4 +35,3 @@ the next worker invocation; the account-symbol fence stays held.
 
 Lease expiry never deletes the attempt marker. A negative detail lookup once is
 not proof of absence. Manual/shared-account drift blocks the account-symbol fence.
-

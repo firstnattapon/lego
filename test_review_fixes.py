@@ -395,4 +395,3 @@ def test_archive_worker_never_takes_the_scheduler_down(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("rtdb down")))
     body, code = main.lego_archive_worker(object())
     assert code == 503 and "rtdb down" in body["error"]
-

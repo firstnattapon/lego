@@ -453,4 +453,3 @@ def expire_unsent_before(chain_key: str, now_utc: datetime) -> int:
             })
             count += 1
     return count
-

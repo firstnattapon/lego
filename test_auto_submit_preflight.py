@@ -495,4 +495,3 @@ def test_ready_false_blocks_whatever_ok_says(monkeypatch, auto_submit):
         "ok": True, "ready": False, "reasons": ["ไม่พบ token file"]})
     body, _ = _run(monkeypatch, SLOT_0, 320.0)
     assert _intents() == [] and body["outbox_blocked_checks"] == ["token_ready"]
-

@@ -331,4 +331,3 @@ def test_learning_guide_dom_shape_matches_f8388a():
     assert _sha256(encoded_shape) == (
         "0230b65a95578595edb60beb644a03ce3c7ef6ce85545d14bb93a7ce9b803809"
     )
-

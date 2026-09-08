@@ -197,4 +197,3 @@ def archive_terminal_records(now_utc: datetime | None = None, *,
             cutoff, limit, bounded=chain_key_ is not None),
         "bounded": chain_key_ is not None,
     }
-

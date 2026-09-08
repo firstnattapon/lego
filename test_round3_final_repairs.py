@@ -42,4 +42,3 @@ def test_release_builder_refuses_unverified_pass(tmp_path, failure):
         log.write_text("changed output", encoding="utf-8")
     with pytest.raises(ValueError):
         validate(manifest, validation, tmp_path)
-

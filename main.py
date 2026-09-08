@@ -377,4 +377,3 @@ def lego_tick(request):
         "archive": archive,
         "duration_ms": round((time.monotonic() - started) * 1000, 3),
     }, decision_code
-

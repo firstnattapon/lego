@@ -94,4 +94,3 @@ python tools/migrate_realized_fifo_v3.py CHAIN_KEY --rollback --confirm
 
 After schema v3 finalizes, rollback is refused. Use code that understands v3;
 never restore an old RTDB snapshot over broker executions.
-

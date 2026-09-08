@@ -50,4 +50,3 @@ jobs:
           # Required since gitleaks-action v2 for pull_request events; without
           # it the job errors out instead of scanning.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

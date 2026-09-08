@@ -326,4 +326,3 @@ def resolve_dna_step(legacy_step: int, slot: MarketSlot) -> tuple[int, int]:
     mode = clock_mode()
     error = legacy_step - slot.market_ordinal
     return (slot.market_ordinal if mode == "market" else legacy_step), error
-

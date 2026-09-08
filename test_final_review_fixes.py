@@ -1051,4 +1051,3 @@ def test_terminal_outbox_status_cannot_be_reopened():
     update_intent("ck", "r1", {"status": "FILLED"})
     update_intent("ck", "r1", {"status": "PENDING_DISPATCH"})
     assert FAKE_DB.reference(f"{OUTBOX_PATH}/ck/r1").get()["status"] == "FILLED"
-

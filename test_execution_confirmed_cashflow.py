@@ -696,4 +696,3 @@ def test_fetch_holdings_reads_the_position_without_market_data(monkeypatch):
 
     assert webull_io.fetch_holdings(trade, _cfg()) == 12.5
     assert data.market_data.get_snapshot.calls == []
-

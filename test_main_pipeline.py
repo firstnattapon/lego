@@ -392,4 +392,3 @@ def test_same_dna_code_decoding_differently_fails_closed(monkeypatch):
     assert code == 409 and body["pipeline_status"] == "DNA_DRIFT"
     assert body["committed"] is False
     assert state_ref.get()["version"] == before
-

@@ -1148,4 +1148,3 @@ def _extract_price(snap, symbol: str) -> float:
     ValueError, so the row is never built rather than built on a wrong price.
     """
     return _price_of(_snapshot_entry(snap, symbol))
-

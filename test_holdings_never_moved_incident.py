@@ -410,4 +410,3 @@ def test_the_position_moves_and_the_ledger_follows(monkeypatch):
     assert FAKE_DB.reference(
         f"webull_lego_rows/{body_next['run_id']}").get()[
             "จำนวนถือครอง (หุ้น)"] == holdings_after
-

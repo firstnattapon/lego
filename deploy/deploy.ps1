@@ -38,4 +38,3 @@ $secrets = "WEBULL_APP_KEY=webull-app-key-$suffix`:latest,WEBULL_APP_SECRET=webu
 if ($LASTEXITCODE -ne 0) { throw "gcloud deploy failed: $LASTEXITCODE" }
 & gcloud functions describe $functionName --gen2 --region=$Region --project=$ProjectId `
   --format='json(name,serviceConfig.uri,serviceConfig.revision,updateTime,state)'
-

@@ -274,4 +274,3 @@ def release_binding_for(env: Mapping[str, str] | None = None) -> str:
     """Return the exact value an explicitly authorized deployment must store."""
     runtime = load_runtime_config(env)
     return runtime.deployment.expected_release_binding
-

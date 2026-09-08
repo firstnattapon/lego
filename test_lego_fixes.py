@@ -800,4 +800,3 @@ def test_dna_fingerprint_tracks_the_array_not_the_code():
     assert dna_fingerprint("bypass:50") != dna_fingerprint("bypass:51")
     assert dna_fingerprint("26021034252903219354832053493") != dna_fingerprint("bypass:26")
     assert len(dna_fingerprint("bypass:50")) == 16
-

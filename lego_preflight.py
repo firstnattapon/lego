@@ -234,4 +234,3 @@ def auto_submit_preflight(**kwargs) -> dict:
             "warning_kind": AUTO_SUBMIT_BLOCKED_WARNING,
             "hint": "",
         }
-

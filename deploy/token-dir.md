@@ -113,4 +113,3 @@ curl -s -X POST "$LEGO_ONE_ROW_URL" -H "Authorization: Bearer $(gcloud auth prin
 - `webull_lego_order_outbox/{chain_key}` มี intent ใหม่ status `PENDING_DISPATCH`
 - รอบถัดไปของ `lego-order-worker` ใช้เวลามากกว่า ~1 วินาที (มี broker call จริง)
   แทนที่จะเป็น ~0.2 วินาทีของ queue ว่าง
-

@@ -128,4 +128,3 @@ class BrokerCashflow:
             "broker_cash_delta": delta_cash,
             "cash_cumulative": updated.cash_delta,
         }
-

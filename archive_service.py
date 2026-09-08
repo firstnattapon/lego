@@ -14,4 +14,3 @@ def run_archive(deps) -> tuple[dict, int]:
             "pipeline_status": "ARCHIVE_ERROR",
             "error": deps._error_text(exc),
         }, 503
-

@@ -455,4 +455,3 @@ def test_outbox_status_normalization_matches_the_broker_normalizer():
     assert outbox_status("   ") == ""
     assert outbox_status("partial filled") == broker_status("partial filled")
     assert outbox_status("Submitted") == "SUBMITTED"
-

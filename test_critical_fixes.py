@@ -115,4 +115,3 @@ def test_17_column_contract_is_preserved():
     snap = {"captured_at": "2026-07-23T18:00:05Z", "price": 320.0, "holdings": 9.0}
     row = compute_row(cfg, snap, None, dna_step=0)
     assert len([k for k in row if k != "_meta"]) == 17
-

@@ -100,4 +100,3 @@ Dependency identity เปลี่ยนเพราะเพิ่ม reader r
 - `reader/docs/dna_resonate_local_minimum_5_step_plan.html`
 - `reader/docs/dna_resonate_local_minimum_5_step_plan.json`
 - `reader/.github/workflows/ci.yml`
-

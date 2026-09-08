@@ -386,4 +386,3 @@ def test_the_running_semantics_is_reported_on_every_committed_row(monkeypatch):
     assert code == 200
     assert body["cashflow_semantics"] == "execution_confirmed_v1"
     assert "cashflow_semantics_migrated_from" not in body
-

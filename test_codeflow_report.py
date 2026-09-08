@@ -233,4 +233,3 @@ def test_learning_guide_has_no_dynamic_code_execution():
     assert not re.search(r"\beval\s*\(", html)
     assert not re.search(r"\bnew\s+Function\s*\(", html)
     assert "srcdoc" not in html and "document.write" not in html
-

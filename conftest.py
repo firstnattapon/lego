@@ -198,4 +198,3 @@ def fake_trade_client(*, positions=None, open_orders=None, order_detail=None,
 
 def fake_data_client(*, snapshot=None):
     return FakeNamespace(market_data=FakeNamespace(get_snapshot=FakeCall(snapshot)))
-

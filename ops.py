@@ -95,4 +95,3 @@ def main_cli() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main_cli())
-

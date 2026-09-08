@@ -366,4 +366,3 @@ def test_conflicting_fifo_event_defers_then_resumes_without_permanent_error():
         "conflict", "event-a", "BUY", 1, 100, 0)["matching_pending"] is False
     assert apply_realized_fill(
         "conflict", "event-b", "BUY", 1, 101, 0)["matching_pending"] is False
-

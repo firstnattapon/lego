@@ -156,4 +156,3 @@ python tools\migration_audit.py C:\secure\rtdb-backup.json
 local tests และ mock benchmark ไม่ทำให้ cloud/live gates ผ่านเอง `ACCEPTANCE.json`
 ต้องผูกทุกผลกับ candidate hash, dependency lock hash, environment และ timestamp.
 credential/ตลาดปิด/ไม่มี authorization เป็น BLOCKED เสมอ ไม่ลด denominator.
-

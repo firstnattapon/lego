@@ -32,4 +32,3 @@ Fees are never guessed from Preview.
 
 The worked examples and fee-only correction are executable in
 `test_v2_contract.py`. E and A are model statistics, not guaranteed profit.
-

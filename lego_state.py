@@ -1593,4 +1593,3 @@ def apply_realized_fill(ck: str, event_id: str, side: str,
             progress.get("remaining_quantity", 0.0) or 0.0) if pending else 0.0,
         "matching_work_limit": MATCH_PAGES_PER_CALL_V3,
     }
-

@@ -57,4 +57,3 @@ if __name__ == "__main__":
     if len(sys.argv) != 3:
         raise SystemExit("usage: upgrade_webull_wheel_cryptography.py SOURCE DEST")
     print(upgrade(Path(sys.argv[1]), Path(sys.argv[2])))
-

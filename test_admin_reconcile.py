@@ -733,4 +733,3 @@ def test_crash_after_fence_clear_replay_finalizes_intent_and_completed_audit(
     assert "needs_manual_check" not in final
     assert set(FAKE_DB.reference(event_path).get()) == {
         "authorized", "applied", "completed"}
-

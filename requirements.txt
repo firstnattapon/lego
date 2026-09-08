@@ -22,4 +22,3 @@ google-cloud-secret-manager==2.26.0
 cryptography==50.0.0
 ./vendor/webull_openapi_python_sdk-2.0.15-1lego-py3-none-any.whl
 tzdata==2025.3
-

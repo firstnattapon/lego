@@ -96,4 +96,3 @@ transaction subtree, and per-call matching work have fixed bounds. FIFO order,
 partial fills, cumulative VWAP-derived increments, and fee allocation remain
 unchanged. Reader/admin adapters must treat `open_legs` as a bounded projection
 and use cursor-aware bounded inspection rather than materializing all history.
-
