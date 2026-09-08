@@ -1,0 +1,67 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "webull_lego_rows": {
+      ".read": true,
+      ".write": false
+    },
+    "webull_lego_state": {
+      ".read": true,
+      ".write": false
+    },
+    "webull_lego_order_audit": {
+      ".indexOn": ["placed_at"],
+      ".read": true,
+      ".write": false
+    },
+    "webull_lego_order_audit_archive": {
+      ".read": true,
+      ".write": false
+    },
+    "webull_lego_warnings": {
+      ".read": true,
+      ".write": false
+    },
+    "webull_lego_order_outbox": {
+      ".read": false,
+      ".write": false,
+      "$chain": {
+        ".indexOn": ["created_at", "actionable_sort", "audit_pending"]
+      }
+    },
+    "webull_lego_order_outbox_archive": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_order_dispatch_locks": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_admin_reconcile_audit": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_realized": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_realized_events": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_realized_lot_pages": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_broker_cashflow": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_errors": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}
+

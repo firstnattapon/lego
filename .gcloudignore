@@ -1,0 +1,43 @@
+# Keep local/test artifacts and credentials out of the Cloud Functions source
+# upload. The vendored Webull wheel is intentionally NOT ignored.
+.gcloudignore
+.git
+.git/**
+.pytest_cache
+.pytest_cache/**
+.review-runtime
+.review-runtime/**
+**/__pycache__/**
+**/*.py[cod]
+.venv
+.venv*/**
+.tools
+.tools/**
+tools
+tools/**
+.claude
+.claude/**
+release_evidence_v2
+release_evidence_v2/**
+
+# Tests remain in the delivered source archive, but are not runtime inputs.
+test_*.py
+
+# Local operator material must come from Secret Manager / runtime env only.
+.env
+.env.*
+token.txt
+credentials*.json
+*credentials*.json
+*service-account*.json
+*service_account*.json
+*serviceaccount*.json
+secrets.toml
+.streamlit/secrets.toml
+webull_token
+webull_token/**
+.firebase
+.firebase/**
+firebase-debug.log
+database-debug.log
+

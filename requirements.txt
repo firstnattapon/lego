@@ -1,0 +1,25 @@
+# numpy is pinned exactly, not floated. The DNA gate array comes from
+# np.random.default_rng, and numpy documents that Generator "does not provide a
+# version compatibility guarantee ... the bit stream may change". A minor
+# upgrade could therefore decode the same dna_code into a different strategy.
+# The stored dna_fingerprint makes that fail closed; this pin keeps it from
+# happening in the first place. Change it only with a fingerprint check.
+numpy==2.4.6
+# Exact pins make deploys reproducible; these are the versions exercised by the
+# final Python 3.12 review environment. Upgrade only through the full suite.
+functions-framework==3.10.2
+firebase-admin==6.9.0
+# 2.30 requires protobuf>=6.33.5, while the pinned Webull 2.0.15 money-path
+# requires protobuf<6 on Python 3.12. 2.26 is the newest compatible line we
+# resolve and test as one environment; do not upgrade it independently.
+google-cloud-secret-manager==2.26.0
+# The SDK is pinned for the same reason as numpy, on a shorter fuse: it owns the
+# HMAC signing, the auth flow, and the exact order payload that reaches the
+# broker, so an unplanned upgrade at deploy time changes the money path with
+# nothing in this repo to notice. Runtime code remains Webull 2.0.15 byte-for-
+# byte; the local wheel changes only dependency metadata so Python 3.12 can use
+# the current audited cryptography floor. See vendor/README.md and its provenance tests.
+cryptography==50.0.0
+./vendor/webull_openapi_python_sdk-2.0.15-1lego-py3-none-any.whl
+tzdata==2025.3
+

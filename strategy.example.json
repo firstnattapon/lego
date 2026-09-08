@@ -1,0 +1,10 @@
+{
+  "dna_code": "bypass:100",
+  "interval_seconds": 900,
+  "origin_utc": "2026-09-08T13:30:00Z",
+  "calendar_id": "XNYS-regular",
+  "calendar_fingerprint": "0287d84627be239d",
+  "decoder_version": "legacy-v1-numpy-2.4.6",
+  "decoded_array_sha256": "489be4fd2598e79a"
+}
+
