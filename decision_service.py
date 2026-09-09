@@ -194,8 +194,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             cfg = replace(
                 cfg,
                 quantity_increment=float(capability.quantity_increment),
+                # Broker decimals may be padded (1.00000000 is one share).
+                # Count significant fractional places, not transport padding;
+                # Config still rejects genuinely unsupported precision > 5.
                 decimal_precision=max(
-                    0, -capability.quantity_increment.as_tuple().exponent),
+                    0, -capability.quantity_increment.normalize().as_tuple().exponent),
             )
         # Before the model is touched: if this revision's accounting is behind
         # the chain's, nothing it computes afterwards is worth writing. read_anchor
@@ -456,5 +459,4 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 "pipeline_status": "SNAPSHOT_OR_ENGINE_ERROR",
                 "error": _error_text(exc, with_type=False),
                 "type": type(exc).__name__}, code
-
 
