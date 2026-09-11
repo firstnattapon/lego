@@ -76,6 +76,9 @@ REALIZED_MATCHING_PENDING = "REALIZED_MATCHING_PENDING"
 DEFAULT_FILL_CONFIRM_MAX_ATTEMPTS = 5
 DEFAULT_MAX_DISPATCH_PRICE_DRIFT_BPS = 100.0
 DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS = 360.0
+# Webull sandbox market data can be delayed by 15 minutes. This allowance is
+# selected only by the v2 UAT deployment; it never extends decision lifetime.
+UAT_QUOTE_DELAY_SECONDS = 900.0
 # A broker timestamp a fraction ahead of the worker can be ordinary clock skew.
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
@@ -774,7 +777,8 @@ def _parse_utc(value, field: str) -> datetime:
 def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
                            now_utc: datetime | None = None,
                            max_price_drift_bps: float | None = None,
-                           max_quote_age_seconds: float | None = None) -> dict:
+                           max_quote_age_seconds: float | None = None,
+                           max_decision_age_seconds: float | None = None) -> dict:
     """Revalidate a committed intent against the quote immediately before send.
 
     A MARKET order may fill away from either quote, so tiny moves are expected.
@@ -803,6 +807,12 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
     if not (math.isfinite(max_quote_age_seconds)
             and max_quote_age_seconds >= 0):
         raise ValueError("max_quote_age_seconds ต้อง finite และ >= 0")
+    max_decision_age_seconds = (
+        max_quote_age_seconds if max_decision_age_seconds is None
+        else float(max_decision_age_seconds))
+    if not (math.isfinite(max_decision_age_seconds)
+            and max_decision_age_seconds >= 0):
+        raise ValueError("max_decision_age_seconds ต้อง finite และ >= 0")
 
     try:
         decision_price = float(intent["decision_price"])
@@ -855,7 +865,7 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
         reasons.append("decision_time_in_future")
     if quote_delta_seconds < -MAX_DISPATCH_FUTURE_SKEW_SECONDS:
         reasons.append("quote_time_in_future")
-    if decision_age_seconds > max_quote_age_seconds:
+    if decision_age_seconds > max_decision_age_seconds:
         reasons.append("decision_age_limit")
     if quote_age_seconds > max_quote_age_seconds:
         reasons.append("quote_age_limit")
@@ -872,6 +882,7 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
         "decision_age_seconds": decision_age_seconds,
         "quote_age_seconds": quote_age_seconds,
         "max_quote_age_seconds": max_quote_age_seconds,
+        "max_decision_age_seconds": max_decision_age_seconds,
         "intent_side": intent_side,
         "dispatch_side": current.side if current.acted else "PASS",
         "intent_quantity": requested_quantity,
@@ -899,7 +910,7 @@ def _reject_unsafe_dispatch_quote(chain_key_: str, run_id: str,
              **evidence})
     return _stop(
         chain_key_, run_id, "SUPPRESSED_STATE_CHANGED",
-        {"terminal_reason": "fresh quote invalidated committed intent",
+        {"terminal_reason": "dispatch blocked: " + ", ".join(evidence["reasons"]),
          **evidence},
         state_change_reasons=evidence["reasons"],
         price_drift_bps=evidence["price_drift_bps"])
@@ -966,6 +977,9 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             tolerance = 0.000001
             max_price_drift_bps = DEFAULT_MAX_DISPATCH_PRICE_DRIFT_BPS
             max_quote_age_seconds = DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS
+            max_decision_age_seconds = DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS
+            if runtime.deployment.environment == "UAT":
+                max_quote_age_seconds += UAT_QUOTE_DELAY_SECONDS
         else:
             tolerance = _nonnegative_finite_env(
                 "LEGO_HOLDINGS_DRIFT_TOLERANCE", 0.000001)
@@ -975,6 +989,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             max_quote_age_seconds = _nonnegative_finite_env(
                 "LEGO_MAX_DISPATCH_QUOTE_AGE_SECONDS",
                 DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS)
+            max_decision_age_seconds = max_quote_age_seconds
     except ValueError as exc:
         # A deploy setting can be corrected, so keep the intent retryable.  In
         # particular, NaN must not turn ``drift > tolerance`` into False.
@@ -1003,7 +1018,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         quote_safety = _dispatch_quote_safety(
             cfg, intent, fresh,
             max_price_drift_bps=max_price_drift_bps,
-            max_quote_age_seconds=max_quote_age_seconds)
+            max_quote_age_seconds=max_quote_age_seconds,
+            max_decision_age_seconds=max_decision_age_seconds)
     except ValueError as exc:
         # Unlike a deploy setting, incomplete/tampered intent provenance cannot
         # heal on retry and must not occupy the queue forever.
@@ -1024,6 +1040,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         "quantity": float(intent["quantity"]), "symbol": cfg.symbol,
         "environment": env, "status": "PENDING_DISPATCH", "realized": False,
         "placed_at": intent["created_at"],
+        "dispatch_quote_check": quote_safety,
     })
     try:
         # Building the payload is part of the gate: a quantity that cannot be
@@ -1111,7 +1128,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         final_quote_safety = _dispatch_quote_safety(
             cfg, intent, final_fresh,
             max_price_drift_bps=max_price_drift_bps,
-            max_quote_age_seconds=max_quote_age_seconds)
+            max_quote_age_seconds=max_quote_age_seconds,
+            max_decision_age_seconds=max_decision_age_seconds)
     except ValueError as exc:
         return _persist_error(
             ck, run_id, "NOT_PLACED", exc,
@@ -1161,7 +1179,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         deadline_safety = _dispatch_quote_safety(
             cfg, intent, final_fresh,
             max_price_drift_bps=max_price_drift_bps,
-            max_quote_age_seconds=max_quote_age_seconds)
+            max_quote_age_seconds=max_quote_age_seconds,
+            max_decision_age_seconds=max_decision_age_seconds)
     except ValueError as exc:
         return _persist_error(
             ck, run_id, "NOT_PLACED", exc,
@@ -1416,5 +1435,4 @@ def run_http(request, deps) -> tuple[dict, int]:
     except Exception as exc:
         return {"pipeline_status": "ORDER_WORKER_ERROR",
                 "error": deps._error_text(exc)}, 503
-
 
