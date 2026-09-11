@@ -22,13 +22,13 @@ explicit finite bypass bundle for a fresh chain.
 | `LEGO_MARKET_CATEGORY` | capability | DERIVE/validate from instrument profile; v2 supports long-only US stocks/ETF represented by `US_STOCK` profile category |
 | `WEBULL_ENV` | deployment | KEEP; strict `UAT|PROD`, endpoint allowlist derived |
 | `WEBULL_APP_KEY`, `WEBULL_APP_SECRET`, `WEBULL_ACCOUNT_ID` | secret/deployment | KEEP in Secret Manager bindings; never request JSON |
-| `WEBULL_TOKEN_SECRET` | secret/deployment | KEEP as Secret Manager resource name; runtime access only |
+| `WEBULL_TOKEN_SECRET` | secret/deployment | OPTIONAL; set only to a Secret Manager resource whose `latest` version is enabled. Omit when broker token check is disabled (the current UAT app uses HMAC without a token file) |
 | `WEBULL_TOKEN_DIR` | internal | CONSTANT `/tmp/webull_token`; durable truth is Secret Manager |
 | `FIREBASE_DB_URL`, `GCLOUD_PROJECT`/`GOOGLE_CLOUD_PROJECT` | deployment | KEEP per environment, not counted as strategy knobs |
 | `LEGO_CANDIDATE_HASH`, `LEGO_RELEASE_AUTHORIZATION` | release | KEEP deployment-bound; binding includes environment, account fingerprint, candidate |
 | `LEGO_ADMIN_OPERATOR` | admin audit | KEEP only for explicit reconcile CLI |
 | `LEGO_ADMIN_RECONCILE_LEASE_SECONDS` | internal | CONSTANT/versioned default |
-| `LEGO_ALLOW_EPHEMERAL_TOKEN_DIR` | workaround | REMOVE; Secret Manager hydration resolves the cold-start problem |
+| `LEGO_ALLOW_EPHEMERAL_TOKEN_DIR` | workaround | REMOVE; use Secret Manager hydration only for an app that actually requires a token |
 | `LEGO_ALLOW_ZERO_HOLDINGS` | unsafe override | REMOVE from v2; missing/vanished positions fail closed |
 | `LEGO_ARCHIVE_LIMIT`, `LEGO_ARCHIVE_RETENTION_DAYS` | housekeeping | CONSTANT/versioned default; not user controls |
 | `LEGO_AUTO_SUBMIT_MIN_DNA_REMAINING`, `LEGO_DNA_LOW_WATERMARK` | safety | CONSTANT/versioned default; DNA exhaustion is explicit |
@@ -94,3 +94,4 @@ python tools/migrate_realized_fifo_v3.py CHAIN_KEY --rollback --confirm
 
 After schema v3 finalizes, rollback is refused. Use code that understands v3;
 never restore an old RTDB snapshot over broker executions.
+
