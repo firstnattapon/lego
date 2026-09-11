@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+from pathlib import Path
 from decimal import Decimal
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -159,6 +160,18 @@ def test_token_secret_hydrates_exact_sdk_format(monkeypatch, tmp_path):
     assert (tmp_path / "token.txt").read_text().splitlines() == [
         "secret-token", expires, "NORMAL"
     ]
+
+
+def test_deploy_token_hydration_is_opt_in_and_requires_an_enabled_version():
+    """An empty Secret Manager container must never break every UAT cold start."""
+    script = (Path(__file__).parent / "deploy" / "deploy.ps1").read_text(
+        encoding="utf-8")
+    assert "[string]$TokenSecret = ''" in script
+    assert '"WEBULL_TOKEN_SECRET=$tokenResource"' not in script
+    assert 'if ($TokenSecret)' in script
+    assert "secrets versions describe latest" in script
+    assert "$tokenState -ne 'ENABLED'" in script
+    assert '$envVars += "WEBULL_TOKEN_SECRET=$TokenSecret"' in script
 
 
 def test_strict_preview_contract_and_payload_hash(monkeypatch):
@@ -338,3 +351,4 @@ def test_v2_archive_tail_uses_only_bounded_queries(monkeypatch):
     assert ("webull_lego_order_audit", "limit_to_first", 8) in calls
     assert not any(path == "webull_lego_order_outbox" and op == "get"
                    for path, op, _ in calls)
+
