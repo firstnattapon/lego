@@ -77,6 +77,11 @@ script เป็นตัวเตรียม deployment ที่ตรวจ�
   -DnaBundle strategy.example.json
 ```
 
+อย่าตั้ง `WEBULL_TOKEN_SECRET` สำหรับ UAT app ที่ log ระบุ
+`_check_token_enable result is False`; SDK ใช้ HMAC และจะไม่สร้าง token fileอยู่แล้ว
+หาก app เปิด token check ให้ส่ง `-TokenSecret projects/PROJECT/secrets/NAME`
+โดย script จะยอมรับเฉพาะ secret ที่มี `latest` version สถานะ `ENABLED`
+
 ทั้งสองคำสั่ง default `mode=observe, active=false`; function คือ `lego-tick-uat`
 และ `lego-tick-prod`, entrypoint `lego_tick`, timeout 45s, concurrency/max instances 1.
 ต้อง inventory cloud ยืนยันว่า legacy decision/worker/archive ถูกตัด traffic แล้วจึงลบ
@@ -156,3 +161,4 @@ python tools\migration_audit.py C:\secure\rtdb-backup.json
 local tests และ mock benchmark ไม่ทำให้ cloud/live gates ผ่านเอง `ACCEPTANCE.json`
 ต้องผูกทุกผลกับ candidate hash, dependency lock hash, environment และ timestamp.
 credential/ตลาดปิด/ไม่มี authorization เป็น BLOCKED เสมอ ไม่ลด denominator.
+
