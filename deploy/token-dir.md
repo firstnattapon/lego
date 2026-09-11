@@ -34,6 +34,10 @@ SDK เซ็นทุก request ด้วย HMAC อย่างเดีย�
 37 แถวติดกัน, 33 แถวเป็น `READY_*`, `จำนวนถือครอง (หุ้น)` ค้างที่ `8.78392` ทุกแถว เพราะ
 `token_health()` อ่าน "ไม่พบไฟล์" เป็น "ไม่มีอะไรให้เซ็น"
 
+สำหรับ app แบบนี้ต้องไม่ตั้ง `WEBULL_TOKEN_SECRET` ไปยัง secret container ที่ไม่มี
+version เพราะ cold start จะล้มก่อนถึง SDK; `deploy/deploy.ps1` จึงไม่ผูก token secret
+โดยปริยาย และตรวจว่า `latest` เป็น `ENABLED` เมื่อส่ง `-TokenSecret` มาโดยชัดเจน
+
 **ในกรณีนี้ทั้งสองทางเลือกข้างล่างไม่ได้แก้อะไร** (ไฟล์ไม่เกิดอยู่ดี) — สิ่งที่แก้คือ
 preflight ยอมรับหลักฐานการเซ็นจริงแทนการส่องไฟล์ ซึ่งอยู่ในโค้ดแล้ว ทางเลือกข้างล่าง
 ยังคุ้มค่าเมื่อ broker **เปิด** token check เท่านั้น
@@ -113,3 +117,4 @@ curl -s -X POST "$LEGO_ONE_ROW_URL" -H "Authorization: Bearer $(gcloud auth prin
 - `webull_lego_order_outbox/{chain_key}` มี intent ใหม่ status `PENDING_DISPATCH`
 - รอบถัดไปของ `lego-order-worker` ใช้เวลามากกว่า ~1 วินาที (มี broker call จริง)
   แทนที่จะเป็น ~0.2 วินาทีของ queue ว่าง
+
