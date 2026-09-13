@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 # LEGO PRINCIPAL v2 — Google Cloud Shell all-in-one UAT deploy
 #
-# Safe invariants:
+# Configuration:
 #   environment = UAT
 #   mode        = trade
 #   active      = true
@@ -12,15 +12,6 @@ set -Eeuo pipefail
 #
 # Run from the repository root:
 #   bash deploy/cloudshell-all-in-one.sh
-#
-# Optional overrides:
-#   DATABASE_URL_OVERRIDE=https://...
-#   EXPECTED_CANDIDATE_HASH=<approved sha256>
-#   LEGO_SYMBOL_OVERRIDE=AAPL
-#   LEGO_FIX_C_OVERRIDE=3000
-#   LEGO_DIFF_OVERRIDE=25
-#   LEGO_DNA_BUNDLE_OVERRIDE=strategy.example.json
-#   LEGO_SCHEDULE_OVERRIDE='* * * * *'
 
 readonly PROJECT_ID="lego-firebase"
 readonly REGION="asia-southeast1"
@@ -32,15 +23,17 @@ readonly RUNTIME_SA_NAME="lego-runtime-${SUFFIX}"
 readonly SCHEDULER_SA_NAME="lego-scheduler-${SUFFIX}"
 readonly RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly SCHEDULER_SA="${SCHEDULER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-readonly MODE="trade"
-readonly ACTIVE="true"
+
+# --- TRADE MODE & OVERRIDES ---
+readonly MODE="${LEGO_MODE_OVERRIDE:-trade}"
+readonly ACTIVE="${LEGO_ACTIVE_OVERRIDE:-true}"
 
 readonly DATABASE_URL_OVERRIDE="${DATABASE_URL_OVERRIDE:-}"
 readonly EXPECTED_CANDIDATE_HASH="${EXPECTED_CANDIDATE_HASH:-}"
-readonly LEGO_SYMBOL_OVERRIDE="${LEGO_SYMBOL_OVERRIDE:-}"
-readonly LEGO_FIX_C_OVERRIDE="${LEGO_FIX_C_OVERRIDE:-}"
-readonly LEGO_DIFF_OVERRIDE="${LEGO_DIFF_OVERRIDE:-}"
-readonly LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-}"
+readonly LEGO_SYMBOL_OVERRIDE="${LEGO_SYMBOL_OVERRIDE:-AAPL}"
+readonly LEGO_FIX_C_OVERRIDE="${LEGO_FIX_C_OVERRIDE:-3000}"
+readonly LEGO_DIFF_OVERRIDE="${LEGO_DIFF_OVERRIDE:-25}"
+readonly LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-strategy.example.json}"
 readonly LEGO_SCHEDULE_OVERRIDE="${LEGO_SCHEDULE_OVERRIDE:-}"
 
 step() {
@@ -120,7 +113,7 @@ require_enabled_secret_version() {
         echo "Secret '${name}' ยังไม่มี latest version ที่ ENABLED"
         echo "เพิ่มค่าผ่าน Secret Manager หรือ secure administrator workflow แล้วรันใหม่"
         echo
-        echo "ตัวอย่างคำสั่ง (อย่าใส่ค่าลับลงใน command history):"
+        echo "ตัวอย่างคำสั่ง:"
         echo "  read -rsp 'Secret value: ' VALUE; echo"
         echo "  printf '%s' \"\${VALUE}\" | gcloud secrets versions add '${name}' --data-file=- --project='${PROJECT_ID}'"
         echo "  unset VALUE"
@@ -276,9 +269,6 @@ step "3/10 SERVICE ACCOUNTS"
 ensure_service_account "${RUNTIME_SA_NAME}" "LEGO runtime UAT"
 ensure_service_account "${SCHEDULER_SA_NAME}" "LEGO scheduler UAT"
 
-# Source deployment uses the Compute default service account for builds in
-# current Google Cloud projects. Make the identity explicit and fail early if an
-# organization policy prevented its creation.
 BUILD_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 if ! gcloud iam service-accounts describe "${BUILD_SA}" \
     --project="${PROJECT_ID}" >/dev/null 2>&1; then
@@ -394,7 +384,6 @@ if len(default_urls) == 1:
 elif len(urls) == 1:
     print(urls[0])
 else:
-    # Empty and ambiguous results both require an explicit override.
     print("")
 '
     )"
@@ -429,7 +418,7 @@ EXISTING_FUNCTION_JSON="$(
 )"
 
 SYMBOL="$(resolve_value "${LEGO_SYMBOL_OVERRIDE}" "$(read_existing_env LEGO_SYMBOL)" "AAPL")"
-FIX_C="$(resolve_value "${LEGO_FIX_C_OVERRIDE}" "$(read_existing_env LEGO_FIX_C)" "1500")"
+FIX_C="$(resolve_value "${LEGO_FIX_C_OVERRIDE}" "$(read_existing_env LEGO_FIX_C)" "3000")"
 DIFF="$(resolve_value "${LEGO_DIFF_OVERRIDE}" "$(read_existing_env LEGO_DIFF)" "25")"
 DNA_BUNDLE="$(resolve_value "${LEGO_DNA_BUNDLE_OVERRIDE}" "$(read_existing_env LEGO_DNA_BUNDLE)" "strategy.example.json")"
 
@@ -473,7 +462,7 @@ if [[ -n "${EXPECTED_CANDIDATE_HASH}" ]]; then
         fail "candidate hash ไม่ตรงกับ release evidence ที่อนุมัติ"
     CANDIDATE_STATUS="verified"
 else
-    CANDIDATE_STATUS="self-certified for UAT/observe"
+    CANDIDATE_STATUS="self-certified for UAT/trade"
 fi
 
 echo "Symbol         : ${SYMBOL}"
@@ -495,9 +484,6 @@ ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=
 
 SECRET_BINDINGS="WEBULL_APP_KEY=${APP_KEY_SECRET}:latest,WEBULL_APP_SECRET=${APP_SECRET_SECRET}:latest,WEBULL_ACCOUNT_ID=${ACCOUNT_ID_SECRET}:latest"
 
-# WEBULL_TOKEN_SECRET is intentionally absent. UAT applications reporting
-# _check_token_enable=False use HMAC credentials and must not be forced to
-# hydrate an empty token secret at cold start.
 gcloud functions deploy "${FUNCTION_NAME}" \
     --gen2 \
     --runtime=python312 \
@@ -561,11 +547,12 @@ gcloud scheduler jobs "${SCHEDULER_VERB}" http "${SCHEDULER_JOB}" \
     --quiet
 
 # -----------------------------------------------------------------------------
-# 10. SAFE SMOKE TRIGGER + FINAL STATUS
+# 10. SMOKE TRIGGER + FINAL STATUS
 # -----------------------------------------------------------------------------
 
-step "10/10 SAFE SMOKE TRIGGER + FINAL STATUS"
+step "10/10 SMOKE TRIGGER + FINAL STATUS"
 
+echo "Triggering initial tick (ACTIVE TRADING)..."
 gcloud scheduler jobs run "${SCHEDULER_JOB}" \
     --location="${REGION}" \
     --project="${PROJECT_ID}"
@@ -587,9 +574,11 @@ echo "RTDB         : ${DATABASE_URL}"
 echo "Runtime SA   : ${RUNTIME_SA}"
 echo "Scheduler SA : ${SCHEDULER_SA}"
 echo "Build SA     : ${BUILD_SA}"
+echo "LEGO_SYMBOL  : ${SYMBOL}"
+echo "LEGO_FIX_C   : ${FIX_C}"
 echo "LEGO_MODE    : ${MODE}"
 echo "LEGO_ACTIVE  : ${ACTIVE}"
-echo "ORDER SUBMISSION = DISABLED"
+echo "STATUS       : *** ORDER SUBMISSION = ENABLED ***"
 echo "============================================================"
 
 echo
@@ -618,4 +607,4 @@ gcloud logging read \
     || true
 
 echo
-echo "DONE. Trading remains disabled: observe + active=false."
+echo "DONE. System is running in LIVE/PAPER TRADING mode: trade + active=true."
