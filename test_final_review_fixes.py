@@ -692,6 +692,8 @@ def test_archive_keeps_terminal_inflight_intent_until_chain_fence_is_cleared():
         f"{lego_archive.OUTBOX_ARCHIVE_PATH}/ck/r1").get() is None
 
     FAKE_DB.reference(f"{lego_outbox.DISPATCH_LOCK_PATH}/ck").delete()
+    # Terminal intents remain protected until their new audit marker is repaired.
+    main._repair_pending_audits("ck")
     assert lego_archive.archive_terminal_intents(cutoff, 10) == 1
     assert FAKE_DB.reference(f"{OUTBOX_PATH}/ck/r1").get() is None
     assert FAKE_DB.reference(

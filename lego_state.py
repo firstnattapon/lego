@@ -871,18 +871,19 @@ def _redact_audit_payload(payload: dict) -> dict:
 
 
 def write_order_audit(event_id: str, payload: dict) -> None:
-    redacted = _redact_audit_payload(payload)
-    ref = db.reference(f"{AUDIT_PATH}/{event_id}")
-    def txn(current):
-        merged = dict(current or {})
-        merged.update(redacted)
-        return merged
-    ref.transaction(txn)
+    update_order_audit(event_id, payload)
 
 
 def update_order_audit(event_id: str, fields: dict) -> None:
     safe = _redact_audit_payload(fields)
-    db.reference(f"{AUDIT_PATH}/{event_id}").update(safe)
+    def txn(current):
+        current = dict(current or {})
+        if ("audit_revision" in safe and int(safe["audit_revision"])
+                < int(current.get("audit_revision", 0))):
+            return current
+        current.update(safe)
+        return current
+    db.reference(f"{AUDIT_PATH}/{event_id}").transaction(txn)
 
 
 def pending_audits(terminal_statuses: set[str], limit: int = 20) -> dict:

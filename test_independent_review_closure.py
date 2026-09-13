@@ -149,9 +149,11 @@ def test_outbox_hot_reads_use_query_keys_and_return_only_bounded_work():
             "created_at": f"2026-01-01T00:{index % 60:02d}:00Z"})
         update_intent("ck", f"done-{index:03d}", {
             "status": "REJECTED", "audit_pending": False})
+        update_intent("ck", f"done-{index:03d}", {"audit_pending": False})
     for index in range(7):
         put_intent("ck", f"live-{index}", {
             "created_at": f"2026-09-06T00:0{index}:00Z"})
+        update_intent("ck", f"live-{index}", {"audit_pending": False})
     update_intent("ck", "live-5", {"audit_pending": True})
     update_intent("ck", "live-6", {"audit_pending": True})
     assert len(list_actionable("ck", limit=3)) == 3

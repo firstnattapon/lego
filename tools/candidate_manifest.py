@@ -9,6 +9,7 @@ STREAMLIT = ROOT.parent / "lego-firebase-streamlit"
 EXCLUDED_PARTS = {
     ".git", ".pytest_cache", ".tools", ".venv", ".venv-release",
     "__pycache__", "release_evidence", "release_evidence_v2",
+    ".audit-cache", ".review-runtime", ".firebase",
 }
 INCLUDED_SUFFIXES = {".py", ".json", ".md", ".txt", ".ps1", ".rules", ".whl",
                      ".yaml", ".yml", ".html"}
@@ -46,7 +47,8 @@ def build_manifest():
         name: digest(ROOT / name)
         for name in ("requirements.txt", "requirements-dev.txt")
     }
-    dependency_files["reader/requirements.txt"] = digest(STREAMLIT / "requirements.txt")
+    if (STREAMLIT / "requirements.txt").is_file():
+        dependency_files["reader/requirements.txt"] = digest(STREAMLIT / "requirements.txt")
     dependency_lock_hash = hashlib.sha256(json.dumps(
         dependency_files, sort_keys=True, separators=(",", ":")
     ).encode()).hexdigest()
@@ -56,6 +58,7 @@ def build_manifest():
         "dependency_lock_hash": dependency_lock_hash,
         "dependency_files": dependency_files,
         "file_count": len(files),
+        "scope": "backend-and-reader" if STREAMLIT.is_dir() else "backend-only",
         "files": files,
     }
 

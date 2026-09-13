@@ -1,6 +1,8 @@
 """Execution orchestration for durable broker dispatch and recovery."""
 
 import logging
+import tick_runtime
+from lego_outbox import acknowledge_audit
 import math
 import os
 import time
@@ -136,7 +138,7 @@ def _init_firebase():
     if not firebase_admin._apps:
         firebase_admin.initialize_app(
             credentials.ApplicationDefault(),
-            {"databaseURL": os.environ["FIREBASE_DB_URL"]},
+            {"databaseURL": os.environ["FIREBASE_DB_URL"], "httpTimeout": 5},
         )
 
 
@@ -153,6 +155,7 @@ def _poll_order_status(trade_client, client_order_id: str, place_res: dict) -> d
     detail = None
     for i in range(ORDER_POLL_ATTEMPTS):
         if i:
+            tick_runtime.require_budget(ORDER_POLL_DELAY_S + 2.0)
             time.sleep(ORDER_POLL_DELAY_S)
         detail = fetch_order_detail(trade_client, client_order_id)
         summary = summarize_order_result(place_res, detail)
@@ -177,22 +180,36 @@ def _record_warning(kind: str, message: str, extra: dict | None = None) -> None:
     in 0.3s. Diagnosing this took a CSV export of the row table. One log line per
     warning ends that — `kind` is greppable and `extra` carries blocked_by.
     """
-    logger.warning("lego warning kind=%s %s %s", kind, message,
-                   redact_sensitive_text(extra) if extra else "")
     try:
         ref = db.reference(f"{WARNINGS_PATH}/{kind}")
         now = _iso(datetime.now(UTC))
+        log_token = uuid.uuid4().hex
 
         def txn(current):
             doc = dict(current or {})
+            changed = doc.get("message") != message[:500] or any(
+                doc.get(k) != v for k, v in (extra or {}).items())
+            last_logged = doc.get("last_logged_at")
+            try:
+                age = (datetime.now(UTC) - datetime.fromisoformat(
+                    str(last_logged).replace("Z", "+00:00"))).total_seconds()
+            except (ValueError, TypeError):
+                age = 600
+            if changed or age >= 600:
+                doc["last_logged_at"] = now
+                doc["last_log_token"] = log_token
             doc["count"] = int(doc.get("count", 0) or 0) + 1
             doc.setdefault("first_at", now)
             doc.update({"last_at": now, "message": message[:500], **(extra or {})})
             return doc
 
-        ref.transaction(txn)
+        written = ref.transaction(txn)
+        if written and written.get("last_log_token") == log_token:
+            logger.warning("lego warning kind=%s %s %s", kind, message,
+                           redact_sensitive_text(extra) if extra else "")
     except Exception:
-        pass
+        logger.warning("lego warning kind=%s %s %s", kind, message,
+                       redact_sensitive_text(extra) if extra else "")
 
 
 def _apply_realized_if_available(intent: dict, summary: dict) -> dict:
@@ -234,6 +251,7 @@ def _apply_realized_if_available(intent: dict, summary: dict) -> dict:
     out = dict(summary)
     out.update(broker_cashflow)
     out["realized_pending_fee"] = False
+    out["fee_overdue"] = False
     out.update(realized)
     if realized.get("matching_pending"):
         out["realized"] = False
@@ -242,15 +260,15 @@ def _apply_realized_if_available(intent: dict, summary: dict) -> dict:
 
 def _persist(chain_key_: str, run_id: str, fields: dict) -> dict:
     """Keep the outbox authoritative and make an interrupted audit repairable."""
-    update_intent(chain_key_, run_id, {**fields, "audit_pending": True})
-    _mirror_order_audit(chain_key_, run_id, fields)
-    return {"run_id": run_id, **fields}
+    durable = update_intent(chain_key_, run_id, {**fields, "audit_pending": True})
+    _mirror_order_audit(chain_key_, run_id, durable)
+    return {"run_id": run_id, **fields, "status": durable.get("status", fields.get("status"))}
 
 
 def _mirror_order_audit(chain_key_: str, run_id: str, fields: dict) -> None:
     """Best-effort audit mirror; the outbox marker makes failure recoverable."""
     try:
-        update_order_audit(run_id, fields)
+        update_order_audit(run_id, _audit_fields(fields))
     except Exception as exc:
         _record_warning(
             "order_audit_repair",
@@ -261,7 +279,7 @@ def _mirror_order_audit(chain_key_: str, run_id: str, fields: dict) -> None:
         # If this clear fails the marker safely remains and the repair pass writes
         # the same audit payload again.
         try:
-            update_intent(chain_key_, run_id, {"audit_pending": False})
+            acknowledge_audit(chain_key_, run_id, int(fields.get("audit_revision", 0)))
         except Exception as exc:
             _record_warning(
                 "order_audit_repair",
@@ -277,18 +295,25 @@ _AUDIT_INTERNAL_FIELDS = {
 }
 
 
+def _audit_fields(intent: dict) -> dict:
+    fields = {k: v for k, v in intent.items() if k not in _AUDIT_INTERNAL_FIELDS}
+    if not intent.get("place_attempted") and normalize_status(intent.get("status")) in UNSENT_CHAIN_TERMINAL:
+        # Older versions incorrectly used decision time as placed_at. Removing
+        # it is justified only for a durable, never-attempted terminal intent.
+        fields["placed_at"] = None
+    return fields
+
+
 def _repair_pending_audits(chain_key_: str) -> int:
     repaired = 0
     for intent in list_audit_pending(chain_key_):
+        tick_runtime.require_budget(5.0)
         run_id = str(intent["run_id"])
-        fields = {
-            key: value for key, value in intent.items()
-            if key not in _AUDIT_INTERNAL_FIELDS
-        }
+        fields = _audit_fields(intent)
         try:
             update_order_audit(run_id, fields)
-            update_intent(chain_key_, run_id, {"audit_pending": False})
-            repaired += 1
+            if acknowledge_audit(chain_key_, run_id, int(intent.get("audit_revision", 0))):
+                repaired += 1
         except Exception as exc:
             _record_warning(
                 "order_audit_repair",
@@ -393,6 +418,12 @@ def _persist_reconcile_failure(intent: dict, exc: Exception) -> dict:
     and the dashboard already renders that table.
     """
     ck, run_id = intent["chain_key"], intent["run_id"]
+    if isinstance(exc, tick_runtime.TickDeadlineExceeded):
+        # No unsuccessful broker query occurred. Preserve the durable status
+        # and reconcile budget (particularly FILLED awaiting its late fee).
+        current = read_intent(ck, run_id) or intent
+        return {"run_id": run_id, "status": current.get("status", "PLACING_UNKNOWN"),
+                "deferred_reason": "tick_deadline", "error": _error_text(exc)}
     attempts = int(intent.get("reconcile_attempts", 0) or 0) + 1
     # last_error is overwritten every tick, and by the time a human reads it the
     # useful message ("insufficient buying power") has been buried under the
@@ -707,13 +738,27 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
         }
     if (filled is not None and broker_terminal
             and summary.get("broker_fee_status") == "PENDING"):
+        now = datetime.now(UTC)
+        since = str(intent.get("fee_pending_since") or intent.get("created_at") or _iso(now))
+        try:
+            age = max(0.0, (now - datetime.fromisoformat(since.replace("Z", "+00:00"))).total_seconds())
+        except (ValueError, TypeError):
+            since, age = _iso(now), 0.0
         summary = {
             **summary,
             "broker_status": normalize_status(summary.get("status")),
             "status": AWAITING_BROKER_FEE,
             "realized": False,
             "realized_pending_fee": True,
+            "fee_pending_since": since,
+            "fee_pending_age_seconds": round(age, 3),
+            "fee_overdue": age >= 900,
         }
+        if age >= 900:
+            _record_warning("broker_fee_overdue",
+                            "terminal fill รอ actual fee เกิน 15 นาที — ตรวจ broker detail; fence ยังคงอยู่",
+                            {"run_id": intent["run_id"], "chain_key": intent["chain_key"],
+                             "fee_pending_since": since})
     _persist_summary(intent, summary)
     return {"run_id": intent["run_id"], **summary}
 
@@ -746,8 +791,8 @@ def _committed_row_shape(doc: dict) -> dict:
 
 def _stop(chain_key_: str, run_id: str, status: str, extra: dict | None = None,
           **reported) -> dict:
-    """Close an intent in the outbox without touching the audit trail."""
-    update_intent(chain_key_, run_id, {"status": status, **(extra or {})})
+    """Close an unsent intent and leave a repairable execution audit."""
+    _persist(chain_key_, run_id, {"status": status, **(extra or {})})
     return {"run_id": run_id, "status": status, **reported}
 
 
@@ -1039,7 +1084,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         "run_id": run_id, "chain_key": ck, "side": intent["side"],
         "quantity": float(intent["quantity"]), "symbol": cfg.symbol,
         "environment": env, "status": "PENDING_DISPATCH", "realized": False,
-        "placed_at": intent["created_at"],
+        "created_at": intent["created_at"],
+        "audit_revision": int(intent.get("audit_revision", 0)),
         "dispatch_quote_check": quote_safety,
     })
     try:
@@ -1148,6 +1194,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             ck, run_id, "PENDING_DISPATCH",
             RuntimeError("ไม่มี chain dispatch lease — ห้าม place order"))
     dispatch_scope = str(dispatch_claim.get("dispatch_scope_key") or ck)
+    tick_runtime.require_budget(12.0)
     try:
         fenced = fence_chain_dispatch(
             dispatch_scope, run_id, str(dispatch_claim.get("owner") or ""),
@@ -1190,7 +1237,9 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         return _reject_unsafe_dispatch_quote(
             ck, run_id, deadline_safety, phase="pre_place_deadline")
 
-    place_fields = {"status": "PLACING_UNKNOWN", "place_attempted": True}
+    if tick_runtime.remaining() is not None and tick_runtime.remaining() < 10.0:
+        return _stop(ck, run_id, "NOT_PLACED", {
+            "terminal_reason": "tick budget exhausted before Place; no broker attempt"})
     started = begin_place_attempt(
         ck, run_id, str(intent.get("claim_owner") or ""),
         int(intent.get("claim_generation", 0) or 0))
@@ -1198,7 +1247,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         # The lease expired and another generation won before this worker reached
         # the irreversible call.  Do not place; that winner owns reconciliation.
         return {"run_id": run_id, "status": normalize_status(intent.get("status"))}
-    _mirror_order_audit(ck, run_id, place_fields)
+    _mirror_order_audit(ck, run_id, started)
     try:
         place_res = place_market_order(trade_client, order)
         if runtime is not None:
@@ -1234,6 +1283,7 @@ def _run_order_worker(cfg, limit: int = 3,
                       runtime: RuntimeConfig | None = None) -> dict:
     runtime_identity = runtime_identity or runtime_identity_fingerprint()
     ck = chain_key(cfg)
+    tick_runtime.require_budget()
     dispatch_scope = account_symbol_fence_key(runtime_identity, cfg.symbol)
     # Both guards below read the same document, so read it once and hand it down.
     state = read_chain_state(cfg)
@@ -1244,6 +1294,8 @@ def _run_order_worker(cfg, limit: int = 3,
     _recover_pending_order_intents(cfg, runtime_identity, state=state)
     _repair_pending_audits(ck)
     expired = expire_unsent_before(ck, datetime.now(UTC))
+    if expired:
+        _repair_pending_audits(ck)
     results = []
     worker_id = uuid.uuid4().hex
     candidates = list_actionable(ck, limit=limit)
@@ -1349,6 +1401,7 @@ def _run_order_worker(cfg, limit: int = 3,
 
         trade_client, data_client = build_clients()
         for intent in candidates:
+            tick_runtime.require_budget()
             intent_chain = str(intent.get("chain_key") or ck)
             claimed = claim_intent(
                 intent_chain, intent["run_id"], worker_id,

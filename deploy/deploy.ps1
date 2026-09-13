@@ -16,6 +16,12 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $DatabaseUrl.StartsWith('https://')) { throw 'DatabaseUrl must be HTTPS' }
 if ($Mode -notin @('observe','trade')) { throw 'Mode must be observe or trade' }
+$manifestJson = & python tools/candidate_manifest.py
+if ($LASTEXITCODE -ne 0) { throw 'Cannot compute source candidate manifest' }
+$manifest = $manifestJson | ConvertFrom-Json
+if ($CandidateHash -ne $manifest.candidate_hash) {
+  throw 'CandidateHash differs from this source tree; regenerate release evidence and binding'
+}
 $suffix = $Environment.ToLowerInvariant()
 $functionName = "lego-tick-$suffix"
 $serviceAccount = "lego-runtime-$suffix@$ProjectId.iam.gserviceaccount.com"

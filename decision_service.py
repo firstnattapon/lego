@@ -1,6 +1,7 @@
 """Decision orchestration: snapshot to atomic row and recoverable intent."""
 
 import logging
+import tick_runtime
 import math
 import os
 import time
@@ -293,7 +294,9 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 slot=slot, token=health, dna_remaining=remaining,
                 min_dna_remaining=_min_dna_remaining(
                     typed_v2=runtime is not None),
-                token_proved_live=token_proved_live)
+                token_proved_live=token_proved_live,
+                **({"release_authorized": runtime.allows_new_broker_mutation}
+                   if runtime is not None else {}))
             if preflight["ok"]:
                 pending_intent = _outbox_intent(
                     cfg, row, snapshot, slot, decision_time,
@@ -451,6 +454,8 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 "error": _error_text(exc, with_type=False),
                 "type": type(exc).__name__,
                 "trace": redact_sensitive_text(traceback.format_exc())[:2000],
+                "at": datetime.now(UTC).isoformat(),
+                "correlation_id": tick_runtime.correlation_id(),
             })
         except Exception:
             pass

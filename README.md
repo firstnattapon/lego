@@ -28,6 +28,9 @@ reconcile order ที่เริ่มส่งแล้ว
 [ADR_LEDGER_V2.md](ADR_LEDGER_V2.md), [STATE_MACHINE.md](STATE_MACHINE.md), และ
 [CONFIG_MIGRATION.md](CONFIG_MIGRATION.md).
 
+การแก้ incident fee/audit/deadline และวิธีตรวจ release สำหรับการเทรดต่อเนื่องอยู่ที่
+[CONTINUOUS_TRADING_RELEASE_TH.md](docs/CONTINUOUS_TRADING_RELEASE_TH.md)
+
 ## Local verification
 
 ```powershell

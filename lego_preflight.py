@@ -15,7 +15,7 @@ the gate entirely.
 from __future__ import annotations
 
 from lego_one_row import READY_BUY, READY_SELL
-from lego_orders import UAT
+from lego_orders import UAT, PROD
 
 AUTO_SUBMIT_BLOCKED_WARNING = "auto_submit_blocked"
 DEGRADED_CLOCK_WARNING = "degraded_clock_no_order"
@@ -94,7 +94,8 @@ def _int_or_none(value):
 def evaluate_auto_submit_preflight(*, auto_submit, environment, row, row_durable,
                                    slot, token, dna_remaining,
                                    min_dna_remaining: int = DEFAULT_MIN_DNA_REMAINING,
-                                   token_proved_live: bool = False) -> dict:
+                                   token_proved_live: bool = False,
+                                   release_authorized: bool | None = None) -> dict:
     """Every condition that must hold before a committed row may become an order.
 
     Returns a report; raises nothing the caller has to handle. `ok` is True only
@@ -112,8 +113,9 @@ def evaluate_auto_submit_preflight(*, auto_submit, environment, row, row_durable
         "AUTO_SUBMIT ไม่ได้เปิด — ไม่สร้าง order intent"))
 
     checks.append(_check(
-        "environment_uat", environment == UAT,
-        f"ส่ง order ได้เฉพาะ {UAT}; ปัจจุบัน={environment}"))
+        "environment_uat", (environment == UAT and release_authorized is not False)
+        or (environment == PROD and release_authorized is True),
+        f"environment={environment} ต้องมี release binding ของ deployment; legacy รองรับเฉพาะ UAT"))
 
     checks.append(_check(
         "row_durable", row_durable is True,

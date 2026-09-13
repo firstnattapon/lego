@@ -159,7 +159,7 @@ def summarize_order_result(place_response: dict, detail: dict | None = None) -> 
         fields, EXECUTION_PRICE_FIELDS, minimum_exclusive=Decimal("0"))
     if price is not None:
         out["filled_price"] = price
-    fee = _coalesce_decimal_string(fields, FEE_FIELDS)
+    fee = _actual_fee(fields)
     if fee is not None:
         out["filled_fee"] = fee
     reason = (fields.get("reason") or fields.get("message")
@@ -167,6 +167,40 @@ def summarize_order_result(place_response: dict, detail: dict | None = None) -> 
     if reason:
         out["reject_reason"] = str(reason)
     return out
+
+
+def _actual_fee(fields: dict) -> str | None:
+    """Normalize actual cumulative fees, never receivables or preview estimates.
+
+    The current TH/global contract has a commission object and a fees array.
+    Partial breakdowns stay unknown: a missing component is not a zero. Legacy
+    scalar totals remain supported for the pinned legacy endpoint.
+    """
+    commission = fields.get("commission")
+    if not isinstance(commission, dict) and "fees" not in fields:
+        return _coalesce_decimal_string(fields, FEE_FIELDS)
+    if not isinstance(commission, dict) or not isinstance(fields.get("fees"), list):
+        return None
+    actual = _coalesce_decimal_string(commission, ("actual_commission",))
+    if actual is None:
+        return None
+    total = Decimal(actual)
+    seen = set()
+    for component in fields["fees"]:
+        if not isinstance(component, dict):
+            return None
+        kind = component.get("type")
+        value = _coalesce_decimal_string(component, ("actual_value",))
+        if not isinstance(kind, str) or not kind or kind in seen or value is None:
+            return None
+        seen.add(kind)
+        total += Decimal(value)
+    # A legacy total alongside a complete breakdown must agree; otherwise there
+    # is no unambiguous accounting fact to book.
+    legacy = _coalesce_decimal_string(fields, FEE_FIELDS)
+    if legacy is not None and Decimal(legacy) != total:
+        return None
+    return str(total)
 
 
 _LEG_EPS = 1e-9

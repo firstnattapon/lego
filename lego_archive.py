@@ -13,6 +13,7 @@ anything a human still has to answer (needs_manual_check) and anything that
 carries no usable timestamp — an undatable record is never old enough to move.
 """
 from __future__ import annotations
+import tick_runtime
 
 import os
 import uuid
@@ -149,6 +150,7 @@ def archive_terminal_intents(cutoff: datetime, limit: int,
         inflight_run_id = str(dispatch.get("inflight_run_id") or "") \
             if isinstance(dispatch, dict) else ""
         for run_id, doc in intents.items():
+            tick_runtime.require_budget(5.0)
             if moved >= limit:
                 return moved
             # A terminal result is written before the order worker clears its
@@ -170,6 +172,7 @@ def archive_terminal_audits(cutoff: datetime, limit: int, *, bounded=False) -> i
     docs = (_bounded_oldest(AUDIT_PATH, "placed_at", cutoff, limit)
             if bounded else (db.reference(AUDIT_PATH).get() or {}))
     for event_id, doc in docs.items():
+        tick_runtime.require_budget(5.0)
         if moved >= limit:
             return moved
         if _movable(doc, AUDIT_TERMINAL, cutoff):
