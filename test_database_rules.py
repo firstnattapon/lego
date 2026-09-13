@@ -8,6 +8,8 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
+import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parent
@@ -171,3 +173,15 @@ def test_emulator_enforces_anonymous_read_write_matrix():
         assert _emulator_request(f"{path}/record") in {401, 403}
     for path in PUBLIC_READ_PATHS | PRIVATE_PATHS | {"unmatched", "private"}:
         assert _emulator_request(path, method="PUT") in {401, 403}
+
+
+@pytest.mark.skipif("FIREBASE_DATABASE_EMULATOR_HOST" not in os.environ,
+                    reason="real RTDB emulator required for concurrent money-path probes")
+@pytest.mark.parametrize("script", ["emulator_race_probe.py", "emulator_tick_race_probe.py"])
+def test_emulator_concurrent_dispatch_and_tick(script):
+    host = os.environ["FIREBASE_DATABASE_EMULATOR_HOST"]
+    assert host.startswith(("127.0.0.1:", "localhost:")), "local emulator only"
+    result = subprocess.run([sys.executable, str(ROOT / "tools" / script)], cwd=ROOT,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"status": "PASS"' in result.stdout

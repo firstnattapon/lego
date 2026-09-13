@@ -238,6 +238,8 @@ def put_intent(chain_key: str, run_id: str, payload: dict) -> dict:
     })
     doc["actionable_sort"] = str(
         doc.get("slot_start_utc") or doc.get("created_at") or run_id)
+    doc["audit_pending"] = True
+    doc["audit_revision"] = 1
 
     def txn(current):
         if current:
@@ -264,14 +266,30 @@ def update_intent(chain_key: str, run_id: str, fields: dict) -> dict:
             incoming.pop("status", None)
         current.update(incoming)
         current["status"] = normalize_status(current.get("status"))
+        if current["status"] != old_status or fields.get("audit_pending") is True:
+            current["audit_pending"] = True
+            current["audit_revision"] = int(current.get("audit_revision", 0)) + 1
         current["actionable_sort"] = (
             None if current["status"] in TERMINAL
             else str(current.get("slot_start_utc")
                      or current.get("created_at") or run_id))
-        current["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if set(fields) != {"audit_pending"}:
+            current["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return current
 
     return ref.transaction(txn) or {}
+
+
+def acknowledge_audit(chain_key: str, run_id: str, revision: int) -> bool:
+    """A late mirror may never clear the marker for a newer transition."""
+    ref = db.reference(f"{OUTBOX_PATH}/{chain_key}/{run_id}")
+    def txn(current):
+        if not isinstance(current, dict) or int(current.get("audit_revision", 0)) != revision:
+            return current
+        return {**current, "audit_pending": False}
+    result = ref.transaction(txn)
+    return bool(isinstance(result, dict) and not result.get("audit_pending")
+                and int(result.get("audit_revision", 0)) == revision)
 
 
 def _claim_lease_seconds() -> int:
@@ -350,6 +368,8 @@ def begin_place_attempt(chain_key: str, run_id: str, worker_id: str,
             "place_attempted": True,
             "place_fence": fence,
             "audit_pending": True,
+            "audit_revision": int(doc.get("audit_revision", 0)) + 1,
+            "placed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "updated_at": datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"),
         })
@@ -450,6 +470,7 @@ def expire_unsent_before(chain_key: str, now_utc: datetime) -> int:
             update_intent(chain_key, intent["run_id"], {
                 "status": "EXPIRED_UNSENT",
                 "terminal_reason": "slot execution window expired before place",
+                "audit_pending": True,
             })
             count += 1
     return count

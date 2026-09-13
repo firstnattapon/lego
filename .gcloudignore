@@ -5,6 +5,8 @@
 .git/**
 .pytest_cache
 .pytest_cache/**
+.audit-cache
+.audit-cache/**
 .review-runtime
 .review-runtime/**
 **/__pycache__/**

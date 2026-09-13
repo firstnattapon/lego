@@ -6,6 +6,8 @@ import os
 import time
 import traceback
 import uuid
+import tick_runtime
+from observability import emit_tick
 from datetime import datetime, timedelta, timezone
 
 import firebase_admin
@@ -291,9 +293,26 @@ def _untrusted_overrides(request) -> list[str]:
 
 @functions_framework.http
 def lego_tick(request):
+    """Every return path gets one correlated outcome and an isolated deadline."""
+    started = time.monotonic()
+    identifier = uuid.uuid4().hex
+    with tick_runtime.tick_scope(identifier):
+        try:
+            body, code = _run_tick(request)
+        except tick_runtime.TickDeadlineExceeded as exc:
+            body, code = {"pipeline_status": "TICK_DEFERRED", "error": _error_text(exc)}, 503
+        except Exception as exc:
+            body, code = {"pipeline_status": "TICK_ERROR", "error": _error_text(exc)}, 500
+        body["correlation_id"] = identifier
+        body["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        emit_tick(body, code)
+        return body, code
+
+
+def _run_tick(request):
     """The only deployed HTTP entrypoint: recover, decide, dispatch, housekeep."""
     started = time.monotonic()
-    correlation_id = uuid.uuid4().hex
+    correlation_id = tick_runtime.correlation_id()
     overrides = _untrusted_overrides(request)
     if overrides:
         return {
@@ -342,19 +361,32 @@ def lego_tick(request):
             "error": _error_text(exc),
         }, 503
 
+    try:
+        tick_runtime.require_budget(8.0)
+    except tick_runtime.TickDeadlineExceeded as exc:
+        return {"pipeline_status": "TICK_DEFERRED", "recovery": recovery,
+                "error": _error_text(exc)}, 503
     decision, decision_code = decision_service.run_decision(
         request, runtime=runtime, cfg_override=cfg)
     dispatch = None
     if decision_code < 500 and runtime.allows_new_broker_mutation:
         try:
-            dispatch = execution_service._run_order_worker(
-                cfg, limit=1, runtime_identity=runtime_identity, runtime=runtime)
+            # Recovery already queried this unresolved order in this tick. A
+            # second query cannot unblock any newer intent and wastes deadline.
+            pending = any(item.get("status") not in OUTBOX_TERMINAL
+                          for item in recovery.get("results", []))
+            if pending or recovery.get("dispatch_blocked"):
+                dispatch = {"processed": 0, "results": [], "deferred_reason": "recovery_pending"}
+            else:
+                tick_runtime.require_budget(8.0)
+                dispatch = execution_service._run_order_worker(
+                    cfg, limit=1, runtime_identity=runtime_identity, runtime=runtime)
         except Exception as exc:
             dispatch = {"pipeline_status": "ORDER_WORKER_ERROR", "error": _error_text(exc)}
 
     archive = None
     elapsed = time.monotonic() - started
-    if elapsed < 30:
+    if elapsed < 20 and (tick_runtime.remaining() or 0) >= 10:
         try:
             archive = archive_terminal_records(
                 days=30, limit=500,
@@ -364,8 +396,10 @@ def lego_tick(request):
         except Exception as exc:
             archive = {"status": "ARCHIVE_DEFERRED", "error": _error_text(exc)}
 
+    dispatch_error = bool(dispatch and dispatch.get("error"))
     return {
-        "pipeline_status": "TICK_OK" if decision_code < 500 else "TICK_DECISION_ERROR",
+        "pipeline_status": ("TICK_DISPATCH_ERROR" if dispatch_error else
+                            "TICK_OK" if decision_code < 400 else "TICK_DECISION_ERROR"),
         "correlation_id": correlation_id,
         "environment": runtime.deployment.environment,
         "mode": runtime.operator.mode,
@@ -376,4 +410,4 @@ def lego_tick(request):
         "dispatch": dispatch,
         "archive": archive,
         "duration_ms": round((time.monotonic() - started) * 1000, 3),
-    }, decision_code
+    }, 503 if dispatch_error and decision_code < 400 else decision_code

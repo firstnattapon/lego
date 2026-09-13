@@ -751,7 +751,7 @@ def test_accepting_the_ephemeral_dir_does_not_excuse_a_missing_token(monkeypatch
     monkeypatch.setattr(webull_io, "read_local_token", lambda: None)
     health = webull_io.token_health()
     assert health["ok"] is False and health["ready"] is False
-    assert any("2FA" in text for text in health["reasons"])
+    assert any("application" in text for text in health["reasons"])
 
 
 @pytest.mark.parametrize("days,status", [(1, "NORMAL"), (9, "EXPIRED")])

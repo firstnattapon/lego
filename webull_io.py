@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import uuid
+import tick_runtime
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
@@ -153,6 +154,7 @@ def is_transient_exception(exc: Exception) -> bool:
 def _retry_transient(fn, attempts: int = 3, base_delay: float = 2.0):
     last = None
     for i in range(attempts):
+        tick_runtime.require_budget()
         try:
             return fn()
         except Exception as exc:
@@ -160,7 +162,9 @@ def _retry_transient(fn, attempts: int = 3, base_delay: float = 2.0):
                 raise
             last = exc
             if i < attempts - 1:
-                time.sleep(base_delay * (2 ** i))
+                delay = base_delay * (2 ** i)
+                tick_runtime.require_budget(delay + 2.0)
+                time.sleep(delay)
     raise last
 
 
@@ -313,7 +317,10 @@ def hydrate_token_from_secret(secret_client=None) -> dict:
     if secret_client is None:
         from google.cloud import secretmanager
         secret_client = secretmanager.SecretManagerServiceClient()
-    response = secret_client.access_secret_version(request={"name": resource})
+    tick_runtime.require_budget()
+    options = ({} if tick_runtime.remaining() is None else
+               {"timeout": min(5.0, tick_runtime.remaining() - 1.0), "retry": None})
+    response = secret_client.access_secret_version(request={"name": resource}, **options)
     payload = bytes(response.payload.data)
     if len(payload) > 4096:
         raise WebullConfigError("token secret ใหญ่ผิดปกติ")
@@ -429,6 +436,11 @@ def token_health(now: datetime | None = None) -> dict:
         "live_proof_supersedable": False,
         "reasons": [],
     }
+    if _token_check_disabled():
+        info.update({"authentication_mode": "SIGNED_WITHOUT_TOKEN",
+                     "token_check_enabled": False})
+        return info
+    info["authentication_mode"] = "TOKEN_OR_UNVERIFIED"
     durability_reasons: list[str] = []
     supersedable_reasons: list[str] = []
 
@@ -468,7 +480,7 @@ def token_health(now: datetime | None = None) -> dict:
              durability_only=True)
     local = read_local_token()
     if local is None:
-        fail(f"ไม่พบ token file ที่ {token_file_path()} — ครั้งถัดไปจะต้องยืนยัน 2FA ใหม่",
+        fail(f"ไม่พบ token file ที่ {token_file_path()} — ตรวจว่า application ต้องใช้ token หรือไม่",
              live_proof_supersedable=True)
         return seal()
     info["found"] = True
@@ -565,6 +577,50 @@ def ensure_token_fresh(api_client) -> dict:
 
 
 _CLIENTS: tuple | None = None
+_AUTH_PROFILE: tuple | None = None
+
+
+def _client_identity() -> tuple:
+    return (_endpoint(), os.environ.get("WEBULL_APP_KEY", ""), token_dir(),
+            hashlib.sha256(os.environ.get("WEBULL_APP_SECRET", "").encode()).hexdigest(),
+            os.environ.get("WEBULL_ACCOUNT_ID", ""),
+            os.environ.get("WEBULL_TOKEN_SECRET", ""))
+
+
+def _token_check_disabled() -> bool:
+    if _AUTH_PROFILE is None:
+        return False
+    key, verified_at, enabled = _AUTH_PROFILE
+    return (enabled is False and key == _client_identity()
+            and time.monotonic() - verified_at < _client_cache_ttl())
+
+
+def _bounded_api_class(base):
+    """Use SDK request timeout setters; keep signing and retry policy untouched."""
+    class BoundedApiClient(base):
+        def get_response(self, request):
+            tick_runtime.require_budget()
+            left = tick_runtime.remaining()
+            if left is not None:
+                usable = left - 1.0
+                request.set_connect_timeout(min(2.0, usable / 2))
+                request.set_read_timeout(min(5.0, usable / 2))
+            response = super().get_response(request)
+            action = request.get_action_name()
+            if action == "/openapi/config" and response.status_code == 200:
+                payload = response.json()
+                enabled = payload.get("token_check_enabled") if isinstance(payload, dict) else None
+                # The pinned SDK defaults a missing flag to False. Do not turn
+                # missing/ambiguous config into permission to skip token checks.
+                if type(enabled) is not bool:
+                    raise WebullConfigError("token_check_enabled must be an explicit boolean")
+                self._lego_token_check_enabled = enabled
+            if left is not None and "/auth/token/" in action:
+                payload = response.json()
+                if isinstance(payload, dict) and payload.get("status") == "PENDING":
+                    raise WebullConfigError("token requires verification outside the scheduled tick")
+            return response
+    return BoundedApiClient
 
 
 def _client_cache_ttl() -> float:
@@ -573,8 +629,9 @@ def _client_cache_ttl() -> float:
 
 def reset_clients() -> None:
     """Drop the cached clients so the next call re-authenticates."""
-    global _CLIENTS
+    global _CLIENTS, _AUTH_PROFILE
     _CLIENTS = None
+    _AUTH_PROFILE = None
 
 
 def _sdk_log_level() -> int:
@@ -686,8 +743,8 @@ def build_clients():
     rebuild often enough that a long-lived instance never runs on a token whose
     state it has stopped checking.
     """
-    global _CLIENTS
-    cache_key = (_endpoint(), os.environ["WEBULL_APP_KEY"], token_dir())
+    global _CLIENTS, _AUTH_PROFILE
+    cache_key = _client_identity()
     if _CLIENTS is not None:
         key, built_at, trade, data = _CLIENTS
         if key == cache_key and (time.monotonic() - built_at) < _client_cache_ttl():
@@ -698,14 +755,14 @@ def build_clients():
     from webull.data.data_client import DataClient
 
     hydrate_token_from_secret()
-    api = ApiClient(os.environ["WEBULL_APP_KEY"], os.environ["WEBULL_APP_SECRET"], "th")
+    api = _bounded_api_class(ApiClient)(
+        os.environ["WEBULL_APP_KEY"], os.environ["WEBULL_APP_SECRET"], "th")
     api.add_endpoint("th", _endpoint())
     api.set_token_dir(token_dir())
     _configure_sdk_stream_logger(api)
-    if token_dir_is_ephemeral():
-        logger.warning("WEBULL_TOKEN_DIR=%s อยู่บน storage ชั่วคราว — token จะหายเมื่อ "
-                       "instance ถูกรีไซเคิลและต้องยืนยัน 2FA ใหม่", token_dir())
     trade, data = TradeClient(api), DataClient(api)
+    _AUTH_PROFILE = (cache_key, time.monotonic(),
+                     getattr(api, "_lego_token_check_enabled", None))
     ensure_token_fresh(api)
     _CLIENTS = (cache_key, time.monotonic(), trade, data)
     return trade, data
