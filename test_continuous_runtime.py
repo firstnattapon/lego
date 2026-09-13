@@ -239,6 +239,13 @@ def test_one_fee_query_per_tick_with_visible_business_wait(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["execution"][0]["run_id"] == "old"
 
 
+@pytest.mark.parametrize("status", ["SUBMITTED", "PARTIALLY_FILLED", "PENDING_DISPATCH", "UNKNOWN"])
+def test_nonterminal_execution_never_looks_like_completed_business_success(status):
+    body = {"pipeline_status": "TICK_OK", "decision": {"pipeline_status": "ROW_COMMITTED"},
+            "recovery": {"results": [{"status": status}]}}
+    assert business_status(body, 200) == "WAITING_RECONCILIATION"
+
+
 def test_config_error_also_has_a_correlated_result_log(monkeypatch, capsys):
     monkeypatch.setattr(main, "load_runtime_config", lambda: (_ for _ in ()).throw(ValueError("invalid config")))
     body, code = main.lego_tick(None)

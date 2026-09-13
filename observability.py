@@ -2,6 +2,7 @@
 import json
 import os
 from datetime import datetime, timezone
+from lego_outbox import TERMINAL, normalize_status
 
 
 def business_status(body: dict, http_status: int) -> str:
@@ -18,9 +19,7 @@ def business_status(body: dict, http_status: int) -> str:
         return "MANUAL_RECONCILIATION_REQUIRED"
     if any(item.get("status") == "AWAITING_BROKER_FEE" for item in results):
         return "WAITING_BROKER_FEE"
-    if any(item.get("status") in {"PLACING_UNKNOWN", "SUBMIT_UNKNOWN", "UNKNOWN",
-                                  "AWAITING_FILL_CONFIRMATION", "REALIZED_MATCHING_PENDING"}
-           for item in results):
+    if any(normalize_status(item.get("status")) not in TERMINAL for item in results):
         return "WAITING_RECONCILIATION"
     if decision.get("outbox_error"):
         return "OUTBOX_RECOVERY_PENDING"
