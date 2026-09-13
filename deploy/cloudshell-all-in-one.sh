@@ -6,8 +6,8 @@ set -Eeuo pipefail
 #
 # Safe invariants:
 #   environment = UAT
-#   mode        = observe
-#   active      = false
+#   mode        = trade
+#   active      = true
 #   Webull token secret is NOT bound
 #
 # Run from the repository root:
@@ -17,7 +17,7 @@ set -Eeuo pipefail
 #   DATABASE_URL_OVERRIDE=https://...
 #   EXPECTED_CANDIDATE_HASH=<approved sha256>
 #   LEGO_SYMBOL_OVERRIDE=AAPL
-#   LEGO_FIX_C_OVERRIDE=1500
+#   LEGO_FIX_C_OVERRIDE=3000
 #   LEGO_DIFF_OVERRIDE=25
 #   LEGO_DNA_BUNDLE_OVERRIDE=strategy.example.json
 #   LEGO_SCHEDULE_OVERRIDE='* * * * *'
