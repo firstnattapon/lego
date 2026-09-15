@@ -25,6 +25,9 @@ def business_status(body: dict, http_status: int) -> str:
         return "OUTBOX_RECOVERY_PENDING"
     if decision.get("outbox_blocked") or decision.get("outbox_skipped"):
         return "INTENT_BLOCKED"
+    remaining = decision.get("dna_steps_remaining")
+    if type(remaining) is int and 0 <= remaining <= 10:
+        return "DNA_LOW"
     return decision.get("pipeline_status") or body.get("pipeline_status", "UNKNOWN")
 
 
@@ -36,7 +39,7 @@ def emit_tick(body: dict, code: int) -> None:
         "event": "lego_tick_completed", "timestamp": datetime.now(timezone.utc).isoformat(),
         "severity": ("ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED"}
                      else "WARNING" if health in {"WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
-                                                  "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED"}
+                                                  "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW"}
                      else "INFO"),
         "revision": os.environ.get("K_REVISION"),
         "candidate_hash": os.environ.get("LEGO_CANDIDATE_HASH"),
@@ -45,9 +48,21 @@ def emit_tick(body: dict, code: int) -> None:
         "duration_ms": body.get("duration_ms"), "environment": body.get("environment"),
         "mode": body.get("mode"), "active": body.get("active"),
         "decision": {key: decision.get(key) for key in
-                     ("run_id", "market_slot_id", "step", "status", "pipeline_status", "committed")},
+                     ("run_id", "market_slot_id", "step", "status", "pipeline_status", "committed",
+                      "dna_steps_remaining")},
         "execution": [],
+        "errors": [],
     }
+    # Exception class and phase are enough to distinguish deadline, config and
+    # broker errors. Never copy free-form errors (or broker payloads) into logs.
+    for phase_name, phase in (("tick", body), ("decision", decision),
+                              ("recovery", body.get("recovery") or {}),
+                              ("dispatch", body.get("dispatch") or {})):
+        if phase.get("error"):
+            event["errors"].append({
+                "phase": phase_name,
+                "type": phase.get("error_type") or phase.get("type") or "UnknownError",
+            })
     for phase_name in ("recovery", "dispatch"):
         phase = body.get(phase_name) or {}
         for item in phase.get("results", []):

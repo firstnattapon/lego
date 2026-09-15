@@ -375,6 +375,25 @@ def _repair_pending_row(state: dict | None) -> None:
         ref.update({"committed": True})
 
 
+def consumed_slot_state(cfg: Config, slot_id: str, *, runtime_identity: str,
+                        state=UNREAD_STATE) -> dict | None:
+    """Recognize a committed slot before broker I/O, retaining continuity guards.
+
+    This is only a read/row-repair optimization. New slots still go through the
+    authoritative commit transaction, and execution recovery runs independently.
+    Repair the last row's commit flag after a crash just as commit_final_row does.
+    """
+    current = _resolve_state(cfg, state)
+    verify_runtime_identity(current, runtime_identity)
+    verify_dna_continuity(cfg, current)
+    verify_cashflow_semantics(current, cashflow_semantics_for(cfg))
+    verify_calendar_continuity(current)
+    if current and current.get("slot_id") == slot_id:
+        _repair_pending_row(current)
+        return current
+    return None
+
+
 def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: dict,
                      *, slot_id: str | None = None, market_ordinal: int | None = None,
                      clock_mode: str | None = None,

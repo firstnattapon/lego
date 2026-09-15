@@ -12,7 +12,7 @@ EXCLUDED_PARTS = {
     ".audit-cache", ".review-runtime", ".firebase",
 }
 INCLUDED_SUFFIXES = {".py", ".json", ".md", ".txt", ".ps1", ".rules", ".whl",
-                     ".yaml", ".yml", ".html"}
+                     ".yaml", ".yml", ".html", ".sh"}
 INCLUDED_NAMES = {".gcloudignore", ".gitignore"}
 
 

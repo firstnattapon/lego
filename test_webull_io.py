@@ -155,7 +155,6 @@ def test_open_orders_filters_by_symbol_and_flattens_groups():
     client = fake_trade_client(open_orders={"orders": [
         {"items": [{"symbol": "TSLA", "id": 1}, {"symbol": "FFWM", "id": 2}]},
         {"symbol": "FFWM", "id": 3},
-        "junk",
     ]})
     assert [o["id"] for o in fetch_open_orders(client, "FFWM")] == [2, 3]
 

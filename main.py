@@ -300,9 +300,11 @@ def lego_tick(request):
         try:
             body, code = _run_tick(request)
         except tick_runtime.TickDeadlineExceeded as exc:
-            body, code = {"pipeline_status": "TICK_DEFERRED", "error": _error_text(exc)}, 503
+            body, code = {"pipeline_status": "TICK_DEFERRED", "error": _error_text(exc),
+                          "error_type": type(exc).__name__}, 503
         except Exception as exc:
-            body, code = {"pipeline_status": "TICK_ERROR", "error": _error_text(exc)}, 500
+            body, code = {"pipeline_status": "TICK_ERROR", "error": _error_text(exc),
+                          "error_type": type(exc).__name__}, 500
         body["correlation_id"] = identifier
         body["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
         emit_tick(body, code)
@@ -347,6 +349,7 @@ def _run_tick(request):
             "pipeline_status": "CONFIG_ERROR",
             "correlation_id": correlation_id,
             "error": _error_text(exc, with_type=False),
+            "error_type": type(exc).__name__,
         }, 500
 
     # Recovery is intentionally first and independent of active/mode. An
@@ -359,13 +362,14 @@ def _run_tick(request):
             "pipeline_status": "RECOVERY_ERROR",
             "correlation_id": correlation_id,
             "error": _error_text(exc),
+            "error_type": type(exc).__name__,
         }, 503
 
     try:
         tick_runtime.require_budget(8.0)
     except tick_runtime.TickDeadlineExceeded as exc:
         return {"pipeline_status": "TICK_DEFERRED", "recovery": recovery,
-                "error": _error_text(exc)}, 503
+                "error": _error_text(exc), "error_type": type(exc).__name__}, 503
     decision, decision_code = decision_service.run_decision(
         request, runtime=runtime, cfg_override=cfg)
     dispatch = None
@@ -382,7 +386,8 @@ def _run_tick(request):
                 dispatch = execution_service._run_order_worker(
                     cfg, limit=1, runtime_identity=runtime_identity, runtime=runtime)
         except Exception as exc:
-            dispatch = {"pipeline_status": "ORDER_WORKER_ERROR", "error": _error_text(exc)}
+            dispatch = {"pipeline_status": "ORDER_WORKER_ERROR", "error": _error_text(exc),
+                        "error_type": type(exc).__name__}
 
     archive = None
     elapsed = time.monotonic() - started

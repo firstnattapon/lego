@@ -185,6 +185,27 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 "pipeline_status": "MARKET_CLOSED"}, 200
 
     try:
+        # Typed v2 chain identity excludes the operational lot size. A consumed
+        # slot therefore needs no broker capability/position/quote request.
+        # Recovery above and the tick's dispatch phase still process its intent.
+        if runtime is not None:
+            from lego_state import consumed_slot_state
+            existing_slot = resolve_market_slot(decision_time)
+            if existing_slot is not None:
+                consumed = consumed_slot_state(
+                    cfg, existing_slot.slot_id,
+                    runtime_identity=runtime_identity, state=state)
+                if consumed is not None:
+                    return {
+                        "status": "PASS_SLOT_CONSUMED", "committed": False,
+                        "pipeline_status": "SLOT_CONSUMED",
+                        "run_id": consumed.get("last_run_id"),
+                        "market_slot_id": existing_slot.slot_id,
+                        "step": consumed["dna_step"],
+                        "dna_steps_remaining": dna_steps_remaining(
+                            cfg.dna_code, consumed["dna_step"]),
+                    }, 200
+
         # Resolve the broker's quantity contract before any model anchor is
         # interpreted for this decision. v2 chain identity deliberately excludes
         # this operational capability, while the exact resolved values are
@@ -374,13 +395,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         if outbox_blocked:
             out["outbox_blocked"] = outbox_blocked
             out["outbox_blocked_checks"] = preflight["blocked_by"]
-        # Silent until the last few slots so a healthy chain keeps the response
-        # it has always had.
-        low_watermark = (10 if runtime is not None else int(
-            os.environ.get("LEGO_DNA_LOW_WATERMARK", "10")))
-        if remaining <= low_watermark:
+        # The deployed typed runtime reports headroom on every slot for alerts.
+        # Keep the legacy response shape for non-deployed migration consumers.
+        if runtime is not None or remaining <= int(
+                os.environ.get("LEGO_DNA_LOW_WATERMARK", "10")):
             out["dna_steps_remaining"] = remaining
-
         # One line per slot in Cloud Logging. The response body says all of this
         # already, but nothing reads it: the caller is Cloud Scheduler, which
         # keeps the status code and throws the body away. Without this a chain
