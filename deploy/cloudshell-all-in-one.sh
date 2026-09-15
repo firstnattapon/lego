@@ -4,13 +4,21 @@ set -Eeuo pipefail
 
 # LEGO PRINCIPAL v2 — Google Cloud Shell all-in-one UAT deploy
 #
-# Configuration:
+# Safe defaults:
 #   environment = UAT
-#   mode        = trade
-#   active      = true
-#   Webull token secret is NOT bound
+#   mode        = observe
+#   active      = false
+#   order submission stays blocked until a candidate hash and release binding
+#   for this exact UAT account are supplied explicitly.
 #
 # Run from the repository root:
+#   bash deploy/cloudshell-all-in-one.sh
+#
+# Explicitly authorized UAT order submission:
+#   EXPECTED_CANDIDATE_HASH=<64-hex> \
+#   LEGO_RELEASE_AUTHORIZATION_OVERRIDE=<64-hex> \
+#   LEGO_MODE_OVERRIDE=trade \
+#   LEGO_ACTIVE_OVERRIDE=true \
 #   bash deploy/cloudshell-all-in-one.sh
 
 readonly PROJECT_ID="lego-firebase"
@@ -24,12 +32,15 @@ readonly SCHEDULER_SA_NAME="lego-scheduler-${SUFFIX}"
 readonly RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 readonly SCHEDULER_SA="${SCHEDULER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
-# --- TRADE MODE & OVERRIDES ---
-readonly MODE="${LEGO_MODE_OVERRIDE:-trade}"
-readonly ACTIVE="${LEGO_ACTIVE_OVERRIDE:-true}"
+# --- OPERATOR SETTINGS & OVERRIDES ---
+readonly MODE="${LEGO_MODE_OVERRIDE:-observe}"
+readonly ACTIVE="${LEGO_ACTIVE_OVERRIDE:-false}"
 
 readonly DATABASE_URL_OVERRIDE="${DATABASE_URL_OVERRIDE:-}"
 readonly EXPECTED_CANDIDATE_HASH="${EXPECTED_CANDIDATE_HASH:-}"
+readonly RELEASE_AUTHORIZATION_OVERRIDE="${LEGO_RELEASE_AUTHORIZATION_OVERRIDE:-}"
+readonly TOKEN_SECRET_RESOURCE_OVERRIDE="${WEBULL_TOKEN_SECRET_OVERRIDE:-}"
+readonly SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-120}"
 readonly LEGO_SYMBOL_OVERRIDE="${LEGO_SYMBOL_OVERRIDE:-AAPL}"
 readonly LEGO_FIX_C_OVERRIDE="${LEGO_FIX_C_OVERRIDE:-3000}"
 readonly LEGO_DIFF_OVERRIDE="${LEGO_DIFF_OVERRIDE:-25}"
@@ -65,6 +76,20 @@ reject_comma() {
     local name="$1"
     local value="$2"
     [[ "${value}" != *,* ]] || fail "${name} ห้ามมี comma (,)"
+}
+
+require_sha256() {
+    local name="$1"
+    local value="$2"
+    [[ "${value}" =~ ^[0-9a-f]{64}$ ]] || \
+        fail "${name} ต้องเป็น SHA-256 ตัวพิมพ์เล็ก 64 ตัว"
+}
+
+require_boolean() {
+    local name="$1"
+    local value="$2"
+    [[ "${value}" == "true" || "${value}" == "false" ]] || \
+        fail "${name} ต้องเป็น true หรือ false"
 }
 
 ensure_service_account() {
@@ -165,6 +190,14 @@ require_command gcloud
 require_command python3
 require_command git
 
+[[ "${MODE}" == "observe" || "${MODE}" == "trade" ]] || \
+    fail "LEGO_MODE_OVERRIDE ต้องเป็น observe หรือ trade"
+require_boolean "LEGO_ACTIVE_OVERRIDE" "${ACTIVE}"
+[[ "${SMOKE_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || \
+    fail "SMOKE_TIMEOUT_SECONDS ต้องเป็นจำนวนเต็มบวก"
+(( SMOKE_TIMEOUT_SECONDS >= 30 )) || \
+    fail "SMOKE_TIMEOUT_SECONDS ต้องไม่น้อยกว่า 30"
+
 [[ -f "tools/candidate_manifest.py" ]] || \
     fail "ต้องรันจาก repo root (ไม่พบ tools/candidate_manifest.py)"
 [[ -f "firebase.json" ]] || fail "ไม่พบ firebase.json"
@@ -180,7 +213,12 @@ else
 fi
 
 DEPLOY_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || true)"
-echo "Repo commit: ${DEPLOY_COMMIT:-unknown}"
+[[ "${DEPLOY_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || \
+    fail "source ต้องเป็น Git checkout ที่มี HEAD commit"
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+    fail "Git working tree ไม่สะอาด — commit/stash การเปลี่ยนแปลงก่อน deploy"
+fi
+echo "Repo commit: ${DEPLOY_COMMIT}"
 
 # -----------------------------------------------------------------------------
 # 1. GOOGLE CLOUD + FIREBASE ACCESS
@@ -335,10 +373,10 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
     --quiet >/dev/null
 
 # -----------------------------------------------------------------------------
-# 6. RESOLVE REAL RTDB + DEPLOY RULES
+# 6. RESOLVE REAL RTDB
 # -----------------------------------------------------------------------------
 
-step "6/10 FIREBASE REALTIME DATABASE"
+step "6/10 RESOLVE FIREBASE REALTIME DATABASE"
 
 if [[ -n "${DATABASE_URL_OVERRIDE}" ]]; then
     DATABASE_URL="${DATABASE_URL_OVERRIDE%/}"
@@ -398,11 +436,6 @@ fi
 
 echo "RTDB: ${DATABASE_URL}"
 
-"${FIREBASE_CMD[@]}" deploy \
-    --only database \
-    --project="${PROJECT_ID}" \
-    --non-interactive
-
 # -----------------------------------------------------------------------------
 # 7. CANDIDATE + PRESERVED RUNTIME SETTINGS
 # -----------------------------------------------------------------------------
@@ -449,38 +482,145 @@ reject_comma "LEGO_DIFF" "${DIFF}"
 reject_comma "LEGO_DNA_BUNDLE" "${DNA_BUNDLE}"
 [[ -f "${DNA_BUNDLE}" ]] || fail "ไม่พบ DNA bundle '${DNA_BUNDLE}'"
 
+DNA_REPORT="$(python3 - "${DNA_BUNDLE}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from config import DNABundle
+from dna_engine import decode_dna
+
+path = Path(sys.argv[1])
+raw = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(raw, dict):
+    raise SystemExit("ERROR: DNA bundle must be a JSON object")
+bundle = DNABundle.from_mapping(raw)
+decoded = decode_dna(bundle.dna_code)
+print(json.dumps({
+    "fingerprint": bundle.decoded_array_sha256,
+    "length": len(decoded),
+    "ones": sum(decoded),
+}, separators=(",", ":")))
+PY
+)" || fail "ตรวจ DNA bundle ไม่ผ่าน; ติดตั้ง requirements.txt แล้วตรวจไฟล์อีกครั้ง"
+
 CANDIDATE_HASH="$(
     python3 tools/candidate_manifest.py | \
         python3 -c 'import json, sys; print(json.load(sys.stdin)["candidate_hash"])'
 )"
-[[ "${CANDIDATE_HASH}" =~ ^[0-9a-f]{64}$ ]] || fail "candidate hash ไม่ถูกต้อง"
+require_sha256 "candidate hash" "${CANDIDATE_HASH}"
 
 if [[ -n "${EXPECTED_CANDIDATE_HASH}" ]]; then
-    [[ "${EXPECTED_CANDIDATE_HASH}" =~ ^[0-9a-f]{64}$ ]] || \
-        fail "EXPECTED_CANDIDATE_HASH ต้องเป็น SHA-256 ตัวพิมพ์เล็ก 64 ตัว"
+    require_sha256 "EXPECTED_CANDIDATE_HASH" "${EXPECTED_CANDIDATE_HASH}"
     [[ "${CANDIDATE_HASH}" == "${EXPECTED_CANDIDATE_HASH}" ]] || \
         fail "candidate hash ไม่ตรงกับ release evidence ที่อนุมัติ"
     CANDIDATE_STATUS="verified"
 else
-    CANDIDATE_STATUS="self-certified for UAT/trade"
+    CANDIDATE_STATUS="self-certified; guarded deployment only"
+fi
+
+if [[ -n "${RELEASE_AUTHORIZATION_OVERRIDE}" ]]; then
+    require_sha256 "LEGO_RELEASE_AUTHORIZATION_OVERRIDE" \
+        "${RELEASE_AUTHORIZATION_OVERRIDE}"
+fi
+
+# Validate the supplied release binding without ever printing the account ID.
+EXPECTED_RELEASE_BINDING="$(
+    gcloud secrets versions access latest \
+        --secret="${ACCOUNT_ID_SECRET}" \
+        --project="${PROJECT_ID}" | \
+    python3 -c '
+import hashlib
+import sys
+
+environment, candidate = sys.argv[1:3]
+account_id = sys.stdin.read().strip()
+if not account_id:
+    raise SystemExit("WEBULL account secret is empty")
+account_fingerprint = hashlib.sha256(
+    f"webull-runtime-v2\0{environment}\0{account_id}".encode()
+).hexdigest()
+print(hashlib.sha256(
+    f"lego-release-v2\0{environment}\0{account_fingerprint}\0{candidate}".encode()
+).hexdigest())
+' "${ENVIRONMENT}" "${CANDIDATE_HASH}"
+)"
+require_sha256 "computed release binding" "${EXPECTED_RELEASE_BINDING}"
+
+ORDER_SUBMISSION_EXPECTED="false"
+if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
+    [[ -n "${EXPECTED_CANDIDATE_HASH}" ]] || \
+        fail "trade+active ต้องระบุ EXPECTED_CANDIDATE_HASH จาก release evidence"
+    [[ -n "${RELEASE_AUTHORIZATION_OVERRIDE}" ]] || \
+        fail "trade+active ต้องระบุ LEGO_RELEASE_AUTHORIZATION_OVERRIDE"
+    [[ "${RELEASE_AUTHORIZATION_OVERRIDE}" == "${EXPECTED_RELEASE_BINDING}" ]] || \
+        fail "release authorization ไม่ตรงกับ environment/account/candidate นี้"
+    ORDER_SUBMISSION_EXPECTED="true"
+elif [[ -n "${RELEASE_AUTHORIZATION_OVERRIDE}" \
+        && "${RELEASE_AUTHORIZATION_OVERRIDE}" != "${EXPECTED_RELEASE_BINDING}" ]]; then
+    fail "release authorization ไม่ตรงกับ environment/account/candidate นี้"
+fi
+
+TOKEN_SECRET_RESOURCE=""
+if [[ -n "${TOKEN_SECRET_RESOURCE_OVERRIDE}" ]]; then
+    if [[ "${TOKEN_SECRET_RESOURCE_OVERRIDE}" =~ ^projects/([^/]+)/secrets/([^/]+)(/versions/[^/]+)?$ ]]; then
+        TOKEN_PROJECT="${BASH_REMATCH[1]}"
+        TOKEN_NAME="${BASH_REMATCH[2]}"
+        TOKEN_VERSION="${BASH_REMATCH[3]:-/versions/latest}"
+        TOKEN_VERSION="${TOKEN_VERSION#/versions/}"
+    else
+        fail "WEBULL_TOKEN_SECRET_OVERRIDE ต้องเป็น projects/PROJECT/secrets/NAME[/versions/VERSION]"
+    fi
+    TOKEN_STATE="$(
+        gcloud secrets versions describe "${TOKEN_VERSION}" \
+            --secret="${TOKEN_NAME}" \
+            --project="${TOKEN_PROJECT}" \
+            --format='value(state)' 2>/dev/null || true
+    )"
+    [[ "${TOKEN_STATE}" == "ENABLED" ]] || \
+        fail "Webull token secret latest version ไม่มีหรือไม่ได้ ENABLED"
+    gcloud secrets add-iam-policy-binding "${TOKEN_NAME}" \
+        --member="serviceAccount:${RUNTIME_SA}" \
+        --role="roles/secretmanager.secretAccessor" \
+        --project="${TOKEN_PROJECT}" \
+        --quiet >/dev/null
+    TOKEN_SECRET_RESOURCE="${TOKEN_SECRET_RESOURCE_OVERRIDE}"
 fi
 
 echo "Symbol         : ${SYMBOL}"
 echo "Principal      : ${FIX_C}"
 echo "Diff           : ${DIFF}"
 echo "DNA bundle     : ${DNA_BUNDLE}"
+echo "DNA report     : ${DNA_REPORT}"
 echo "Schedule       : ${SCHEDULE} UTC"
 echo "Candidate hash : ${CANDIDATE_HASH} (${CANDIDATE_STATUS})"
 echo "Mode           : ${MODE}"
 echo "Active         : ${ACTIVE}"
+echo "Order submit   : ${ORDER_SUBMISSION_EXPECTED}"
+if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
+    echo "Token source   : Secret Manager"
+else
+    echo "Token source   : broker HMAC/token policy (no token secret requested)"
+fi
 
 # -----------------------------------------------------------------------------
-# 8. DEPLOY CLOUD FUNCTION GEN2
+# 8. DEPLOY DATABASE RULES + CLOUD FUNCTION GEN2
 # -----------------------------------------------------------------------------
 
-step "8/10 DEPLOY CLOUD FUNCTION GEN2"
+step "8/10 DEPLOY DATABASE RULES + CLOUD FUNCTION GEN2"
 
-ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=${SYMBOL},LEGO_FIX_C=${FIX_C},LEGO_DIFF=${DIFF},LEGO_DNA_BUNDLE=${DNA_BUNDLE},LEGO_MODE=${MODE},LEGO_ACTIVE=${ACTIVE},LEGO_CANDIDATE_HASH=${CANDIDATE_HASH},LEGO_RELEASE_AUTHORIZATION=,WEBULL_TOKEN_DIR=/tmp/webull_token,LEGO_DNA_CLOCK_MODE=market"
+# All source, DNA, candidate, credential and release checks above must pass
+# before this script changes Firebase rules or the Cloud Function.
+"${FIREBASE_CMD[@]}" deploy \
+    --only database \
+    --project="${PROJECT_ID}" \
+    --non-interactive
+
+ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=${SYMBOL},LEGO_FIX_C=${FIX_C},LEGO_DIFF=${DIFF},LEGO_DNA_BUNDLE=${DNA_BUNDLE},LEGO_MODE=${MODE},LEGO_ACTIVE=${ACTIVE},LEGO_CANDIDATE_HASH=${CANDIDATE_HASH},LEGO_RELEASE_AUTHORIZATION=${RELEASE_AUTHORIZATION_OVERRIDE},WEBULL_TOKEN_DIR=/tmp/webull_token,LEGO_DNA_CLOCK_MODE=market"
+
+if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
+    ENV_VARS="${ENV_VARS},WEBULL_TOKEN_SECRET=${TOKEN_SECRET_RESOURCE}"
+fi
 
 SECRET_BINDINGS="WEBULL_APP_KEY=${APP_KEY_SECRET}:latest,WEBULL_APP_SECRET=${APP_SECRET_SECRET}:latest,WEBULL_ACCOUNT_ID=${ACCOUNT_ID_SECRET}:latest"
 
@@ -552,10 +692,92 @@ gcloud scheduler jobs "${SCHEDULER_VERB}" http "${SCHEDULER_JOB}" \
 
 step "10/10 SMOKE TRIGGER + FINAL STATUS"
 
-echo "Triggering initial tick (ACTIVE TRADING)..."
+REVISION="$(
+    gcloud run services describe "${FUNCTION_NAME}" \
+        --region="${REGION}" \
+        --project="${PROJECT_ID}" \
+        --format='value(status.latestReadyRevisionName)'
+)"
+[[ -n "${REVISION}" ]] || fail "อ่าน latest ready revision ไม่สำเร็จ"
+
+SMOKE_STARTED="$(python3 -c \
+    'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"
+echo "Triggering smoke tick for revision ${REVISION}..."
 gcloud scheduler jobs run "${SCHEDULER_JOB}" \
     --location="${REGION}" \
     --project="${PROJECT_ID}"
+
+SMOKE_FILTER="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${FUNCTION_NAME}\" AND resource.labels.revision_name=\"${REVISION}\" AND jsonPayload.event=\"lego_tick_completed\" AND timestamp>=\"${SMOKE_STARTED}\""
+SMOKE_LOG="[]"
+SMOKE_DEADLINE=$((SECONDS + SMOKE_TIMEOUT_SECONDS))
+
+while (( SECONDS < SMOKE_DEADLINE )); do
+    SMOKE_LOG="$(
+        gcloud logging read "${SMOKE_FILTER}" \
+            --project="${PROJECT_ID}" \
+            --order=desc \
+            --limit=1 \
+            --format=json 2>/dev/null || true
+    )"
+    if [[ -n "${SMOKE_LOG}" && "${SMOKE_LOG}" != "[]" ]]; then
+        break
+    fi
+    sleep 5
+done
+
+[[ -n "${SMOKE_LOG}" && "${SMOKE_LOG}" != "[]" ]] || \
+    fail "ไม่พบ structured smoke event ของ revision ${REVISION} ภายใน ${SMOKE_TIMEOUT_SECONDS} วินาที"
+
+if ! SMOKE_SUMMARY="$(
+    printf '%s' "${SMOKE_LOG}" | python3 -c '
+import json
+import sys
+
+candidate, revision, mode, active, order_expected = sys.argv[1:6]
+entries = json.load(sys.stdin)
+if not isinstance(entries, list) or not entries:
+    raise SystemExit("missing smoke log entry")
+payload = entries[0].get("jsonPayload") or {}
+required = ("event", "candidate_hash", "http_status", "business_status")
+missing = [key for key in required if payload.get(key) is None]
+if missing:
+    raise SystemExit("smoke event missing fields: " + ",".join(missing))
+if payload.get("event") != "lego_tick_completed":
+    raise SystemExit("unexpected smoke event")
+if payload.get("candidate_hash") != candidate:
+    raise SystemExit("smoke candidate hash mismatch")
+if payload.get("revision") not in (None, "", revision):
+    raise SystemExit("smoke revision mismatch")
+if payload.get("mode") != mode or str(payload.get("active")).lower() != active:
+    raise SystemExit("smoke operator settings mismatch")
+http_status = int(payload["http_status"])
+business_status = str(payload["business_status"])
+bad = {
+    "ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED",
+}
+if http_status >= 400 or business_status in bad:
+    raise SystemExit(
+        f"unhealthy smoke: http={http_status} business={business_status}")
+if order_expected == "true" and business_status == "INTENT_BLOCKED":
+    raise SystemExit("release/token preflight blocked an authorized trade deployment")
+print(json.dumps({
+    "revision": revision,
+    "http_status": http_status,
+    "business_status": business_status,
+    "pipeline_status": payload.get("pipeline_status"),
+    "correlation_id": payload.get("correlation_id"),
+}, separators=(",", ":")))
+' "${CANDIDATE_HASH}" "${REVISION}" "${MODE}" "${ACTIVE}" \
+      "${ORDER_SUBMISSION_EXPECTED}"
+)"; then
+    fail "structured smoke event ไม่ผ่าน validation"
+fi
+
+if [[ "${ORDER_SUBMISSION_EXPECTED}" == "true" ]]; then
+    ORDER_STATUS="ENABLED (explicit release binding verified)"
+else
+    ORDER_STATUS="BLOCKED (mode/active/release gate)"
+fi
 
 echo
 echo "============================================================"
@@ -564,9 +786,10 @@ echo "============================================================"
 echo "Project      : ${PROJECT_ID}"
 echo "Environment  : ${ENVIRONMENT}"
 echo "Region       : ${REGION}"
-echo "Git commit   : ${DEPLOY_COMMIT:-unknown}"
+echo "Git commit   : ${DEPLOY_COMMIT}"
 echo "Candidate    : ${CANDIDATE_HASH} (${CANDIDATE_STATUS})"
 echo "Function     : ${FUNCTION_NAME}"
+echo "Revision     : ${REVISION}"
 echo "URL          : ${FUNCTION_URI}"
 echo "Scheduler    : ${SCHEDULER_JOB}"
 echo "Schedule     : ${SCHEDULE} UTC"
@@ -578,7 +801,8 @@ echo "LEGO_SYMBOL  : ${SYMBOL}"
 echo "LEGO_FIX_C   : ${FIX_C}"
 echo "LEGO_MODE    : ${MODE}"
 echo "LEGO_ACTIVE  : ${ACTIVE}"
-echo "STATUS       : *** ORDER SUBMISSION = ENABLED ***"
+echo "Smoke        : ${SMOKE_SUMMARY}"
+echo "STATUS       : ORDER SUBMISSION = ${ORDER_STATUS}"
 echo "============================================================"
 
 echo
@@ -597,7 +821,7 @@ gcloud scheduler jobs describe "${SCHEDULER_JOB}" \
     --format='yaml(name,state,schedule,timeZone,httpTarget.uri)'
 
 echo
-echo "Recent LEGO logs (the scheduler trigger is asynchronous):"
+echo "Recent LEGO logs:"
 gcloud logging read \
     "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${FUNCTION_NAME}\"" \
     --project="${PROJECT_ID}" \
@@ -607,4 +831,4 @@ gcloud logging read \
     || true
 
 echo
-echo "DONE. System is running in LIVE/PAPER TRADING mode: trade + active=true."
+echo "DONE. UAT deployment and smoke verification succeeded."
