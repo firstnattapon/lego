@@ -1024,9 +1024,15 @@ def _open_order_items(res) -> list:
     if isinstance(res, list):
         return res
     if isinstance(res, dict):
+        if res.get("pagination_key") not in (None, ""):
+            # This adapter is pinned to /openapi/trade/order/open. The newer
+            # /trading/orders/open-orders/list uses an opaque pagination_key;
+            # never apply the legacy short-page rule to that response.
+            raise IncompleteOpenOrdersError(
+                "open-orders pagination_key requires the cursor API adapter — fail closed")
         for key in ("orders", "items", "data"):
             if key in res:
-                items = res.get(key) or []
+                items = res[key]
                 if not isinstance(items, list):
                     raise ValueError("open-orders items ต้องเป็น list — fail closed")
                 return items
@@ -1081,11 +1087,21 @@ def fetch_open_orders(trade_client, symbol: str) -> list[dict]:
         items = _open_order_items(res)
         for o in items:
             if not isinstance(o, dict):
-                continue
-            inner = o.get("items")
-            cands = inner if isinstance(inner, list) else [o]
+                raise IncompleteOpenOrdersError(
+                    "open-orders contains an unreadable order — fail closed")
+            if "items" in o:
+                cands = o["items"]
+                if not isinstance(cands, list) or not cands:
+                    raise IncompleteOpenOrdersError(
+                        "open-orders contains an unreadable group — fail closed")
+            else:
+                cands = [o]
             for c in cands:
-                if isinstance(c, dict) and str(c.get("symbol", "")).upper() == symbol.upper():
+                if (not isinstance(c, dict) or not isinstance(c.get("symbol"), str)
+                        or not c["symbol"].strip()):
+                    raise IncompleteOpenOrdersError(
+                        "open-orders cannot identify an order symbol — fail closed")
+                if c["symbol"].strip().upper() == symbol.strip().upper():
                     out.append(c)
         if len(items) < page_size:
             return out
