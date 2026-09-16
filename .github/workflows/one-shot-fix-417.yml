@@ -1,0 +1,57 @@
+name: One-shot Webull 417 patch
+
+on:
+  push:
+    branches:
+      - fix/webull-417-system-error-retry
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/webull-417-system-error-retry
+      - name: Patch retry policy exactly once
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("webull_io.py")
+          text = path.read_text(encoding="utf-8")
+          marker = '    "OPENAPI_SYSTEM_ERROR",\n'
+          if marker in text:
+              print("Patch already present")
+              raise SystemExit(0)
+
+          old = (
+              '    "SDK.HTTPERROR", "SDK.UNKNOWNSERVERERROR", "SDK.ENDPOINTRESOLVINGERROR",\n'
+              '}\n'
+          )
+          new = (
+              '    "SDK.HTTPERROR", "SDK.UNKNOWNSERVERERROR", "SDK.ENDPOINTRESOLVINGERROR",\n'
+              '    # Webull UAT can return HTTP 417 with OPENAPI_SYSTEM_ERROR for a\n'
+              '    # broker-side system failure. Retry that code on safe read/preview\n'
+              '    # calls only; place_market_order never uses _retry_transient.\n'
+              '    "OPENAPI_SYSTEM_ERROR",\n'
+              '}\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit("expected retry-policy block exactly once")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+      - run: python -m py_compile webull_io.py test_webull_system_error_retry.py
+      - name: Commit patch
+        run: |
+          if git diff --quiet -- webull_io.py; then
+            echo "No patch commit needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add webull_io.py
+          git commit -m "fix: retry Webull OPENAPI_SYSTEM_ERROR reads"
+          git push origin HEAD:fix/webull-417-system-error-retry
