@@ -6,8 +6,9 @@ from decimal import Decimal, InvalidOperation, localcontext
 
 
 D = Decimal
-SEMANTICS = "execution_terminal_frozen_v2"
+SEMANTICS = "execution_terminal_funding_v3"
 SCHEMA_VERSION = 2
+FUNDING_BASELINE_POLICY = "initial_funding_zero_v1"
 
 
 def decimal(value: object, *, name: str, positive: bool | None = None) -> Decimal:
@@ -59,12 +60,19 @@ class FrozenLedger:
         }
 
     def finalize_terminal_fill(
-        self, *, principal: object, fill_price: object, decision_r_basis: object
+        self, *, principal: object, fill_price: object, decision_r_basis: object,
+        initial_funding: bool = False,
     ) -> tuple["FrozenLedger", dict]:
         principal_d = decimal(principal, name="principal", positive=True)
         fill_d = decimal(fill_price, name="fill_price", positive=True)
         basis_d = decimal(decision_r_basis, name="decision_r_basis")
+        if type(initial_funding) is not bool:
+            raise ValueError("initial_funding must be bool")
+        if initial_funding and (self.finalized_seq != 0 or self.A != 0 or basis_d != 0):
+            raise ValueError("initial funding requires an unfinalized zero baseline")
         delta = principal_d * (fill_d / self.p_acted - D("1"))
+        if initial_funding:
+            delta = D("0")
         next_A = self.A + delta
         next_ledger = FrozenLedger(
             A=next_A,

@@ -1,5 +1,9 @@
 # LEGO PRINCIPAL v2
 
+Accounting update: [initial-funding baseline and audit notes](docs/FUNDING_BASELINE_20260916.md).
+The v3 accounting writer needs the matching reader update; existing data requires
+reviewed reconciliation. Source tests do not constitute production approval.
+
 ระบบ rebalancing แบบหนึ่ง account + หนึ่ง symbol ต่อ environment โดยมี HTTP
 entrypoint เดียวคือ `lego_tick`:
 

@@ -279,22 +279,26 @@ class Finalization:
 
 def finalize_recurrence(cfg: Config, fill: ExecutionFill, *,
                         last_action_price: float, actual_cumulative: float,
-                        reference_R: float) -> Finalization:
+                        reference_R: float, initial_funding: bool = False) -> Finalization:
     """ΔAₙ/Aₙ/Eₙ for a row whose order the broker confirmed as filled.
 
     Identical arithmetic to `compute_recurrence`'s act branch, with the executed
     price in place of the decision price: the decision price is what the engine
     saw when it chose, and using it here would book a cashflow the account never
-    experienced. Rₙ is not recomputed — it is the row's own reference column,
-    already committed by the engine, and only ΔAₙ/Aₙ/Eₙ move to this side.
+    experienced. reference_R is the row's committed market reference less any
+    explicit funding-origin offset supplied by the state layer. The row's
+    market-reference column itself is never rewritten here.
 
     One consequence worth naming: Aₙ is now built from executed prices while Rₙ
     is still built from quoted ones, so `Eₙ = Aₙ − Rₙ ≥ 0` — which holds exactly
     when both walk the same price path — now holds up to execution slippage and
     can sit slightly below zero after an unlucky fill. That is the difference
-    being measured, not an error in it: the surplus is reported net of what the
-    executions actually cost. The same applies to a chain's first fill, whose
-    P_acted seed is the genesis row's own decision price.
+    being measured, not an error in it. This remains a FIX_C-scaled model;
+    actual share quantities and fees belong to the separate broker ledger.
+    For an explicitly identified initial funding
+    BUY, there was no invested price interval: seed P_acted from the actual
+    fill and initialize dA/A/E to zero. The state layer identifies that case;
+    neither a zero A nor a DNA step is sufficient evidence on its own.
     """
     if not fill.acted:
         raise ValueError(
@@ -306,6 +310,12 @@ def finalize_recurrence(cfg: Config, fill: ExecutionFill, *,
     if not (math.isfinite(fill.holdings_after) and fill.holdings_after >= 0):
         raise ValueError("holdings หลัง fill ต้อง finite และ >= 0")
     price = float(fill.filled_price)
+    if type(initial_funding) is not bool:
+        raise ValueError("initial_funding must be bool")
+    if initial_funding:
+        if actual_cumulative != 0 or reference_R != 0:
+            raise ValueError("initial funding requires a zero model baseline")
+        return Finalization(0.0, 0.0, 0.0, price)
     dA = cfg.fix_c * (price / last_action_price - 1.0)
     A = actual_cumulative + dA
     return Finalization(dA, A, A - reference_R, price)

@@ -177,7 +177,8 @@ def test_emulator_enforces_anonymous_read_write_matrix():
 
 @pytest.mark.skipif("FIREBASE_DATABASE_EMULATOR_HOST" not in os.environ,
                     reason="real RTDB emulator required for concurrent money-path probes")
-@pytest.mark.parametrize("script", ["emulator_race_probe.py", "emulator_tick_race_probe.py"])
+@pytest.mark.parametrize("script", ["emulator_race_probe.py", "emulator_tick_race_probe.py",
+                                    "emulator_funding_probe.py"])
 def test_emulator_concurrent_dispatch_and_tick(script):
     host = os.environ["FIREBASE_DATABASE_EMULATOR_HOST"]
     assert host.startswith(("127.0.0.1:", "localhost:")), "local emulator only"
