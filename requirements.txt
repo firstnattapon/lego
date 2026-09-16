@@ -9,16 +9,12 @@ numpy==2.4.6
 # final Python 3.12 review environment. Upgrade only through the full suite.
 functions-framework==3.10.2
 firebase-admin==6.9.0
-# 2.30 requires protobuf>=6.33.5, while the pinned Webull 2.0.15 money-path
-# requires protobuf<6 on Python 3.12. 2.26 is the newest compatible line we
-# resolve and test as one environment; do not upgrade it independently.
+# Webull SDK 3.0.1 still requires protobuf<6 on Python 3.12, so Secret Manager
+# stays on the newest line in this repo that resolves with that broker constraint.
 google-cloud-secret-manager==2.26.0
-# The SDK is pinned for the same reason as numpy, on a shorter fuse: it owns the
-# HMAC signing, the auth flow, and the exact order payload that reaches the
-# broker, so an unplanned upgrade at deploy time changes the money path with
-# nothing in this repo to notice. Runtime code remains Webull 2.0.15 byte-for-
-# byte; the local wheel changes only dependency metadata so Python 3.12 can use
-# the current audited cryptography floor. See vendor/README.md and its provenance tests.
+# Webull 3.0.1 carries the current Thailand route contracts for auth, accounts,
+# orders and market data. Runtime package bytes are official 3.0.1 bytes; only
+# cryptography dependency metadata and RECORD are rebuilt for the audited floor.
 cryptography==50.0.0
-./vendor/webull_openapi_python_sdk-2.0.15-1lego-py3-none-any.whl
+./vendor/webull_openapi_python_sdk-3.0.1-1lego-py3-none-any.whl
 tzdata==2025.3

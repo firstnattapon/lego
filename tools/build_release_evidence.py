@@ -166,7 +166,7 @@ def main() -> None:
             "python": "3.12.10",
             "firebase_database_emulator": "4.11.2",
             "emulator_java": "Eclipse Temurin 21.0.12.1+1",
-            "webull_sdk": "2.0.15 vendored metadata-only patch",
+            "webull_sdk": "3.0.1 vendored metadata-only patch",
             "cryptography": "50.0.0",
         },
         "verification": {
