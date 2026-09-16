@@ -710,10 +710,10 @@ def test_broker_sdk_stays_pinned():
     lines = [line.strip() for line in
              open("requirements.txt", encoding="utf-8").read().splitlines()
              if line.strip() and not line.startswith("#")]
-    sdk = [line for line in lines if "webull_openapi_python_sdk-2.0.15-1lego" in line]
+    sdk = [line for line in lines if "webull_openapi_python_sdk-3.0.1-1lego" in line]
     assert sdk == [
-        "./vendor/webull_openapi_python_sdk-2.0.15-1lego-py3-none-any.whl"
-    ], "the reviewed, locally vendored Webull 2.0.15 wheel must stay exact"
+        "./vendor/webull_openapi_python_sdk-3.0.1-1lego-py3-none-any.whl"
+    ], "the reviewed, locally vendored Webull 3.0.1 wheel must stay exact"
     assert "cryptography==50.0.0" in lines
 
 

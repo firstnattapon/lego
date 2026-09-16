@@ -47,7 +47,7 @@ _TRANSIENT_CODES = {
 }
 # Any of these present-and-truthy means the broker rejected the preview.
 _PREVIEW_ERROR_KEYS = ("error", "error_code", "errorCode")
-# webull/data/common/category.py of the pinned SDK 2.0.15.
+# webull/data/common/category.py of the pinned SDK 3.0.1.
 CATEGORIES = ("US_STOCK", "US_ETF", "US_OPTION", "US_CRYPTO", "US_FUTURES",
               "US_EVENT", "HK_STOCK", "HK_ETF", "HK_FUTURES", "CN_STOCK")
 # The order payload below is deliberately US EQUITY. Accepting every market
@@ -126,8 +126,8 @@ def parse_instrument_capability(payload, symbol: str) -> InstrumentCapability:
 def fetch_instrument_capability(trade_client, symbol: str) -> InstrumentCapability:
     """Fetch the current v3 stock profile through the pinned SDK signer.
 
-    SDK 2.0.15 does not expose the new profile method, but its ApiRequest and
-    signer are still used; this avoids a second signature implementation.
+    Use the pinned SDK signer for the documented v3 profile request so this
+    adapter never grows a second signature implementation.
     """
     from webull.core.request import ApiRequest
 
@@ -507,7 +507,7 @@ def token_health(now: datetime | None = None) -> dict:
 def ensure_token_fresh(api_client) -> dict:
     """Renew the token before it expires, because nothing in the SDK will.
 
-    /openapi/auth/token/refresh is wrapped by TokenOperation.refresh_token and
+    The SDK token refresh endpoint is wrapped by TokenOperation.refresh_token and
     called from nowhere: TokenManager.init_token reads `expires` out of the file
     and discards it. The token simply dies at 15 days, mid-session, and recovery
     needs 2FA that only a human can give. Refreshing while the token is still
@@ -620,7 +620,7 @@ def _bounded_api_class(base):
                 if type(enabled) is not bool:
                     raise WebullConfigError("token_check_enabled must be an explicit boolean")
                 self._lego_token_check_enabled = enabled
-            if left is not None and "/auth/token/" in action:
+            if left is not None and ("/auth/token/" in action or "/auth/tokens/" in action):
                 payload = response.json()
                 if isinstance(payload, dict) and payload.get("status") == "PENDING":
                     raise WebullConfigError("token requires verification outside the scheduled tick")
@@ -788,39 +788,23 @@ def clients_endpoint(trade_client, data_client) -> str | None:
     return str(cache_key[0])
 
 
-def _fetch_account_assets(trade_client, path: str):
-    """Read the Thai v3 assets API using the existing authenticated signer.
-
-    SDK 2.0.15 account_v2 methods still target /openapi/assets/*; the Thai
-    reference documents /trading/assets/* with x-version v3. As with stock
-    profiles, use ApiRequest without replacing SDK signing/authentication.
-    Construct a fresh request on each safe-read retry, since signing mutates it.
-    """
-    from webull.core.request import ApiRequest
-
-    account_id = os.environ["WEBULL_ACCOUNT_ID"].strip()
+def _account_id() -> str:
+    account_id = os.environ.get("WEBULL_ACCOUNT_ID", "").strip()
     if not account_id:
         raise WebullConfigError("WEBULL_ACCOUNT_ID ว่างหรือไม่ได้ตั้งค่า")
-    api_client = trade_client.account_v2.client
-
-    def read():
-        request = ApiRequest(path, version="v3", method="GET", query_params={})
-        request.add_query_param("account_id", account_id)
-        return api_client.get_response(request).json()
-
-    return _retry_transient(read)
+    return account_id
 
 
 def fetch_holdings(trade_client, cfg: Config) -> float:
     """Shares of cfg.symbol the broker says the account holds, right now.
 
-    Split out of fetch_snapshot for the post-execution read: confirming a fill
-    needs the position and nothing else, and going through the snapshot would
-    also spend a market-data call — the one call that can answer 403 for a
-    subscription reason that has nothing to do with the fill being confirmed.
+    SDK 3.0.1 owns the Thailand account-position request contract. Calling
+    AccountV2 on every retry creates a fresh request/signature each time, while
+    the parser still fails closed on malformed holdings.
     """
-    positions = _fetch_account_assets(
-        trade_client, "/trading/assets/positions/list")
+    account_id = _account_id()
+    positions = _retry_transient(
+        lambda: trade_client.account_v2.get_account_position(account_id).json())
     return float(_extract_qty(positions, cfg.symbol))
 
 
@@ -849,8 +833,9 @@ def parse_buying_power(payload, currency: str = "USD") -> Decimal:
 
 
 def fetch_buying_power(trade_client, currency: str = "USD") -> Decimal:
-    payload = _fetch_account_assets(
-        trade_client, "/trading/assets/balances/get")
+    account_id = _account_id()
+    payload = _retry_transient(
+        lambda: trade_client.account_v2.get_account_balance(account_id).json())
     return parse_buying_power(payload, currency)
 
 
