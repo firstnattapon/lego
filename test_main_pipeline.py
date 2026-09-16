@@ -76,6 +76,35 @@ def test_scheduler_retry_in_same_slot_does_not_double_commit(monkeypatch):
     assert state["version"] == 1 and state["last_run_id"] == first["run_id"]
 
 
+@pytest.mark.parametrize("failure,expected_http", [
+    ("system_error", 503), ("malformed_positions", 500),
+])
+def test_account_read_failure_never_commits_or_creates_order(
+        monkeypatch, failure, expected_http):
+    from webull.core.exception.exceptions import ServerException
+    import webull_io
+    from conftest import fake_data_client, fake_trade_client
+
+    payload = (ServerException("OPENAPI_SYSTEM_ERROR", "System error.", 417)
+               if failure == "system_error" else {"positions": None})
+    trade = fake_trade_client(positions=payload)
+    data = fake_data_client(snapshot={"last": 320})
+    monkeypatch.setenv("AUTO_SUBMIT", "true")
+    monkeypatch.setattr(main, "datetime", _fixed_now(SESSION_OPEN_SLOT))
+    monkeypatch.setattr(main, "build_clients", lambda: (trade, data))
+    monkeypatch.setattr(main, "fetch_snapshot", webull_io.fetch_snapshot)
+    monkeypatch.setattr(webull_io.time, "sleep", lambda _seconds: None)
+
+    body, code = main.lego_one_row(object())
+
+    assert code == expected_http
+    assert body["committed"] is False
+    assert FAKE_DB.reference("webull_lego_rows").get() is None
+    assert FAKE_DB.reference(OUTBOX_PATH).get() is None
+    assert data.market_data.get_snapshot.calls == []
+    assert trade.order_v3.place_order.calls == []
+
+
 def test_dna_jumps_when_scheduler_misses_slots(monkeypatch):
     _run(monkeypatch, SESSION_OPEN_SLOT, 320.0)
     # 18:30 and 19:00 never fire; the 19:30 slot is ordinal 3.
