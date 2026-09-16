@@ -223,18 +223,22 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                     0, -capability.quantity_increment.normalize().as_tuple().exponent),
             )
         # Before the model is touched: if this revision's accounting is behind
-        # the chain's, nothing it computes afterwards is worth writing. read_anchor
-        # is the other half — it restarts Aₙ at zero across a semantics boundary,
-        # and this is what stops that reset from happening silently.
+        # the chain's, nothing it computes afterwards is worth writing. Existing
+        # execution ledgers are retained; only pre-execution ledgers reset.
         running_semantics = cashflow_semantics_for(cfg)
         semantics_migrated_from = verify_cashflow_semantics(state, running_semantics)
         if semantics_migrated_from:
+            stored_execution = (state or {}).get("execution_cashflow") or {}
+            preserved = stored_execution.get("last_action_price") is not None
+            baseline_note = (
+                "คง execution baseline เดิม; การแก้ประวัติต้องผ่าน reconciliation"
+                if preserved else "รีเซ็ต baseline Aₙ เป็น 0 สำหรับ ledger เดิมก่อนแยก execution")
             _record_warning(
                 "cashflow_semantics_migration",
                 f"chain เคยใช้ cashflow semantics '{semantics_migrated_from}' "
-                f"แต่ runtime นี้เป็น '{CASHFLOW_SEMANTICS}' — baseline Aₙ ถูกรีเซ็ต "
-                "เป็น 0 และเดินต่อ (แถวเก่าเทียบกับแถวใหม่ตรง ๆ ไม่ได้)",
+                f"แต่ runtime นี้เป็น '{running_semantics}' — {baseline_note}",
                 {"from": semantics_migrated_from, "to": running_semantics,
+                 "baseline_action": "preserved" if preserved else "reset",
                  "chain_key": chain_key(cfg)})
         anchor = read_anchor(cfg, runtime_identity=runtime_identity, state=state)
         legacy_step = dna_step_for(anchor)

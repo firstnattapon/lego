@@ -19,7 +19,7 @@ from lego_one_row import (ACTUAL_COLUMN, DELTA_COLUMN, EXCESS_COLUMN,
                           REFERENCE_COLUMN, Anchor, Config, ExecutionFill,
                           finalize_recurrence, validate_row_columns)
 from lego_orders import apply_fill, normalize_open_legs, normalize_status
-from ledger_v2 import BrokerCashflow, decimal
+from ledger_v2 import BrokerCashflow, FUNDING_BASELINE_POLICY, SEMANTICS, decimal
 from market_clock import calendar_fingerprint, market_ordinal_for_slot_id
 from webull_io import redact_sensitive_text
 
@@ -50,8 +50,12 @@ CASHFLOW_SEMANTICS_HISTORY = (
     "execution_confirmed_v1",   # only a broker-confirmed fill advances Aₙ
 )
 CASHFLOW_SEMANTICS = "execution_confirmed_v1"
-V2_CASHFLOW_SEMANTICS = "execution_terminal_frozen_v2"
-ALL_CASHFLOW_SEMANTICS = CASHFLOW_SEMANTICS_HISTORY + (V2_CASHFLOW_SEMANTICS,)
+LEGACY_V2_CASHFLOW_SEMANTICS = "execution_terminal_frozen_v2"
+# Keep the v2 strategy/config/chain identity, but advance the accounting writer
+# version. Older deployments reject the unknown v3 semantics on this chain.
+V2_CASHFLOW_SEMANTICS = SEMANTICS
+ALL_CASHFLOW_SEMANTICS = CASHFLOW_SEMANTICS_HISTORY + (
+    LEGACY_V2_CASHFLOW_SEMANTICS, V2_CASHFLOW_SEMANTICS)
 
 
 def cashflow_semantics_for(cfg: Config) -> str:
@@ -456,11 +460,17 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
                            else CASHFLOW_NO_ACTION,
     })
     if target_semantics == V2_CASHFLOW_SEMANTICS:
+        observed = (state_before or {}).get(EXECUTION_STATE_KEY) or {}
         doc.update({
             "schema_version": 2,
             "ledger_version_at_observation": target_semantics,
             "E_mark_at_observation": float(meta["e_mark"]),
+            "R_basis": float(meta["actual_next"]) - float(meta["excess_next"]),
         })
+        if observed.get("model_baseline_policy"):
+            doc["model_baseline_policy"] = observed["model_baseline_policy"]
+            doc["funding_reference_offset"] = float(
+                observed.get("funding_reference_offset", 0.0))
     if slot_id is not None:
         doc["market_slot_id"] = slot_id
     if market_ordinal is not None:
@@ -523,6 +533,16 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
                     "r_basis": 0.0,
                 })
             cashflow.setdefault("finalized_seq", 0)
+            # Only a genuinely new, flat v2 chain can opt into the funding
+            # baseline. A zero A or DNA step is not evidence of no prior fill.
+            # Existing chains retain their recorded ledger until reconciled.
+            if (current is None and target_semantics == V2_CASHFLOW_SEMANTICS
+                    and float(snapshot.get("holdings", 0.0)) == 0.0):
+                cashflow.update({
+                    "model_baseline_policy": FUNDING_BASELINE_POLICY,
+                    "funding_baseline_pending": True,
+                    "funding_reference_offset": 0.0,
+                })
 
         next_state = {
             "version": expected_version,
@@ -681,7 +701,8 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
                 "delta_actual": float(row_doc[DELTA_COLUMN]),
                 "actual_cumulative": float(row_doc[ACTUAL_COLUMN]),
                 "excess": float(row_doc[EXCESS_COLUMN]),
-                "reference": reference_R,
+                "reference": float(row_doc.get("R_basis", reference_R)),
+                "seq": row_doc.get("finalized_seq"),
                 "filled_price": float(row_doc.get("execution_price")
                                       or fill.filled_price),
                 "filled_quantity": float(row_doc.get("execution_quantity")
@@ -691,13 +712,38 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
                                         is not None else fill.holdings_after),
                 "at": str(row_doc.get("cashflow_finalized_at") or ""),
             })
+            for key in ("previous_action_price", "previous_actual_cumulative",
+                        "model_baseline_policy", "initial_funding",
+                        "funding_reference_offset"):
+                if key in row_doc:
+                    outcome[key] = row_doc[key]
             return state
 
+        policy = cashflow.get("model_baseline_policy")
+        if policy not in (None, FUNDING_BASELINE_POLICY):
+            raise ExecutionFinalizeError("unknown model baseline policy")
+        initial_funding = cashflow.get("funding_baseline_pending") is True
+        offset = float(cashflow.get("funding_reference_offset", 0.0))
+        if not math.isfinite(offset):
+            raise ExecutionFinalizeError("funding reference offset must be finite")
+        if initial_funding:
+            if (policy != FUNDING_BASELINE_POLICY
+                    or int(cashflow.get("finalized_seq", 0)) != 0
+                    or finalized
+                    or float(cashflow.get("actual_cumulative", 0.0)) != 0.0
+                    or row_doc.get("ฝั่ง") != "BUY"
+                    or row_doc.get("จำนวนถือครอง (หุ้น)") != 0):
+                raise ExecutionFinalizeError("initial funding evidence is inconsistent")
+            # R_market keeps the immutable observation origin. R_basis for
+            # model excess starts at the funding decision, even if PASS or
+            # rejected orders preceded the first actual fill.
+            offset = reference_R
+        model_reference = reference_R - offset
         result = finalize_recurrence(
             cfg, fill,
             last_action_price=float(cashflow["last_action_price"]),
             actual_cumulative=float(cashflow.get("actual_cumulative", 0.0) or 0.0),
-            reference_R=reference_R)
+            reference_R=model_reference, initial_funding=initial_funding)
         previous_actual_cumulative = float(
             cashflow.get("actual_cumulative", 0.0) or 0.0)
         seq = int(cashflow.get("finalized_seq", 0) or 0) + 1
@@ -705,7 +751,7 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
             "delta_actual": result.dA,
             "actual_cumulative": result.A,
             "excess": result.E,
-            "reference": reference_R,
+            "reference": model_reference,
             "previous_action_price": float(cashflow["last_action_price"]),
             "previous_actual_cumulative": previous_actual_cumulative,
             "filled_price": float(fill.filled_price),
@@ -714,6 +760,12 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
             "seq": seq,
             "at": _utc_stamp(),
         }
+        if policy:
+            record.update({"model_baseline_policy": policy,
+                           "initial_funding": initial_funding,
+                           "funding_reference_offset": offset})
+            cashflow.update({"funding_baseline_pending": False,
+                             "funding_reference_offset": offset})
         finalized[run_id] = record
         if len(finalized) > FINALIZED_RUN_HISTORY:
             ordered = sorted(finalized.items(),
@@ -728,13 +780,13 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
             "updated_at": record["at"],
         })
         if target_semantics == V2_CASHFLOW_SEMANTICS:
-            cashflow.update({"excess": result.E, "r_basis": reference_R})
+            cashflow.update({"excess": result.E, "r_basis": model_reference})
         state[EXECUTION_STATE_KEY] = cashflow
         state["prev_price"] = result.acted_price_next
         state["prev_actual"] = result.A
         if target_semantics == V2_CASHFLOW_SEMANTICS:
             state["prev_excess"] = result.E
-            state["r_basis"] = reference_R
+            state["r_basis"] = model_reference
         # The post-execution reading, from the broker, replacing the decision's.
         state["prev_holdings"] = float(fill.holdings_after)
         outcome.update({"applied": True, **record})
@@ -762,6 +814,11 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
             "R_basis": outcome["reference"],
             "finalized_seq": outcome.get("seq"),
         })
+        for key in ("previous_action_price", "previous_actual_cumulative",
+                    "model_baseline_policy", "initial_funding",
+                    "funding_reference_offset"):
+            if key in outcome:
+                row_patch[key] = outcome[key]
     db.reference(f"{ROWS_PATH}/{run_id}").update(row_patch)
     return {"run_id": run_id, "chain_key": ck, **outcome}
 
