@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import posixpath
 import re
@@ -787,6 +788,29 @@ def clients_endpoint(trade_client, data_client) -> str | None:
     return str(cache_key[0])
 
 
+def _fetch_account_assets(trade_client, path: str):
+    """Read the Thai v3 assets API using the existing authenticated signer.
+
+    SDK 2.0.15 account_v2 methods still target /openapi/assets/*; the Thai
+    reference documents /trading/assets/* with x-version v3. As with stock
+    profiles, use ApiRequest without replacing SDK signing/authentication.
+    Construct a fresh request on each safe-read retry, since signing mutates it.
+    """
+    from webull.core.request import ApiRequest
+
+    account_id = os.environ["WEBULL_ACCOUNT_ID"].strip()
+    if not account_id:
+        raise WebullConfigError("WEBULL_ACCOUNT_ID ว่างหรือไม่ได้ตั้งค่า")
+    api_client = trade_client.account_v2.client
+
+    def read():
+        request = ApiRequest(path, version="v3", method="GET", query_params={})
+        request.add_query_param("account_id", account_id)
+        return api_client.get_response(request).json()
+
+    return _retry_transient(read)
+
+
 def fetch_holdings(trade_client, cfg: Config) -> float:
     """Shares of cfg.symbol the broker says the account holds, right now.
 
@@ -795,9 +819,8 @@ def fetch_holdings(trade_client, cfg: Config) -> float:
     also spend a market-data call — the one call that can answer 403 for a
     subscription reason that has nothing to do with the fill being confirmed.
     """
-    account_id = os.environ["WEBULL_ACCOUNT_ID"]
-    positions = _retry_transient(
-        lambda: trade_client.account_v2.get_account_position(account_id).json())
+    positions = _fetch_account_assets(
+        trade_client, "/trading/assets/positions/list")
     return float(_extract_qty(positions, cfg.symbol))
 
 
@@ -826,9 +849,8 @@ def parse_buying_power(payload, currency: str = "USD") -> Decimal:
 
 
 def fetch_buying_power(trade_client, currency: str = "USD") -> Decimal:
-    account_id = os.environ["WEBULL_ACCOUNT_ID"]
-    payload = _retry_transient(
-        lambda: trade_client.account_v2.get_account_balance(account_id).json())
+    payload = _fetch_account_assets(
+        trade_client, "/trading/assets/balances/get")
     return parse_buying_power(payload, currency)
 
 
@@ -1123,12 +1145,15 @@ def fetch_open_orders(trade_client, symbol: str) -> list[dict]:
 
 
 def _extract_qty(positions, symbol: str) -> float:
+    """Unknown holdings must never become a zero-position BUY signal."""
     if isinstance(positions, list):
         items = positions
     elif isinstance(positions, dict):
+        if any(positions.get(key) for key in _PREVIEW_ERROR_KEYS):
+            raise ValueError("positions response มี broker error — fail closed")
         for key in ("positions", "items", "data"):
             if key in positions:
-                items = positions.get(key) or []
+                items = positions[key]
                 break
         else:
             raise ValueError("positions response shape ไม่รู้จัก — fail closed")
@@ -1136,10 +1161,32 @@ def _extract_qty(positions, symbol: str) -> float:
         raise ValueError("positions response shape ไม่รู้จัก — fail closed")
     if not isinstance(items, list):
         raise ValueError("positions items ต้องเป็น list — fail closed")
+    matches = []
     for p in items:
-        if isinstance(p, dict) and str(p.get("symbol", "")).upper() == symbol.upper():
-            return float(p.get("quantity", 0) or 0)
-    return 0.0
+        if (not isinstance(p, dict) or not isinstance(p.get("symbol"), str)
+                or not p["symbol"].strip()):
+            raise ValueError("position ไม่มี symbol ที่ตรวจสอบได้ — fail closed")
+        if p["symbol"].strip().upper() == symbol.strip().upper():
+            # Options may share an equity's symbol; they are not equity shares.
+            if p.get("instrument_type") == "OPTION":
+                continue
+            if p.get("instrument_type", "EQUITY") != "EQUITY":
+                raise ValueError("position instrument_type ไม่รู้จัก — fail closed")
+            matches.append(p)
+    if not matches:
+        return 0.0
+    if len(matches) != 1:
+        raise ValueError("position ของ symbol ซ้ำ — fail closed")
+    raw = matches[0].get("quantity")
+    if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+        raise ValueError("position quantity ไม่ถูกต้อง — fail closed")
+    try:
+        quantity = float(raw)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError("position quantity ไม่ถูกต้อง — fail closed") from exc
+    if not math.isfinite(quantity) or quantity < 0:
+        raise ValueError("position quantity ต้อง finite และ >= 0 — fail closed")
+    return quantity
 
 
 _PRICE_KEYS = ("last", "lastPrice", "price", "close")

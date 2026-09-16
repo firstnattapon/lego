@@ -183,10 +183,23 @@ class FakeNamespace:
         self.__dict__.update(members)
 
 
-def fake_trade_client(*, positions=None, open_orders=None, order_detail=None,
+def fake_trade_client(*, positions=None, balance=None, open_orders=None, order_detail=None,
                       preview=None, place=None):
+    def account_assets(request):
+        path = request.get_action_name()
+        if path == "/trading/assets/positions/list":
+            payload = positions
+        elif path == "/trading/assets/balances/get":
+            payload = balance
+        else:
+            raise AssertionError(f"unexpected account assets endpoint: {path}")
+        if isinstance(payload, Exception):
+            raise payload
+        return payload(request) if callable(payload) else payload
+
     return FakeNamespace(
-        account_v2=FakeNamespace(get_account_position=FakeCall(positions)),
+        account_v2=FakeNamespace(
+            client=FakeNamespace(get_response=FakeCall(account_assets))),
         order_v3=FakeNamespace(
             get_order_open=FakeCall(open_orders),
             get_order_detail=FakeCall(order_detail),
