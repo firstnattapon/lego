@@ -1,0 +1,476 @@
+name: One-shot Webull SDK 3.0.1 code migration
+
+on:
+  push:
+    branches:
+      - fix/webull-sdk3-route-contract
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/webull-sdk3-route-contract
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply SDK 3.0.1 contract migration
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected replacement exactly once, got {text.count(old)}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          Path('requirements.txt').write_text('''# numpy is pinned exactly, not floated. The DNA gate array comes from
+# np.random.default_rng, and numpy documents that Generator "does not provide a
+# version compatibility guarantee ... the bit stream may change". A minor
+# upgrade could therefore decode the same dna_code into a different strategy.
+# The stored dna_fingerprint makes that fail closed; this pin keeps it from
+# happening in the first place. Change it only with a fingerprint check.
+numpy==2.4.6
+# Exact pins make deploys reproducible; these are the versions exercised by the
+# final Python 3.12 review environment. Upgrade only through the full suite.
+functions-framework==3.10.2
+firebase-admin==6.9.0
+# Webull SDK 3.0.1 still requires protobuf<6 on Python 3.12, so Secret Manager
+# stays on the newest line in this repo that resolves with that broker constraint.
+google-cloud-secret-manager==2.26.0
+# Webull 3.0.1 carries the current Thailand v3 route contracts for auth,
+# accounts, orders and market data. The local wheel is the official 3.0.1 wheel
+# with runtime package bytes unchanged; only cryptography dependency metadata
+# and RECORD are rebuilt so Python 3.12 can use the audited cryptography floor.
+cryptography==50.0.0
+./vendor/webull_openapi_python_sdk-3.0.1-1lego-py3-none-any.whl
+tzdata==2025.3
+''', encoding='utf-8')
+
+          Path('vendor/README.md').write_text('''# Vendored Webull SDK wheel
+
+`webull_openapi_python_sdk-3.0.1-1lego-py3-none-any.whl` is rebuilt from the
+official Webull `3.0.1` PyPI wheel.
+
+Why: the current Webull Thailand documentation and SDK use the v3 route
+contracts for authentication, accounts, orders and market data, while the old
+2.0.15 runtime still generated legacy `/openapi/...` v2 requests. The upstream
+3.0.1 wheel also constrains Python 3.12 to an older cryptography line than this
+repo's audited `cryptography==50.0.0` pin.
+
+The rebuild changes **dependency metadata only**. Every file under `webull/` is
+byte-for-byte identical to the official 3.0.1 wheel; only the two cryptography
+`Requires-Dist` lines in `METADATA` change and wheel `RECORD` is regenerated.
+
+Provenance and controls:
+
+- official 3.0.1 wheel SHA-256:
+  `35abe4ecc65bc80f9de075a83b057a393d6991bae2a00417fc691aa05602694e`
+- patched wheel SHA-256:
+  `80d631d2decba3680e4cd5c3b8b7898301667397080460186f128e943a361e7a`
+- runtime package file count: `299`
+- aggregate SHA-256 of all `webull/` runtime files:
+  `867063412d0c5acae34cfee9406d52521a3cb2ad8b682a61a06ee517e3ee3552`
+- license/notice from the Apache-2.0 upstream wheel remain inside the wheel
+- `test_vendored_webull_wheel.py` validates RECORD, constraints and aggregate
+  runtime-code provenance
+
+Do not replace this wheel without repeating the complete CI suite and a
+read-only UAT broker smoke test. In particular, never retry `place_order` after
+an ambiguous broker response.
+''', encoding='utf-8')
+
+          Path('test_vendored_webull_wheel.py').write_text('''"""Provenance and integrity checks for the metadata-only Webull wheel patch."""
+from __future__ import annotations
+
+import base64
+import csv
+import hashlib
+import io
+import zipfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+WHEEL = (
+    ROOT / "vendor"
+    / "webull_openapi_python_sdk-3.0.1-1lego-py3-none-any.whl"
+)
+DIST_INFO = "webull_openapi_python_sdk-3.0.1.dist-info"
+PATCHED_SHA256 = (
+    "80d631d2decba3680e4cd5c3b8b7898301667397080460186f128e943a361e7a"
+)
+ORIGINAL_RUNTIME_AGGREGATE = (
+    "867063412d0c5acae34cfee9406d52521a3cb2ad8b682a61a06ee517e3ee3552"
+)
+
+
+def _record_digest(data: bytes) -> str:
+    encoded = base64.urlsafe_b64encode(hashlib.sha256(data).digest())
+    return "sha256=" + encoded.rstrip(b"=").decode("ascii")
+
+
+def test_vendored_wheel_hash_and_runtime_code_provenance():
+    assert hashlib.sha256(WHEEL.read_bytes()).hexdigest() == PATCHED_SHA256
+    with zipfile.ZipFile(WHEEL) as wheel:
+        runtime_names = sorted(
+            name for name in wheel.namelist() if name.startswith("webull/"))
+        aggregate = b"".join(
+            (
+                name + "\\0" + hashlib.sha256(wheel.read(name)).hexdigest() + "\\n"
+            ).encode()
+            for name in runtime_names
+        )
+    assert len(runtime_names) == 299
+    assert hashlib.sha256(aggregate).hexdigest() == ORIGINAL_RUNTIME_AGGREGATE
+
+
+def test_vendored_wheel_has_a_complete_valid_record():
+    with zipfile.ZipFile(WHEEL) as wheel:
+        record_name = f"{DIST_INFO}/RECORD"
+        rows = {
+            row[0]: row[1:]
+            for row in csv.reader(
+                io.StringIO(wheel.read(record_name).decode("utf-8")))
+        }
+        assert set(rows) == set(wheel.namelist())
+        for name in wheel.namelist():
+            if name == record_name:
+                assert rows[name] == ["", ""]
+                continue
+            data = wheel.read(name)
+            assert rows[name] == [_record_digest(data), str(len(data))]
+
+
+def test_vendored_wheel_only_allows_audited_cryptography_floor():
+    with zipfile.ZipFile(WHEEL) as wheel:
+        metadata = wheel.read(f"{DIST_INFO}/METADATA").decode("utf-8")
+        assert "Version: 3.0.1" in metadata
+        assert (
+            'cryptography<55,>=50.0.0; python_version >= "3.12" '
+            'and python_version < "3.14"'
+        ) in metadata
+        assert (
+            'cryptography<55,>=50.0.0; python_version >= "3.14"'
+        ) in metadata
+        assert (
+            f"{DIST_INFO}/licenses/LICENSE" in wheel.namelist()
+            and f"{DIST_INFO}/licenses/NOTICE" in wheel.namelist()
+        )
+''', encoding='utf-8')
+
+          replace_once(
+              'webull_io.py',
+              '# webull/data/common/category.py of the pinned SDK 2.0.15.\n',
+              '# webull/data/common/category.py of the pinned SDK 3.0.1.\n')
+          replace_once(
+              'webull_io.py',
+              '    SDK 2.0.15 does not expose the new profile method, but its ApiRequest and\n    signer are still used; this avoids a second signature implementation.\n',
+              '    Use the pinned SDK signer for the documented v3 profile request so this\n    adapter never grows a second signature implementation.\n')
+
+          p = Path('webull_io.py')
+          text = p.read_text(encoding='utf-8')
+          start = text.index('def _fetch_account_assets(trade_client, path: str):')
+          end = text.index('\ndef parse_buying_power(', start)
+          replacement = '''def _account_id() -> str:\n    account_id = os.environ.get("WEBULL_ACCOUNT_ID", "").strip()\n    if not account_id:\n        raise WebullConfigError("WEBULL_ACCOUNT_ID ว่างหรือไม่ได้ตั้งค่า")\n    return account_id\n\n\ndef fetch_holdings(trade_client, cfg: Config) -> float:\n    """Shares of cfg.symbol the broker says the account holds, right now.\n\n    SDK 3.0.1 owns the Thailand v3 account-position request contract. Calling\n    AccountV2 on every retry also creates a fresh request/signature each time,\n    while the surrounding parser still fails closed on malformed holdings.\n    """\n    account_id = _account_id()\n    positions = _retry_transient(\n        lambda: trade_client.account_v2.get_account_position(account_id).json())\n    return float(_extract_qty(positions, cfg.symbol))\n\n\n'''
+          p.write_text(text[:start] + replacement + text[end+1:], encoding='utf-8')
+
+          replace_once(
+              'webull_io.py',
+              '''def fetch_buying_power(trade_client, currency: str = "USD") -> Decimal:\n    payload = _fetch_account_assets(\n        trade_client, "/trading/assets/balances/get")\n    return parse_buying_power(payload, currency)\n''',
+              '''def fetch_buying_power(trade_client, currency: str = "USD") -> Decimal:\n    account_id = _account_id()\n    payload = _retry_transient(\n        lambda: trade_client.account_v2.get_account_balance(account_id).json())\n    return parse_buying_power(payload, currency)\n''')
+          replace_once(
+              'webull_io.py',
+              '            if left is not None and "/auth/token/" in action:\n',
+              '            if left is not None and ("/auth/token/" in action or "/auth/tokens/" in action):\n')
+          replace_once(
+              'webull_io.py',
+              '    /openapi/auth/token/refresh is wrapped by TokenOperation.refresh_token and\n',
+              '    The SDK token refresh endpoint is wrapped by TokenOperation.refresh_token and\n')
+
+          p = Path('conftest.py')
+          text = p.read_text(encoding='utf-8')
+          start = text.index('def fake_trade_client(')
+          end = text.index('\ndef fake_data_client', start)
+          replacement = '''def fake_trade_client(*, positions=None, balance=None, open_orders=None, order_detail=None,\n                      preview=None, place=None):\n    return FakeNamespace(\n        account_v2=FakeNamespace(\n            get_account_position=FakeCall(positions),\n            get_account_balance=FakeCall(balance),\n        ),\n        order_v3=FakeNamespace(\n            get_order_open=FakeCall(open_orders),\n            get_order_detail=FakeCall(order_detail),\n            preview_order=FakeCall(preview),\n            place_order=FakeCall(place),\n        ),\n    )\n\n\n'''
+          p.write_text(text[:start] + replacement + text[end+1:], encoding='utf-8')
+
+          Path('test_webull_account_assets.py').write_text('''"""Thai account assets contract and incident recovery, with no broker network IO."""
+from decimal import Decimal
+
+import pytest
+from webull.core.exception.exceptions import ServerException
+
+import tick_runtime
+import webull_io
+from conftest import fake_data_client, fake_trade_client
+from lego_one_row import Config
+
+
+CFG = Config(symbol="PFE", fix_c=3000)
+POSITIONS = [{"symbol": "PFE", "instrument_type": "EQUITY", "quantity": "7.25"}]
+BALANCE = {"account_currency_assets": [
+    {"currency": "USD", "buying_power": "1234.56"}]}
+
+
+def system_error():
+    return ServerException("OPENAPI_SYSTEM_ERROR", "System error.",
+                           http_status=417, request_id="test-request")
+
+
+@pytest.mark.parametrize("reader,method,expected", [
+    (lambda trade: webull_io.fetch_holdings(trade, CFG),
+     "get_account_position", 7.25),
+    (webull_io.fetch_buying_power,
+     "get_account_balance", Decimal("1234.56")),
+])
+def test_account_assets_use_sdk3_account_methods(monkeypatch, reader, method, expected):
+    monkeypatch.setenv("WEBULL_ACCOUNT_ID", "  test-account  ")
+    trade = fake_trade_client(positions=POSITIONS, balance=BALANCE)
+    assert reader(trade) == expected
+    call = getattr(trade.account_v2, method)
+    assert call.calls == [(("test-account",), {})]
+
+
+@pytest.mark.parametrize("asset,method", [
+    ("positions", "get_account_position"),
+    ("balance", "get_account_balance"),
+])
+def test_system_error_retries_safe_reads_with_fresh_sdk_requests(monkeypatch, asset, method):
+    sleeps = []
+    monkeypatch.setattr(webull_io.time, "sleep", sleeps.append)
+    attempts = {"n": 0}
+
+    def flaky(*_args, **_kwargs):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise system_error()
+        return POSITIONS if asset == "positions" else BALANCE
+
+    trade = fake_trade_client(**{asset: flaky})
+    if asset == "positions":
+        assert webull_io.fetch_holdings(trade, CFG) == 7.25
+    else:
+        assert webull_io.fetch_buying_power(trade) == Decimal("1234.56")
+    assert sleeps == [2.0, 4.0]
+    assert len(getattr(trade.account_v2, method).calls) == 3
+
+
+def test_exhausted_417_never_reaches_market_data_or_place(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(webull_io.time, "sleep", sleeps.append)
+    error = system_error()
+    trade = fake_trade_client(positions=error)
+    data = fake_data_client(snapshot={"last": 25})
+    with pytest.raises(ServerException) as caught:
+        webull_io.fetch_snapshot(trade, data, CFG)
+    assert caught.value is error
+    assert len(trade.account_v2.get_account_position.calls) == 3
+    assert sleeps == [2.0, 4.0]
+    assert data.market_data.get_snapshot.calls == []
+    assert trade.order_v3.place_order.calls == []
+
+
+@pytest.mark.parametrize("code,status", [
+    ("OPENAPI_PARAM_ERR", 417), ("UNAUTHORIZED", 401), ("FORBIDDEN", 403),
+])
+def test_business_and_auth_errors_do_not_retry(monkeypatch, code, status):
+    sleeps = []
+    monkeypatch.setattr(webull_io.time, "sleep", sleeps.append)
+    trade = fake_trade_client(positions=ServerException(code, http_status=status))
+    with pytest.raises(ServerException):
+        webull_io.fetch_holdings(trade, CFG)
+    assert len(trade.account_v2.get_account_position.calls) == 1
+    assert sleeps == []
+
+
+def test_417_on_place_is_never_retried(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(webull_io.time, "sleep", sleeps.append)
+    trade = fake_trade_client(place=system_error())
+    with pytest.raises(ServerException):
+        webull_io.place_market_order(trade, [{"client_order_id": "test-order"}])
+    assert len(trade.order_v3.place_order.calls) == 1
+    assert sleeps == []
+
+
+def test_account_retry_respects_tick_deadline(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(webull_io.time, "sleep", sleeps.append)
+    trade = fake_trade_client(positions=system_error())
+    with tick_runtime.tick_scope("account-retry", seconds=3):
+        with pytest.raises(tick_runtime.TickDeadlineExceeded):
+            webull_io.fetch_holdings(trade, CFG)
+    assert len(trade.account_v2.get_account_position.calls) == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize("payload", [
+    {"positions": None}, {"items": False}, {"data": ""}, {"positions": 0},
+    {"data": {}}, {"error_code": "OPENAPI_SYSTEM_ERROR", "positions": []},
+    [None], [{}], [{"symbol": ""}], [{"symbol": 123}],
+    [{"symbol": "PFE"}], [{"symbol": "PFE", "quantity": None}],
+    [{"symbol": "PFE", "quantity": True}],
+    [{"symbol": "PFE", "quantity": ""}],
+    [{"symbol": "PFE", "quantity": "NaN"}],
+    [{"symbol": "PFE", "quantity": "Infinity"}],
+    [{"symbol": "PFE", "quantity": "1e9999"}],
+    [{"symbol": "PFE", "quantity": "-1"}],
+    POSITIONS * 2,
+    [{"symbol": "PFE", "quantity": "1", "instrument_type": "UNKNOWN"}],
+])
+def test_unknown_holdings_never_become_zero(payload):
+    trade = fake_trade_client(positions=payload)
+    data = fake_data_client(snapshot={"last": 25})
+    with pytest.raises(ValueError, match="fail closed"):
+        webull_io.fetch_snapshot(trade, data, CFG)
+    assert len(trade.account_v2.get_account_position.calls) == 1
+    assert data.market_data.get_snapshot.calls == []
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ([], 0), ({"positions": []}, 0),
+    ([{"symbol": "OTHER", "quantity": "3"}], 0),
+    ([{"symbol": "PFE", "quantity": "0"}], 0),
+    (POSITIONS, 7.25),
+    ([{"symbol": "PFE", "instrument_type": "OPTION", "quantity": "99"}]
+     + POSITIONS, 7.25),
+])
+def test_valid_positions_preserve_quantity_and_ignore_options(payload, expected):
+    assert webull_io.fetch_holdings(fake_trade_client(positions=payload), CFG) == expected
+
+
+def test_blank_account_fails_before_request(monkeypatch):
+    monkeypatch.setenv("WEBULL_ACCOUNT_ID", " ")
+    trade = fake_trade_client(positions=POSITIONS)
+    with pytest.raises(webull_io.WebullConfigError, match="WEBULL_ACCOUNT_ID"):
+        webull_io.fetch_holdings(trade, CFG)
+    assert trade.account_v2.get_account_position.calls == []
+''', encoding='utf-8')
+
+          Path('test_webull_sdk3_contract.py').write_text('''"""Lock the official Webull 3.0.1 Thailand request routes used by the money path."""
+import webull
+
+from webull.core.http.initializer.config.bean.query_config_request import GetConfigRequest
+from webull.core.http.initializer.token.bean.check_token_request import CheckTokenRequest
+from webull.core.http.initializer.token.bean.create_token_request import CreateTokenRequest
+from webull.data.request.get_snapshot_request import GetSnapshotRequest
+from webull.trade.request.v2.get_account_balance_request import AccountBalanceRequest
+from webull.trade.request.v2.get_account_list_request import GetAccountListRequest
+from webull.trade.request.v2.get_account_positions_request import AccountPositionsRequest
+from webull.trade.request.v3.get_order_detail_request import OrderDetailRequest
+from webull.trade.request.v3.get_order_open_request import OrderOpenRequest
+from webull.trade.request.v3.place_order_request import PlaceOrderRequest
+from webull.trade.request.v3.preview_order_request import PreviewOrderRequest
+
+
+def _route(request):
+    return request.get_action_name(), request.get_version(), request.get_method()
+
+
+def test_pinned_sdk_version_is_current_route_contract():
+    assert webull.__version__ == "3.0.1"
+
+
+def test_auth_and_account_routes_match_webull_thailand_v3_contract():
+    assert _route(GetConfigRequest()) == ("/openapi/config", "v3", "GET")
+    assert _route(CreateTokenRequest()) == ("/auth/tokens/create", "v3", "POST")
+    assert _route(CheckTokenRequest()) == ("/auth/tokens/check", "v3", "POST")
+    assert _route(GetAccountListRequest()) == ("/trading/accounts/list", "v3", "GET")
+    assert _route(AccountBalanceRequest()) == ("/trading/assets/balances/get", "v3", "GET")
+    assert _route(AccountPositionsRequest()) == ("/trading/assets/positions/list", "v3", "GET")
+
+
+def test_order_and_market_data_routes_are_not_legacy_openapi_paths():
+    assert _route(PreviewOrderRequest()) == ("/trading/orders/preview", "v3", "POST")
+    assert _route(PlaceOrderRequest()) == ("/trading/orders/place", "v3", "POST")
+    assert _route(OrderDetailRequest()) == ("/trading/orders/get", "v3", "GET")
+    assert _route(GetSnapshotRequest()) == ("/market-data/stocks/snapshots/list", "v3", "GET")
+    # The repo still uses the SDK's legacy cursor method for open orders. In
+    # SDK 3.0.1 that method is retained but points at the current route.
+    assert _route(OrderOpenRequest()) == ("/trading/orders/open-orders/list", "v2", "GET")
+''', encoding='utf-8')
+
+          replace_once(
+              'test_webull_io.py',
+              '''    sdk = [line for line in lines if "webull_openapi_python_sdk-2.0.15-1lego" in line]\n    assert sdk == [\n        "./vendor/webull_openapi_python_sdk-2.0.15-1lego-py3-none-any.whl"\n    ], "the reviewed, locally vendored Webull 2.0.15 wheel must stay exact"\n''',
+              '''    sdk = [line for line in lines if "webull_openapi_python_sdk-3.0.1-1lego" in line]\n    assert sdk == [\n        "./vendor/webull_openapi_python_sdk-3.0.1-1lego-py3-none-any.whl"\n    ], "the reviewed, locally vendored Webull 3.0.1 wheel must stay exact"\n''')
+
+          replace_once(
+              'tools/build_release_evidence.py',
+              '            "webull_sdk": "2.0.15 vendored metadata-only patch",\n',
+              '            "webull_sdk": "3.0.1 vendored metadata-only patch",\n')
+
+          Path('docs/WEBULL_SDK3_ROUTE_MIGRATION_20260916.md').write_text('''# Webull SDK 3.0.1 route migration — 2026-09-16
+
+## Incident
+
+After the account-assets patch, UAT continued to return
+`HTTP 417 / OPENAPI_SYSTEM_ERROR` on every scheduled holdings read, with the
+safe-read retry exhausting all attempts. One slot also timed out at the same
+endpoint. This means the failure was not solved by replacing only the account
+positions path.
+
+## Root cause boundary
+
+The application was still running Webull SDK 2.0.15. That runtime generated the
+legacy request contract for config/token/order/market-data operations. The
+current Webull Thailand documentation tells SDK users to upgrade the official
+SDK, and official SDK 3.0.1 carries the current request paths and x-version
+values across the whole client.
+
+PR #5 manually constructed only the two account-assets requests. That left the
+rest of the authenticated client on the old SDK contract. This migration removes
+that split-brain state: SDK 3.0.1 owns account, auth, order and market-data
+request construction consistently.
+
+## Safety properties kept
+
+- `OPENAPI_SYSTEM_ERROR` may retry only through the existing safe read/preview
+  wrapper.
+- `place_market_order()` remains a single broker submission attempt; an
+  ambiguous response is never blindly re-sent.
+- malformed or missing holdings still fail closed rather than becoming zero.
+- account identity must still be non-empty and is stripped before broker calls.
+- the vendored SDK wheel keeps official runtime package bytes unchanged; only
+  dependency metadata and RECORD are rebuilt for `cryptography==50.0.0`.
+
+## Required UAT verification after merge/deploy
+
+Run the read-only broker smoke with `AUTO_SUBMIT=false`. It must prove the
+configured account appears in the authenticated account list, positions can be
+read, open orders can be read, and a market snapshot carries a safe price and
+source quote time before trade mode is re-enabled.
+''', encoding='utf-8')
+          PY
+
+      - name: Install and run focused migration tests
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          python -m py_compile *.py tools/*.py
+          pytest -q test_vendored_webull_wheel.py test_webull_sdk3_contract.py test_webull_account_assets.py test_webull_io.py test_broker_smoke.py
+          pip check
+          git diff --check
+
+      - name: Commit migration
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add requirements.txt vendor/README.md webull_io.py conftest.py \
+            test_vendored_webull_wheel.py test_webull_account_assets.py \
+            test_webull_sdk3_contract.py test_webull_io.py \
+            tools/build_release_evidence.py docs/WEBULL_SDK3_ROUTE_MIGRATION_20260916.md
+          git commit -m 'fix: migrate Webull money path to SDK 3.0.1 routes'
+          git push origin HEAD:fix/webull-sdk3-route-contract
