@@ -1,0 +1,101 @@
+name: One-shot Webull SDK 3.0.1 vendor migration
+
+on:
+  push:
+    branches:
+      - fix/webull-sdk3-route-contract
+
+permissions:
+  contents: write
+
+jobs:
+  vendor:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/webull-sdk3-route-contract
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download and metadata-patch official SDK 3.0.1 wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip wheel
+          rm -rf /tmp/webull-wheel
+          mkdir -p /tmp/webull-wheel
+          if ! python -m pip download --no-deps --dest /tmp/webull-wheel webull-openapi-python-sdk==3.0.1; then
+            python -m pip wheel --no-deps --wheel-dir /tmp/webull-wheel \
+              'git+https://github.com/webull-inc/webull-openapi-python-sdk.git@3.0.1'
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          import base64, csv, hashlib, io, re, zipfile
+
+          sources = list(Path('/tmp/webull-wheel').glob('webull_openapi_python_sdk-3.0.1-py3-none-any.whl'))
+          if len(sources) != 1:
+              raise SystemExit(f'expected one 3.0.1 wheel, found {sources}')
+          source = sources[0]
+          source_bytes = source.read_bytes()
+          original_sha = hashlib.sha256(source_bytes).hexdigest()
+          dist = 'webull_openapi_python_sdk-3.0.1.dist-info'
+          metadata_name = f'{dist}/METADATA'
+          record_name = f'{dist}/RECORD'
+
+          with zipfile.ZipFile(io.BytesIO(source_bytes)) as original:
+              if any(name.endswith(('RECORD.jws', 'RECORD.p7s')) for name in original.namelist()):
+                  raise SystemExit('signed wheel is not supported')
+              infos = {info.filename: info for info in original.infolist()}
+              payloads = {name: original.read(name) for name in original.namelist() if name != record_name}
+
+          metadata = payloads[metadata_name].decode('utf-8')
+          lines = metadata.splitlines()
+          changed_312 = changed_314 = 0
+          out = []
+          for line in lines:
+              if line.startswith('Requires-Dist: cryptography') and 'python_version >= "3.12"' in line and 'python_version < "3.14"' in line:
+                  line = 'Requires-Dist: cryptography<55,>=50.0.0; python_version >= "3.12" and python_version < "3.14"'
+                  changed_312 += 1
+              elif line.startswith('Requires-Dist: cryptography') and 'python_version >= "3.14"' in line:
+                  line = 'Requires-Dist: cryptography<55,>=50.0.0; python_version >= "3.14"'
+                  changed_314 += 1
+              out.append(line)
+          if (changed_312, changed_314) != (1, 1):
+              raise SystemExit(f'unexpected cryptography metadata matches: 3.12={changed_312}, 3.14={changed_314}')
+          payloads[metadata_name] = ('\n'.join(out) + '\n').encode('utf-8')
+
+          def digest(data: bytes) -> str:
+              encoded = base64.urlsafe_b64encode(hashlib.sha256(data).digest())
+              return 'sha256=' + encoded.rstrip(b'=').decode('ascii')
+
+          rows = [(name, digest(data), str(len(data))) for name, data in payloads.items()]
+          rows.append((record_name, '', ''))
+          record_buffer = io.StringIO(newline='')
+          csv.writer(record_buffer, lineterminator='\n').writerows(rows)
+          payloads[record_name] = record_buffer.getvalue().encode('utf-8')
+
+          destination = Path('vendor/webull_openapi_python_sdk-3.0.1-1lego-py3-none-any.whl')
+          with zipfile.ZipFile(destination, 'w', compression=zipfile.ZIP_DEFLATED) as patched:
+              for name, data in payloads.items():
+                  info = infos.get(name) or zipfile.ZipInfo(name)
+                  patched.writestr(info, data)
+
+          runtime_names = sorted(name for name in payloads if name.startswith('webull/'))
+          aggregate = b''.join((name + '\0' + hashlib.sha256(payloads[name]).hexdigest() + '\n').encode() for name in runtime_names)
+          patched_sha = hashlib.sha256(destination.read_bytes()).hexdigest()
+          runtime_sha = hashlib.sha256(aggregate).hexdigest()
+          print(f'ORIGINAL_SHA256={original_sha}')
+          print(f'PATCHED_SHA256={patched_sha}')
+          print(f'RUNTIME_COUNT={len(runtime_names)}')
+          print(f'RUNTIME_AGGREGATE_SHA256={runtime_sha}')
+          PY
+          rm -f vendor/webull_openapi_python_sdk-2.0.15-1lego-py3-none-any.whl
+      - name: Commit vendored SDK wheel
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A vendor
+          git commit -m 'build: vendor Webull SDK 3.0.1 route contract'
+          git push origin HEAD:fix/webull-sdk3-route-contract
