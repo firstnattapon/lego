@@ -39,6 +39,10 @@ _TRANSIENT_CODES = {
     # consumed by the read/preview wrapper; place_order deliberately bypasses
     # retries because a timeout cannot prove whether money moved.
     "SDK.HTTPERROR", "SDK.UNKNOWNSERVERERROR", "SDK.ENDPOINTRESOLVINGERROR",
+    # Webull UAT can return HTTP 417 with OPENAPI_SYSTEM_ERROR for a
+    # broker-side system failure. Retry that code on safe read/preview
+    # calls only; place_market_order never uses _retry_transient.
+    "OPENAPI_SYSTEM_ERROR",
 }
 # Any of these present-and-truthy means the broker rejected the preview.
 _PREVIEW_ERROR_KEYS = ("error", "error_code", "errorCode")
