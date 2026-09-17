@@ -370,10 +370,14 @@ def _persist_summary(intent: dict, summary: dict) -> None:
 
 def _persist_error(chain_key_: str, run_id: str, status: str, exc: Exception,
                    extra: dict | None = None) -> dict:
+    from webull_io import broker_error_details
     err = _error_text(exc)
+    details = broker_error_details(exc)
     _persist(chain_key_, run_id,
-             {"status": status, "last_error": err[:500], **(extra or {})})
-    return {"run_id": run_id, "status": status, "error": err}
+             {"status": status, "last_error": err[:500],
+              "broker_error": details, **(extra or {})})
+    return {"run_id": run_id, "status": status, "error": err,
+            "error_type": type(exc).__name__, "broker_error": details}
 
 
 def _intent_is_v2(intent: dict) -> bool:

@@ -8,6 +8,7 @@ fail-closed branches are testable like everything else.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import types
 from datetime import datetime, timedelta, timezone
@@ -523,12 +524,23 @@ def _install_fake_sdk(monkeypatch):
         def set_token(self, token):
             built["token"] = token
 
+    class Trade(tuple):
+        def __new__(cls, api):
+            return super().__new__(cls, ("trade", api))
+
+        def __init__(self, api):
+            def accounts():
+                built["account_reads"] = built.get("account_reads", 0) + 1
+                return FakeNamespace(status_code=200, json=lambda: [
+                    {"account_id": os.environ["WEBULL_ACCOUNT_ID"]}])
+            self.account_v2 = FakeNamespace(get_account_list=accounts)
+
     modules = {
         "webull": types.ModuleType("webull"),
         "webull.core": types.ModuleType("webull.core"),
         "webull.core.client": FakeNamespace(ApiClient=ApiClient),
         "webull.trade": types.ModuleType("webull.trade"),
-        "webull.trade.trade_client": FakeNamespace(TradeClient=lambda api: ("trade", api)),
+        "webull.trade.trade_client": FakeNamespace(TradeClient=Trade),
         "webull.data": types.ModuleType("webull.data"),
         "webull.data.data_client": FakeNamespace(DataClient=lambda api: ("data", api)),
     }

@@ -53,20 +53,39 @@ def emit_tick(body: dict, code: int) -> None:
         "execution": [],
         "errors": [],
     }
-    # Exception class and phase are enough to distinguish deadline, config and
-    # broker errors. Never copy free-form errors (or broker payloads) into logs.
+    # Include allowlisted broker metadata to diagnose repeated read failures.
+    # Never copy free-form errors (or broker payloads) into logs.
     for phase_name, phase in (("tick", body), ("decision", decision),
                               ("recovery", body.get("recovery") or {}),
                               ("dispatch", body.get("dispatch") or {})):
         if phase.get("error"):
+            details = _broker_fields(phase)
             event["errors"].append({
                 "phase": phase_name,
                 "type": phase.get("error_type") or phase.get("type") or "UnknownError",
+                **({"broker_error": details} if details else {}),
             })
     for phase_name in ("recovery", "dispatch"):
         phase = body.get(phase_name) or {}
         for item in phase.get("results", []):
+            if item.get("error"):
+                details = _broker_fields(item)
+                event["errors"].append({"phase": phase_name,
+                                        "type": item.get("error_type") or "UnknownError",
+                                        **({"broker_error": details} if details else {})})
             event["execution"].append({"phase": phase_name, **{
                 key: item.get(key) for key in ("run_id", "status", "broker_status", "broker_fee_status",
                                              "cashflow_finalized", "fee_overdue", "fee_pending_age_seconds")}})
     print(json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
+
+
+def _broker_fields(phase: dict) -> dict:
+    """Revalidate metadata at the log boundary, including persisted old records."""
+    from types import SimpleNamespace
+    from webull_io import broker_error_details
+    details = phase.get("broker_error")
+    if not isinstance(details, dict):
+        return {}
+    return broker_error_details(SimpleNamespace(
+        http_status=details.get("http_status"), error_code=details.get("code"),
+        request_id=details.get("request_id"), _lego_operation=details.get("operation")))

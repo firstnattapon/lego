@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import math
@@ -11,6 +12,7 @@ import re
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 import tick_runtime
 from dataclasses import dataclass
@@ -154,6 +156,68 @@ def _http_status(exc: Exception) -> int | None:
 def is_transient_exception(exc: Exception) -> bool:
     code = str(getattr(exc, "error_code", "") or "").upper()
     return _http_status(exc) in _TRANSIENT_HTTP or code in _TRANSIENT_CODES
+
+
+def broker_error_details(exc: Exception) -> dict:
+    """Allowlisted diagnostic metadata, never a request, message or account ID."""
+    out = {}
+    status = _http_status(exc)
+    if status is not None and 100 <= status <= 599:
+        out["http_status"] = status
+    code = str(getattr(exc, "error_code", "") or "").upper()
+    known = _TRANSIENT_CODES | {
+        "OPENAPI_PARAM_ERR", "INVALID_PARAMETER", "UNAUTHORIZED", "FORBIDDEN",
+        "INVALID_TOKEN", "TOKEN_EXPIRED", "SYSTEM_ERROR",
+    }
+    if code in known:
+        out["code"] = code
+    request_id = getattr(exc, "request_id", None)
+    if isinstance(request_id, str) and re.fullmatch(
+            r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", request_id):
+        out["request_id"] = request_id
+    operation = getattr(exc, "_lego_operation", None)
+    if isinstance(operation, str) and operation in {
+            "accounts", "positions", "balance", "snapshot", "preview", "place",
+            "order_detail", "open_orders", "instrument"}:
+        out["operation"] = operation
+    if out:
+        out["retryable_read"] = is_transient_exception(exc)
+    return out
+
+
+def account_id_is_listed(payload, expected: str) -> bool:
+    """Only the documented account_id is an API identity; never account_number."""
+    if not isinstance(expected, str) or not expected:
+        return False
+    # Retain the data-list envelope accepted by older supported responses.
+    if isinstance(payload, dict):
+        if any(payload.get(key) for key in ("error", "error_code", "errorCode")):
+            return False
+        payload = payload.get("data")
+    if not isinstance(payload, list) or not payload:
+        return False
+    identifiers = []
+    for item in payload:
+        if not isinstance(item, dict):
+            return False
+        identifier = item.get("account_id")
+        if not isinstance(identifier, str) or not identifier.strip():
+            return False
+        identifiers.append(identifier)
+    if len(set(identifiers)) != len(identifiers):
+        return False
+    return any(hmac.compare_digest(identifier.encode(), expected.encode())
+               for identifier in identifiers)
+
+
+def verify_account_access(trade_client) -> None:
+    """Prove the configured ID belongs to this authenticated client before use."""
+    expected = _account_id()
+    response = _retry_transient(trade_client.account_v2.get_account_list)
+    if response.status_code != 200 or not account_id_is_listed(response.json(), expected):
+        raise WebullConfigError(
+            "configured account_id is not present in authenticated account list; "
+            "check environment and credentials; account_number is not an account_id")
 
 
 def _retry_transient(fn, attempts: int = 3, base_delay: float = 2.0):
@@ -610,8 +674,24 @@ def _bounded_api_class(base):
                 usable = left - 1.0
                 request.set_connect_timeout(min(2.0, usable / 2))
                 request.set_read_timeout(min(5.0, usable / 2))
-            response = super().get_response(request)
             action = request.get_action_name()
+            try:
+                response = super().get_response(request)
+            except Exception as exc:
+                operation = {
+                    "/trading/accounts/list": "accounts",
+                    "/trading/assets/positions/list": "positions",
+                    "/trading/assets/balances/get": "balance",
+                    "/market-data/stocks/snapshots/list": "snapshot",
+                    "/trading/orders/preview": "preview",
+                    "/trading/orders/place": "place",
+                    "/trading/orders/get": "order_detail",
+                    "/trading/orders/open-orders/list": "open_orders",
+                    "/trading/instruments/stocks/profiles/list": "instrument",
+                }.get(action)
+                if operation:
+                    exc._lego_operation = operation
+                raise
             if action == "/openapi/config" and response.status_code == 200:
                 payload = response.json()
                 enabled = payload.get("token_check_enabled") if isinstance(payload, dict) else None
@@ -647,7 +727,8 @@ def _sdk_log_level() -> int:
 _SECRET_FIELDS = (
     "x-signature", "signature", "x-access-token", "x-app-key", "app_secret",
     "app_key_secret", "access_token", "account_id", "webull_account_id",
-    "authorization",
+    "authorization", "x-app-secret", "app_key", "token", "refresh_token",
+    "account_number", "account_no",
 )
 _SECRET_PATTERN = re.compile(
     r"(?P<label>%s)(?P<sep>['\"]?(?:\s*[:=]\s*|%%3A|%%3D)"
@@ -659,6 +740,10 @@ _REDACTED = "<redacted>"
 def redact_sensitive_text(value) -> str:
     """Remove credentials/account identity from exceptions and persisted text."""
     text = str(value)
+    # Redact the complete value before the generic field matcher can consume
+    # only "Bearer" and leave the credential behind.
+    text = re.sub(r"(?i)\b(Bearer|Basic)(?:\s+|%20)[^\s\"',}\]&]+",
+                  lambda m: m.group(1) + " " + _REDACTED, text)
     text = _SECRET_PATTERN.sub(
         lambda m: f"{m.group('label')}{m.group('sep')}{_REDACTED}", text)
     for name in (
@@ -686,11 +771,19 @@ class _RedactSecrets(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             text = record.getMessage()
-        except Exception:                # a broken format string is not our call
-            return True
+        except Exception:
+            return False
         redacted = redact_sensitive_text(text)
         if redacted != text:
             record.msg, record.args = redacted, ()
+        if record.exc_info:
+            record.exc_text = redact_sensitive_text(
+                "".join(traceback.format_exception(*record.exc_info)))
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = redact_sensitive_text(record.exc_text)
+        if record.stack_info:
+            record.stack_info = redact_sensitive_text(record.stack_info)
         return True
 
 
@@ -706,6 +799,8 @@ def _configure_sdk_stream_logger(api) -> None:
     """Install one process-wide SDK stream handler and reuse it on rebuilds."""
     level = _sdk_log_level()
     sdk_logger = logging.getLogger("webull.core")
+    # Cloud Functions' root handler otherwise emits the same SDK failure again.
+    sdk_logger.propagate = False
     managed = [handler for handler in sdk_logger.handlers
                if getattr(handler, "_lego_webull_stream", False)]
     if managed:
@@ -769,6 +864,7 @@ def build_clients():
     _AUTH_PROFILE = (cache_key, time.monotonic(),
                      getattr(api, "_lego_token_check_enabled", None))
     ensure_token_fresh(api)
+    verify_account_access(trade)
     _CLIENTS = (cache_key, time.monotonic(), trade, data)
     return trade, data
 
