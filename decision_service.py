@@ -53,7 +53,7 @@ from webull_io import (IncompleteOpenOrdersError, build_clients,
                         market_category, place_market_order,
                         preview_market_order, redact_sensitive_text,
                         runtime_identity_fingerprint, token_health)
-from webull_io import fetch_instrument_capability
+from webull_io import broker_error_details, fetch_instrument_capability
 from config import RuntimeConfig
 from execution_service import (_announce_identity_adoption, _error_text,
                                _init_firebase, _iso, _min_dna_remaining,
@@ -476,6 +476,7 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             db.reference(ERRORS_PATH).push({
                 "error": _error_text(exc, with_type=False),
                 "type": type(exc).__name__,
+                "broker_error": broker_error_details(exc),
                 "trace": redact_sensitive_text(traceback.format_exc())[:2000],
                 "at": datetime.now(UTC).isoformat(),
                 "correlation_id": tick_runtime.correlation_id(),
@@ -486,5 +487,6 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         return {"status": "ERROR", "committed": False,
                 "pipeline_status": "SNAPSHOT_OR_ENGINE_ERROR",
                 "error": _error_text(exc, with_type=False),
-                "type": type(exc).__name__}, code
+                "type": type(exc).__name__,
+                "broker_error": broker_error_details(exc)}, code
 

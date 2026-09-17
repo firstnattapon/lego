@@ -47,7 +47,7 @@ from market_clock import (MarketClockError, clock_mode, fallback_slot_id,
                           calendar_fingerprint, is_regular_session,
                           resolve_dna_step, resolve_market_slot,
                           slot_seconds)
-from webull_io import (IncompleteOpenOrdersError, build_clients,
+from webull_io import (IncompleteOpenOrdersError, broker_error_details, build_clients,
                         build_order_payload, environment_label,
                         fetch_holdings, fetch_open_orders, fetch_order_detail,
                         fetch_snapshot, is_transient_exception, load_config,
@@ -304,7 +304,8 @@ def lego_tick(request):
                           "error_type": type(exc).__name__}, 503
         except Exception as exc:
             body, code = {"pipeline_status": "TICK_ERROR", "error": _error_text(exc),
-                          "error_type": type(exc).__name__}, 500
+                          "error_type": type(exc).__name__,
+                          "broker_error": broker_error_details(exc)}, 500
         body["correlation_id"] = identifier
         body["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
         emit_tick(body, code)
@@ -363,6 +364,7 @@ def _run_tick(request):
             "correlation_id": correlation_id,
             "error": _error_text(exc),
             "error_type": type(exc).__name__,
+            "broker_error": broker_error_details(exc),
         }, 503
 
     try:
@@ -387,7 +389,8 @@ def _run_tick(request):
                     cfg, limit=1, runtime_identity=runtime_identity, runtime=runtime)
         except Exception as exc:
             dispatch = {"pipeline_status": "ORDER_WORKER_ERROR", "error": _error_text(exc),
-                        "error_type": type(exc).__name__}
+                        "error_type": type(exc).__name__,
+                        "broker_error": broker_error_details(exc)}
 
     archive = None
     elapsed = time.monotonic() - started

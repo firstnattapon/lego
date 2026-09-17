@@ -44,6 +44,8 @@ def broker(monkeypatch):
     monkeypatch.setattr(smoke, "clients_endpoint",
                         lambda *_a: UAT_ENDPOINT)
     monkeypatch.setattr(smoke, "fetch_holdings", lambda *_a: 2.0)
+    monkeypatch.setattr(smoke, "fetch_instrument_capability", lambda *_a: object())
+    monkeypatch.setattr(smoke, "fetch_buying_power", lambda *_a: 1000)
     monkeypatch.setattr(smoke, "fetch_open_orders", lambda *_a: [])
     monkeypatch.setattr(smoke, "fetch_snapshot", lambda *_a: {
         "price": 100.0,

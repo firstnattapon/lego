@@ -17,9 +17,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from lego_orders import UAT
-from webull_io import (PROD_ENDPOINT, UAT_ENDPOINT, build_clients,
+from webull_io import (PROD_ENDPOINT, UAT_ENDPOINT, account_id_is_listed, broker_error_details, build_clients,
                        build_order_payload, clients_endpoint,
                        environment_label, fetch_holdings, fetch_open_orders,
+                       fetch_buying_power, fetch_instrument_capability,
                        fetch_snapshot, load_config, preview_market_order,
                        redact_sensitive_text)
 
@@ -32,21 +33,7 @@ class SmokeRefusal(RuntimeError):
 
 
 def _contains_account_id(value: Any, expected: str) -> bool:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            normalized_key = "".join(
-                character for character in str(key).lower()
-                if character.isalnum())
-            if (normalized_key in {"accountid", "accountno", "accountnumber"}
-                    and not isinstance(item, (dict, list, tuple))
-                    and hmac.compare_digest(str(item), expected)):
-                return True
-            if _contains_account_id(item, expected):
-                return True
-        return False
-    if isinstance(value, (list, tuple)):
-        return any(_contains_account_id(item, expected) for item in value)
-    return False
+    return account_id_is_listed(value, expected)
 
 
 def _positive_quantity(value: str) -> float:
@@ -99,6 +86,9 @@ def run_smoke(*, preview_side: str | None = None,
         raise SmokeRefusal(
             "configured account is not present in authenticated account list")
 
+    fetch_instrument_capability(trade_client, config.symbol)
+    fetch_buying_power(trade_client)
+
     holdings = fetch_holdings(trade_client, config)
     if not math.isfinite(holdings) or holdings < 0:
         raise SmokeRefusal("broker holdings are not finite and non-negative")
@@ -115,6 +105,8 @@ def run_smoke(*, preview_side: str | None = None,
         "auto_submit_disabled": True,
         "account_list_http_200": True,
         "configured_account_present": True,
+        "instrument_tradable": True,
+        "usd_buying_power_read": True,
         "holdings_read": True,
         "open_orders_read": True,
         "snapshot_price_and_time": True,
@@ -176,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             "broker_mutations": False,
             "error_type": type(exc).__name__,
             "error": redact_sensitive_text(str(exc)),
+            "broker_error": broker_error_details(exc),
         }
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     return 0 if report["ok"] else 2
