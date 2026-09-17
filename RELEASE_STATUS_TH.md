@@ -3,7 +3,8 @@
 **ยังไม่ผ่านเกณฑ์เปิดเงินจริง (NO-GO)**
 
 แก้ account identity validation, เพิ่ม instrument/buying-power smoke,
-เพิ่ม broker diagnostics และแก้ SDK log ซ้ำ/credential redaction
+เพิ่ม broker diagnostics ครบ 9 routes และแก้ SDK log ซ้ำ/credential redaction
+ชุดทดสอบระบบ: **872 passed, 4 skipped** บน Python 3.12
 อ่าน [รายงานล่าสุด](docs/AUDIT_20260917_TH.md)
 HTTP 417 ในหลักฐานเกิดบน SDK 3.0.1 route ปัจจุบันแล้ว; ต้องพิสูจน์ broker recovery
 และ deployed candidate ก่อนเปิดเงินจริง ผลย้อนหลังด้านล่างไม่รับรอง candidate ใหม่นี้

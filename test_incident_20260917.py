@@ -105,17 +105,28 @@ def test_sdk_exception_trace_is_redacted_and_log_is_not_duplicated():
         root.removeHandler(root_handler)
 
 
-def test_broker_metadata_survives_sdk_boundary_and_tick_event(capsys):
+@pytest.mark.parametrize("action_path,expected_op", [
+    ("/trading/accounts/list", "accounts"),
+    ("/trading/assets/positions/list", "positions"),
+    ("/trading/assets/balances/get", "balance"),
+    ("/market-data/stocks/snapshots/list", "snapshot"),
+    ("/trading/orders/preview", "preview"),
+    ("/trading/orders/place", "place"),
+    ("/trading/orders/get", "order_detail"),
+    ("/trading/orders/open-orders/list", "open_orders"),
+    ("/trading/instruments/stocks/profiles/list", "instrument"),
+])
+def test_broker_metadata_survives_sdk_boundary_and_tick_event(action_path, expected_op, capsys):
     error = ServerException("OPENAPI_SYSTEM_ERROR", "private account message", http_status=417,
                             request_id="11111111-2222-3333-4444-555555555555")
     class Base:
         def get_response(self, request):
             raise error
-    request = SimpleNamespace(get_action_name=lambda: "/trading/assets/positions/list")
+    request = SimpleNamespace(get_action_name=lambda: action_path)
     with pytest.raises(ServerException):
         webull_io._bounded_api_class(Base)().get_response(request)
     details = webull_io.broker_error_details(error)
-    assert details["operation"] == "positions"
+    assert details["operation"] == expected_op
     assert details["http_status"] == 417
     assert details["code"] == "OPENAPI_SYSTEM_ERROR"
     body = {"decision": {"error": str(error), "type": "ServerException", "broker_error": details}}

@@ -177,7 +177,8 @@ def broker_error_details(exc: Exception) -> dict:
         out["request_id"] = request_id
     operation = getattr(exc, "_lego_operation", None)
     if isinstance(operation, str) and operation in {
-            "accounts", "positions", "balance", "snapshot", "preview", "place", "order_detail"}:
+            "accounts", "positions", "balance", "snapshot", "preview", "place",
+            "order_detail", "open_orders", "instrument"}:
         out["operation"] = operation
     if out:
         out["retryable_read"] = is_transient_exception(exc)
@@ -685,6 +686,8 @@ def _bounded_api_class(base):
                     "/trading/orders/preview": "preview",
                     "/trading/orders/place": "place",
                     "/trading/orders/get": "order_detail",
+                    "/trading/orders/open-orders/list": "open_orders",
+                    "/trading/instruments/stocks/profiles/list": "instrument",
                 }.get(action)
                 if operation:
                     exc._lego_operation = operation

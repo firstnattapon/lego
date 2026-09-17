@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STREAMLIT = ROOT.parent / "lego-firebase-streamlit"
 EXCLUDED_PARTS = {
-    ".git", ".pytest_cache", ".tools", ".venv", ".venv-release",
+    ".git", ".pytest_cache", ".pytest_tmp", ".tools", ".venv", ".venv-release",
     "__pycache__", "release_evidence", "release_evidence_v2",
     ".audit-cache", ".review-runtime", ".firebase",
 }
