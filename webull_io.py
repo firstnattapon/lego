@@ -16,11 +16,13 @@ import traceback
 import uuid
 import tick_runtime
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from datetime import datetime, timezone
 
 from lego_one_row import Config
 from lego_orders import PROD, UAT
+from market_clock import is_regular_session
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,16 @@ class MarketDataForbidden(RuntimeError):
     """
 
 
+MAX_FRACTIONAL_DECIMAL_PLACES = 5
+MINIMUM_FRACTIONAL_TRADE_USD = Decimal("1.0")
+FRACTIONAL_QUANTITY_INCREMENT = Decimal("0.00001")
+
+
+class FractionalGateError(WebullConfigError):
+    """Refuse a fractional order that violates Thailand broker rules."""
+    pass
+
+
 @dataclass(frozen=True)
 class InstrumentCapability:
     symbol: str
@@ -82,13 +94,90 @@ class InstrumentCapability:
     currency: str
     lot_size: Decimal
     fractionable: bool
+    quantity_increment: Decimal = None
+    decimal_precision: int = None
+    minimum_quantity_if_authoritative: Decimal | None = None
+    minimum_notional_usd_if_authoritative: Decimal | None = None
+    capability_source: str = "webull_thailand_openapi"
 
-    @property
-    def quantity_increment(self) -> Decimal:
-        # The current profile contract exposes lot_size but no independent
-        # fractional increment. Using the documented lot is conservative and
-        # never invents support the broker did not advertise.
-        return self.lot_size
+    def __post_init__(self) -> None:
+        symbol = str(self.symbol or "").strip().upper()
+        if not symbol:
+            raise WebullConfigError("symbol must not be empty")
+        status = str(self.status or "").strip().upper()
+        if status != "OC":
+            raise WebullConfigError(f"instrument status {self.status!r} is not tradable (OC)")
+        category = str(self.category or "").strip().upper()
+        if category != "US_STOCK":
+            raise WebullConfigError(f"instrument category {self.category!r} is not US_STOCK")
+        currency = str(self.currency or "").strip().upper()
+        if currency != "USD":
+            raise WebullConfigError(f"instrument currency {self.currency!r} is not USD")
+        try:
+            lot = self.lot_size if isinstance(self.lot_size, Decimal) else Decimal(str(self.lot_size))
+        except Exception as exc:
+            raise WebullConfigError("lot_size must be a positive finite Decimal") from exc
+        if not lot.is_finite() or lot <= 0:
+            raise WebullConfigError("lot_size must be a positive finite Decimal")
+        object.__setattr__(self, "lot_size", lot)
+
+        if type(self.fractionable) is not bool:
+            raise WebullConfigError(f"fractionable must be a boolean, got {type(self.fractionable).__name__}")
+
+        def _to_decimal(val):
+            if val is None:
+                return None
+            return val if isinstance(val, Decimal) else Decimal(str(val))
+
+        if self.fractionable:
+            resolved_inc = (
+                _to_decimal(self.quantity_increment) if self.quantity_increment is not None
+                else FRACTIONAL_QUANTITY_INCREMENT
+            )
+            resolved_prec = (
+                self.decimal_precision if self.decimal_precision is not None
+                else MAX_FRACTIONAL_DECIMAL_PLACES
+            )
+            min_notional = (
+                _to_decimal(self.minimum_notional_usd_if_authoritative)
+                if self.minimum_notional_usd_if_authoritative is not None
+                else MINIMUM_FRACTIONAL_TRADE_USD
+            )
+            min_qty = (
+                _to_decimal(self.minimum_quantity_if_authoritative)
+                if self.minimum_quantity_if_authoritative is not None
+                else resolved_inc
+            )
+        else:
+            resolved_inc = (
+                _to_decimal(self.quantity_increment) if self.quantity_increment is not None
+                else lot
+            )
+            resolved_prec = (
+                self.decimal_precision if self.decimal_precision is not None
+                else max(0, -lot.normalize().as_tuple().exponent)
+            )
+            min_notional = _to_decimal(self.minimum_notional_usd_if_authoritative)
+            min_qty = (
+                _to_decimal(self.minimum_quantity_if_authoritative)
+                if self.minimum_quantity_if_authoritative is not None
+                else lot
+            )
+
+        if not isinstance(resolved_inc, Decimal) or not resolved_inc.is_finite() or resolved_inc <= 0:
+            raise WebullConfigError("quantity_increment must be a positive finite Decimal")
+        if not isinstance(resolved_prec, int) or resolved_prec < 0 or resolved_prec > MAX_FRACTIONAL_DECIMAL_PLACES:
+            raise WebullConfigError(
+                f"decimal_precision must be an int between 0 and {MAX_FRACTIONAL_DECIMAL_PLACES}")
+
+        object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "category", category)
+        object.__setattr__(self, "currency", currency)
+        object.__setattr__(self, "quantity_increment", resolved_inc)
+        object.__setattr__(self, "decimal_precision", resolved_prec)
+        object.__setattr__(self, "minimum_quantity_if_authoritative", min_qty)
+        object.__setattr__(self, "minimum_notional_usd_if_authoritative", min_notional)
 
 
 def parse_instrument_capability(payload, symbol: str) -> InstrumentCapability:
@@ -115,13 +204,32 @@ def parse_instrument_capability(payload, symbol: str) -> InstrumentCapability:
     category = str(item.get("category", "")).upper()
     if category != "US_STOCK":
         raise WebullConfigError(f"instrument category {category!r} ไม่รองรับ")
+    if "fractionable" not in item:
+        raise WebullConfigError(f"instrument capability unknown: missing fractionable field for {wanted}")
+    raw_fractionable = item["fractionable"]
+    if type(raw_fractionable) is not bool:
+        raise WebullConfigError(
+            f"instrument capability contradictory: fractionable must be bool, got {type(raw_fractionable).__name__}")
+
+    frac_inc = None
+    for key in ("fractional_increment", "fractional_lot_size", "min_fractional_lot_size"):
+        if key in item and item[key] is not None:
+            try:
+                cand = Decimal(str(item[key]))
+                if cand.is_finite() and cand > 0:
+                    frac_inc = cand
+                    break
+            except InvalidOperation:
+                pass
+
     return InstrumentCapability(
         symbol=wanted,
         status="OC",
         category=category,
         currency="USD",
         lot_size=lot,
-        fractionable=item.get("fractionable") is True,
+        fractionable=raw_fractionable,
+        quantity_increment=frac_inc,
     )
 
 
@@ -995,7 +1103,102 @@ def fetch_snapshot(trade_client, data_client, cfg: Config) -> dict:
     }
 
 
-def quantity_string(qty: float, precision: int) -> str:
+def is_fractional_quantity(quantity: object) -> bool:
+    try:
+        qty = Decimal(str(quantity))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    return qty.is_finite() and (qty % Decimal("1") != Decimal("0"))
+
+
+def evaluate_fractional_order_gate(
+        *,
+        capability: InstrumentCapability | None,
+        side: str,
+        quantity: object,
+        price: object,
+        holdings: object,
+        order_type: str = "MARKET",
+        at: datetime | None = None,
+        session_check_fn=None) -> None:
+    """Evaluate all required conditions for fractional orders. Fail closed on any violation."""
+    try:
+        qty = Decimal(str(quantity))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise FractionalGateError(f"quantity {quantity!r} is not a valid decimal") from exc
+    if not qty.is_finite() or qty <= 0:
+        raise FractionalGateError(f"quantity {quantity!r} must be finite and > 0")
+
+    is_fractional = (qty % Decimal("1") != Decimal("0"))
+    if not is_fractional:
+        return
+
+    # Fractional order gate
+    if capability is None or not isinstance(capability, InstrumentCapability):
+        raise FractionalGateError("fractional capability unknown: fail closed")
+    if not capability.fractionable:
+        raise FractionalGateError(f"instrument {capability.symbol} does not support fractional trading")
+    if capability.status != "OC":
+        raise FractionalGateError(f"instrument {capability.symbol} status is {capability.status}, must be OC (tradable)")
+    if capability.category != "US_STOCK":
+        raise FractionalGateError(f"instrument {capability.symbol} category {capability.category} is not supported for fractional shares")
+    if capability.currency != "USD":
+        raise FractionalGateError(f"instrument {capability.symbol} currency {capability.currency} is not USD")
+
+    normalized_type = str(order_type or "").strip().upper()
+    if normalized_type not in ("MARKET", "LIMIT"):
+        raise FractionalGateError(f"order type {order_type!r} is not supported for fractional trading (only MARKET or LIMIT)")
+
+    exp = qty.as_tuple().exponent
+    if isinstance(exp, int) and exp < -MAX_FRACTIONAL_DECIMAL_PLACES:
+        raise FractionalGateError(
+            f"fractional precision {-exp} exceeds maximum {MAX_FRACTIONAL_DECIMAL_PLACES} decimal places")
+
+    check_session = session_check_fn if session_check_fn is not None else is_regular_session
+    if not check_session(at):
+        raise FractionalGateError("fractional orders are allowed only during US Regular Trading Hours (CORE)")
+
+    try:
+        px = Decimal(str(price))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise FractionalGateError(f"price {price!r} is not a valid decimal") from exc
+    if not px.is_finite() or px <= 0:
+        raise FractionalGateError(f"price {price!r} must be finite and > 0")
+    estimated_notional = qty * px
+    min_notional = capability.minimum_notional_usd_if_authoritative or MINIMUM_FRACTIONAL_TRADE_USD
+    if estimated_notional < min_notional:
+        raise FractionalGateError(
+            f"fractional estimated trade value ${estimated_notional:.4f} is below minimum USD {min_notional}")
+
+    try:
+        held = Decimal(str(holdings))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise FractionalGateError(f"holdings {holdings!r} is not a valid decimal") from exc
+    if not held.is_finite() or held < 0:
+        raise FractionalGateError(f"holdings {holdings!r} must be finite and >= 0")
+    if str(side or "").strip().upper() == "SELL" and qty > held:
+        raise FractionalGateError(
+            f"fractional SELL quantity {qty} exceeds holdings {held}; short selling is forbidden")
+
+
+def normalize_quantity_decimal(qty: float | Decimal | str, precision: int) -> Decimal:
+    if precision < 0 or precision > MAX_FRACTIONAL_DECIMAL_PLACES:
+        raise ValueError(f"precision ต้องอยู่ระหว่าง 0 ถึง {MAX_FRACTIONAL_DECIMAL_PLACES} (ได้ {precision})")
+    try:
+        d = Decimal(str(qty))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"quantity {qty!r} ไม่ใช่ decimal ที่ถูกต้อง") from exc
+    if not d.is_finite() or d <= 0:
+        raise ValueError(f"quantity {qty!r} ต้อง finite และ > 0")
+    quantum = Decimal(1).scaleb(-precision) if precision > 0 else Decimal(1)
+    normalized = d.quantize(quantum, rounding=ROUND_DOWN)
+    if normalized <= 0:
+        raise ValueError(
+            f"quantity {qty!r} ปัดที่ {precision} ทศนิยมแล้วเหลือ 0 — fail closed ไม่ส่ง")
+    return normalized
+
+
+def quantity_string(qty: float | Decimal | str, precision: int) -> str:
     """Format an order quantity, stripping trailing zeros only after a point.
 
     At LEGO_DECIMAL_PRECISION=0 (whole shares — a documented, allowed setting)
@@ -1006,10 +1209,11 @@ def quantity_string(qty: float, precision: int) -> str:
 
     A quantity that rounds away to zero is refused rather than sent as '0'.
     """
-    text = f"{qty:.{precision}f}"
+    normalized = normalize_quantity_decimal(qty, precision)
+    text = f"{normalized:f}"
     if "." in text:
         text = text.rstrip("0").rstrip(".")
-    if not text or float(text) <= 0:
+    if not text or Decimal(text) <= 0:
         raise ValueError(
             f"quantity {qty!r} ปัดที่ {precision} ทศนิยมแล้วเหลือ 0 — fail closed ไม่ส่ง")
     return text

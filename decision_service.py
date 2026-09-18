@@ -211,16 +211,17 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         # this operational capability, while the exact resolved values are
         # snapshotted into the intent for cross-revision recovery.
         trade_client, data_client = build_clients()
+        capability = None
         if runtime is not None:
             capability = fetch_instrument_capability(trade_client, cfg.symbol)
+            precision = getattr(capability, "decimal_precision", None)
+            if precision is None:
+                precision = max(
+                    0, -capability.quantity_increment.normalize().as_tuple().exponent)
             cfg = replace(
                 cfg,
                 quantity_increment=float(capability.quantity_increment),
-                # Broker decimals may be padded (1.00000000 is one share).
-                # Count significant fractional places, not transport padding;
-                # Config still rejects genuinely unsupported precision > 5.
-                decimal_precision=max(
-                    0, -capability.quantity_increment.normalize().as_tuple().exponent),
+                decimal_precision=precision,
             )
         # Before the model is touched: if this revision's accounting is behind
         # the chain's, nothing it computes afterwards is worth writing. Existing
@@ -327,10 +328,20 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                     cfg, row, snapshot, slot, decision_time,
                     typed_v2=runtime is not None)
                 pending_intent["runtime_identity_fingerprint"] = runtime_identity
-
-        # A rejected commit leaves no outbox candidate.  A successful state
-        # transaction carries a deterministic recovery marker, closing the crash
-        # window between advancing DNA and materializing the private outbox.
+                if capability is not None:
+                    pending_intent["instrument_capability"] = {
+                        "symbol": str(capability.symbol),
+                        "status": str(capability.status),
+                        "category": str(capability.category),
+                        "currency": str(capability.currency),
+                        "lot_size": int(capability.lot_size) if capability.lot_size is not None else 1,
+                        "fractionable": bool(capability.fractionable),
+                        "quantity_increment": str(capability.quantity_increment) if capability.quantity_increment is not None else None,
+                        "decimal_precision": int(capability.decimal_precision) if capability.decimal_precision is not None else None,
+                        "minimum_quantity_if_authoritative": str(capability.minimum_quantity_if_authoritative) if capability.minimum_quantity_if_authoritative is not None else None,
+                        "minimum_notional_usd_if_authoritative": str(capability.minimum_notional_usd_if_authoritative) if capability.minimum_notional_usd_if_authoritative is not None else None,
+                        "capability_source": str(capability.capability_source),
+                    }
         result = commit_final_row(
             cfg, snapshot, anchor, row, slot_id=slot_id, clock_mode=mode,
             market_ordinal=None if slot is None else slot.market_ordinal,

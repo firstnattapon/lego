@@ -201,6 +201,9 @@ def build_decision(cfg: Config, price: float, holdings: float, signal: int) -> D
         sell_ceiling = float(Decimal(str(holdings)).quantize(
             quantum, rounding=ROUND_DOWN))
         qty = min(qty, sell_ceiling)
+    if cfg.strategy_id.endswith("_v2") and qty > 0 and qty < 1.0:
+        if (Decimal(str(qty)) * Decimal(str(price))) < Decimal("1.0"):
+            qty = 0.0
     if qty <= 0:
         reason = PASS_MIN_ORDER if cfg.strategy_id.endswith("_v2") else PASS_THRESHOLD
         return Decision(reason, "PASS", "", reason, 0.0, value, gap)

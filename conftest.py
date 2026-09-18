@@ -184,7 +184,7 @@ class FakeNamespace:
 
 
 def fake_trade_client(*, positions=None, balance=None, open_orders=None, order_detail=None,
-                      preview=None, place=None):
+                      preview=None, place=None, instrument=None):
     return FakeNamespace(
         account_v2=FakeNamespace(
             get_account_position=FakeCall(positions),
@@ -195,6 +195,9 @@ def fake_trade_client(*, positions=None, balance=None, open_orders=None, order_d
             get_order_detail=FakeCall(order_detail),
             preview_order=FakeCall(preview),
             place_order=FakeCall(place),
+        ),
+        trade_instrument=FakeNamespace(
+            get_instrument_stock_detail=FakeCall(instrument),
         ),
     )
 
