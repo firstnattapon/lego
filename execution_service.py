@@ -57,8 +57,11 @@ from webull_io import (IncompleteOpenOrdersError, build_clients,
                         preview_market_order, preview_market_order_result,
                         redact_sensitive_text,
                         runtime_identity_fingerprint, token_health)
+from decimal import Decimal
 from webull_io import (validate_order_detail_identity, validate_place_response,
-                       validate_preview_funding)
+                       validate_preview_funding, FractionalGateError,
+                       InstrumentCapability, evaluate_fractional_order_gate,
+                       fetch_instrument_capability, is_fractional_quantity)
 from config import RuntimeConfig
 
 logger = logging.getLogger(__name__)
@@ -1096,6 +1099,47 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         # Building the payload is part of the gate: a quantity that cannot be
         # expressed at this precision must end the intent, not abort the whole
         # worker run and leave the other intents of this tick unprocessed.
+        if is_fractional_quantity(intent["quantity"]):
+            capability = None
+            if "instrument_capability" in intent and isinstance(intent["instrument_capability"], dict):
+                cap_data = intent["instrument_capability"]
+                try:
+                    capability = InstrumentCapability(
+                        symbol=cap_data["symbol"],
+                        status=cap_data.get("status", "OC"),
+                        category=cap_data.get("category", "US_STOCK"),
+                        currency=cap_data.get("currency", "USD"),
+                        lot_size=int(cap_data.get("lot_size", 1)),
+                        fractionable=bool(cap_data.get("fractionable", False)),
+                        quantity_increment=Decimal(str(cap_data["quantity_increment"])) if cap_data.get("quantity_increment") else None,
+                        decimal_precision=int(cap_data["decimal_precision"]) if cap_data.get("decimal_precision") is not None else None,
+                        minimum_quantity_if_authoritative=Decimal(str(cap_data["minimum_quantity_if_authoritative"])) if cap_data.get("minimum_quantity_if_authoritative") else None,
+                        minimum_notional_usd_if_authoritative=Decimal(str(cap_data["minimum_notional_usd_if_authoritative"])) if cap_data.get("minimum_notional_usd_if_authoritative") else None,
+                        capability_source=cap_data.get("capability_source", "intent_provenance"),
+                    )
+                except Exception:
+                    capability = None
+            if capability is None and (runtime is not None or hasattr(trade_client, "trade_instrument")):
+                try:
+                    capability = fetch_instrument_capability(trade_client, cfg.symbol)
+                except Exception as cap_exc:
+                    raise FractionalGateError(
+                        f"unable to verify instrument capability for fractional order: {cap_exc}") from cap_exc
+
+            if capability is not None:
+                evaluate_fractional_order_gate(
+                    capability=capability,
+                    side=intent["side"],
+                    quantity=intent["quantity"],
+                    price=fresh["price"],
+                    holdings=fresh["holdings"],
+                    order_type="MARKET",
+                    at=datetime.now(UTC),
+                    session_check_fn=is_regular_session,
+                )
+            elif runtime is not None:
+                raise FractionalGateError("fractional capability unknown: fail closed")
+
         order = build_order_payload(cfg, intent["side"], float(intent["quantity"]), run_id)
         if runtime is not None:
             preview_result = preview_market_order_result(
