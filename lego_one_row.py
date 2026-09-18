@@ -38,13 +38,13 @@ COLUMN_ORDER = [
     "เวลา (UTC)", "สินทรัพย์", "สถานะ", "DNA step", "DNA signal",
     "ราคา Pₙ (USD)", "จำนวนถือครอง (หุ้น)", "คำสั่ง", "ฝั่ง", "เหตุผล",
     "จำนวนสั่ง (หุ้น)", "มูลค่าพอร์ต (USD)", "ส่วนต่างเป้าหมาย (USD)",
-    "Rₙ อ้างอิง (USD)", "ΔAₙ ต่อสเต็ป (USD)", "Aₙ สะสม (USD)",
+    "Rₙ อ้างอิง (USD)", "ΔAₙ ต่อสเต็ป (USD)", "ΔAₙ เงินจริง (USD)", "Aₙ สะสม (USD)",
     "Eₙ ส่วนเกินสะสม (USD)",
 ]
 
-# The four cashflow columns, named off the contract itself so the worker that
-# finalizes three of them can never patch a column the engine stopped writing.
-REFERENCE_COLUMN, DELTA_COLUMN, ACTUAL_COLUMN, EXCESS_COLUMN = COLUMN_ORDER[13:17]
+# The cashflow columns, named off the contract itself so the worker that
+# finalizes them can never patch a column the engine stopped writing.
+REFERENCE_COLUMN, DELTA_COLUMN, DELTA_ACTUAL_COLUMN, ACTUAL_COLUMN, EXCESS_COLUMN = COLUMN_ORDER[13:18]
 
 
 class DNAExhausted(RuntimeError):
@@ -182,7 +182,7 @@ def build_decision(cfg: Config, price: float, holdings: float, signal: int) -> D
     if signal not in (0, 1):
         raise ValueError("signal ต้อง ∈ {0,1}")
     value = holdings * price
-    gap = cfg.fix_c - value
+    gap = value - cfg.fix_c
     if signal == 0:
         return Decision(PASS_DNA_ZERO, "PASS", "", PASS_DNA_ZERO, 0.0, value, gap)
     if abs(gap) <= cfg.diff:
@@ -193,7 +193,7 @@ def build_decision(cfg: Config, price: float, holdings: float, signal: int) -> D
         qty = float((raw / increment).to_integral_value(rounding=ROUND_DOWN) * increment)
     else:
         qty = round(abs(gap) / price, cfg.decimal_precision)
-    if gap < -cfg.diff:
+    if gap > cfg.diff:
         # The exact rebalance is below holdings because FIX_C > 0, but rounding
         # can push a tiny fractional SELL above holdings. Cap at holdings rounded
         # down to the same broker precision; never round this ceiling upward.
@@ -205,8 +205,8 @@ def build_decision(cfg: Config, price: float, holdings: float, signal: int) -> D
         reason = PASS_MIN_ORDER if cfg.strategy_id.endswith("_v2") else PASS_THRESHOLD
         return Decision(reason, "PASS", "", reason, 0.0, value, gap)
     if gap > cfg.diff:
-        return Decision(READY_BUY, "TRIGGER_ACTION", "BUY", READY_BUY, qty, value, gap)
-    return Decision(READY_SELL, "TRIGGER_ACTION", "SELL", READY_SELL, qty, value, gap)
+        return Decision(READY_SELL, "TRIGGER_ACTION", "SELL", READY_SELL, qty, value, gap)
+    return Decision(READY_BUY, "TRIGGER_ACTION", "BUY", READY_BUY, qty, value, gap)
 
 
 @dataclass(frozen=True)
@@ -350,6 +350,7 @@ def compute_row(cfg: Config, snapshot: dict, anchor: Anchor | None,
         "ส่วนต่างเป้าหมาย (USD)": dec.gap,
         "Rₙ อ้างอิง (USD)": rec.R,
         "ΔAₙ ต่อสเต็ป (USD)": rec.dA,
+        "ΔAₙ เงินจริง (USD)": 0.0,
         "Aₙ สะสม (USD)": rec.A,
         "Eₙ ส่วนเกินสะสม (USD)": rec.E,
     }
@@ -384,11 +385,11 @@ def validate_row_columns(row: dict) -> None:
     keys = [k for k in row.keys() if k != "_meta"]
     if keys != COLUMN_ORDER:
         raise RowValidationError(
-            f"คอลัมน์ไม่ตรงสัญญา: got {len(keys)} / need 17 (ลำดับตายตัว)")
+            f"คอลัมน์ไม่ตรงสัญญา: got {len(keys)} / need {len(COLUMN_ORDER)} (ลำดับตายตัว)")
 
 
 def columns_presented(row: dict) -> dict:
-    money = {6, 12, 13, 14, 15, 16, 17}
+    money = {6, 12, 13, 14, 15, 16, 17, 18}
     out = {}
     for i, k in enumerate(COLUMN_ORDER, start=1):
         v = row[k]

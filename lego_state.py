@@ -15,7 +15,7 @@ from bounded_fifo import (MATCH_PAGES_PER_CALL_V3, MIGRATION_PAGES_PER_CALL_V3,
                           SCHEMA_VERSION as FIFO_SCHEMA_VERSION, make_page,
                           page_key, validate_page)
 from dna_engine import dna_fingerprint
-from lego_one_row import (ACTUAL_COLUMN, DELTA_COLUMN, EXCESS_COLUMN,
+from lego_one_row import (ACTUAL_COLUMN, DELTA_ACTUAL_COLUMN, DELTA_COLUMN, EXCESS_COLUMN,
                           REFERENCE_COLUMN, Anchor, Config, ExecutionFill,
                           finalize_recurrence, validate_row_columns)
 from lego_orders import apply_fill, normalize_open_legs, normalize_status
@@ -801,6 +801,7 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
     # and rewriting the recorded numbers is exactly the repair.
     row_patch = {
         DELTA_COLUMN: outcome["delta_actual"],
+        DELTA_ACTUAL_COLUMN: outcome.get("broker_cash_delta", outcome["delta_actual"]),
         ACTUAL_COLUMN: outcome["actual_cumulative"],
         EXCESS_COLUMN: outcome["excess"],
         "cashflow_status": CASHFLOW_FINALIZED,

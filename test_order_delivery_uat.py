@@ -351,7 +351,7 @@ def test_the_production_row_is_bit_identical_to_the_export(monkeypatch):
     assert row["สถานะ"] == "READY_SELL" and row["ฝั่ง"] == "SELL"
     assert row["จำนวนสั่ง (หุ้น)"] == PROD_QUANTITY
     assert round(row["มูลค่าพอร์ต (USD)"], 2) == 3101.5
-    assert round(row["ส่วนต่างเป้าหมาย (USD)"], 2) == -101.5
+    assert round(row["ส่วนต่างเป้าหมาย (USD)"], 2) == 101.5
     # READY_* is an intent: the three cashflow columns stay carried forward.
     assert row[DELTA_COLUMN] == 0.0 and row[ACTUAL_COLUMN] == 0.0
 

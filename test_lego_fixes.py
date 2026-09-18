@@ -29,7 +29,7 @@ CFG = Config(symbol="APLS", fix_c=1500.0, diff=60.0)
 def test_decision_buy_spec():
     d = build_decision(CFG, price=10.0, holdings=100.0, signal=1)
     assert (d.status, d.action, d.side) == (READY_BUY, "TRIGGER_ACTION", "BUY")
-    assert d.value == 1000.0 and d.gap == 500.0
+    assert d.value == 1000.0 and d.gap == -500.0
     assert d.quantity == round(500.0 / 10.0, 5) == 50.0
 
 
@@ -37,7 +37,7 @@ def test_decision_sell_spec():
     # ค่าปกติยังเท่ากับ round(|gap|/Pₙ, dp)
     d = build_decision(CFG, price=12.0, holdings=150.0, signal=1)
     assert (d.status, d.side) == (READY_SELL, "SELL")
-    assert d.gap == -300.0
+    assert d.gap == 300.0
     assert d.quantity == round(300.0 / 12.0, 5) == 25.0
     # qty < holdings เสมอ (คณิต: qty = holdings − FIX_C/Pₙ)
     assert d.quantity < 150.0

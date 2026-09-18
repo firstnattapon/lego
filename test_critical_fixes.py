@@ -114,4 +114,4 @@ def test_17_column_contract_is_preserved():
     cfg = Config("AAPL", 3000.0, diff=5.0, dna_code="bypass:10", decimal_precision=2)
     snap = {"captured_at": "2026-07-23T18:00:05Z", "price": 320.0, "holdings": 9.0}
     row = compute_row(cfg, snap, None, dna_step=0)
-    assert len([k for k in row if k != "_meta"]) == 17
+    assert len([k for k in row if k != "_meta"]) == 18

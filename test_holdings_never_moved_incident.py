@@ -248,7 +248,7 @@ def test_the_whole_export_recomputes_from_its_own_numbers(monkeypatch):
         assert row["มูลค่าพอร์ต (USD)"] == pytest.approx(
             value, abs=EXPORT_MONEY_TOLERANCE)
         assert row["ส่วนต่างเป้าหมาย (USD)"] == pytest.approx(
-            gap, abs=EXPORT_MONEY_TOLERANCE)
+            -gap, abs=EXPORT_MONEY_TOLERANCE)
         assert row[REFERENCE_COLUMN] == pytest.approx(
             R, abs=EXPORT_MONEY_TOLERANCE)
         # A decision is not an execution: nothing filled, so all three stay 0.0
