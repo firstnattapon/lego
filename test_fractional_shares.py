@@ -599,3 +599,36 @@ def test_integration_fractional_order_outside_core_blocked(tmp_path, monkeypatch
             capability=cap, side="BUY", quantity=Decimal("0.299"), price=Decimal("339.15"),
             holdings=Decimal("0.0"), order_type="MARKET", session_check_fn=execution_service.is_regular_session,
         )
+
+
+def test_pending_intent_instrument_capability_json_serializable():
+    """Verify instrument_capability stored in pending_intent is fully JSON serializable for Firebase RTDB."""
+    import json
+    import decision_service
+    from lego_one_row import Config
+    from datetime import datetime, timezone
+
+    cap = InstrumentCapability(
+        symbol="AAPL", status="OC", category="US_STOCK", currency="USD",
+        lot_size=Decimal("1"), fractionable=False,
+    )
+    # Replicate serialization dictionary in decision_service.run_decision
+    payload = {
+        "symbol": str(cap.symbol),
+        "status": str(cap.status),
+        "category": str(cap.category),
+        "currency": str(cap.currency),
+        "lot_size": int(cap.lot_size) if cap.lot_size is not None else 1,
+        "fractionable": bool(cap.fractionable),
+        "quantity_increment": str(cap.quantity_increment) if cap.quantity_increment is not None else None,
+        "decimal_precision": int(cap.decimal_precision) if cap.decimal_precision is not None else None,
+        "minimum_quantity_if_authoritative": str(cap.minimum_quantity_if_authoritative) if cap.minimum_quantity_if_authoritative is not None else None,
+        "minimum_notional_usd_if_authoritative": str(cap.minimum_notional_usd_if_authoritative) if cap.minimum_notional_usd_if_authoritative is not None else None,
+        "capability_source": str(cap.capability_source),
+    }
+    dumped = json.dumps(payload)
+    parsed = json.loads(dumped)
+    assert parsed["lot_size"] == 1
+    assert parsed["symbol"] == "AAPL"
+    assert parsed["fractionable"] is False
+

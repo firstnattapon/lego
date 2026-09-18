@@ -330,17 +330,17 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 pending_intent["runtime_identity_fingerprint"] = runtime_identity
                 if capability is not None:
                     pending_intent["instrument_capability"] = {
-                        "symbol": capability.symbol,
-                        "status": capability.status,
-                        "category": capability.category,
-                        "currency": capability.currency,
-                        "lot_size": capability.lot_size,
-                        "fractionable": capability.fractionable,
-                        "quantity_increment": str(capability.quantity_increment),
-                        "decimal_precision": capability.decimal_precision,
+                        "symbol": str(capability.symbol),
+                        "status": str(capability.status),
+                        "category": str(capability.category),
+                        "currency": str(capability.currency),
+                        "lot_size": int(capability.lot_size) if capability.lot_size is not None else 1,
+                        "fractionable": bool(capability.fractionable),
+                        "quantity_increment": str(capability.quantity_increment) if capability.quantity_increment is not None else None,
+                        "decimal_precision": int(capability.decimal_precision) if capability.decimal_precision is not None else None,
                         "minimum_quantity_if_authoritative": str(capability.minimum_quantity_if_authoritative) if capability.minimum_quantity_if_authoritative is not None else None,
                         "minimum_notional_usd_if_authoritative": str(capability.minimum_notional_usd_if_authoritative) if capability.minimum_notional_usd_if_authoritative is not None else None,
-                        "capability_source": capability.capability_source,
+                        "capability_source": str(capability.capability_source),
                     }
         result = commit_final_row(
             cfg, snapshot, anchor, row, slot_id=slot_id, clock_mode=mode,
