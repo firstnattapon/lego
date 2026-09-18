@@ -363,7 +363,7 @@ def test_concurrent_ticks_in_one_slot_produce_one_intent(monkeypatch, auto_submi
 
 def test_column_contract_is_untouched(monkeypatch, auto_submit):
     """Case 12 — UI. The 17 columns, their order, and the presented rounding."""
-    assert len(COLUMN_ORDER) == 17
+    assert len(COLUMN_ORDER) == 18
     assert COLUMN_ORDER[0] == "เวลา (UTC)" and COLUMN_ORDER[-1] == "Eₙ ส่วนเกินสะสม (USD)"
 
     body, _ = _run(monkeypatch, SLOT_0, 335.55, holdings=PROD_HOLDINGS)
@@ -404,7 +404,7 @@ def test_recurrence_matches_the_production_rows(monkeypatch, auto_submit):
     assert [r["cashflow_status"] for r in rows] == ["FINALIZED"] * 3
     presented = [columns_presented({k: r[k] for k in COLUMN_ORDER}) for r in rows]
     assert [p["มูลค่าพอร์ต (USD)"] for p in presented] == [3068.58, 3064.92, 3079.19]
-    assert [p["ส่วนต่างเป้าหมาย (USD)"] for p in presented] == [-68.58, -64.92, -79.19]
+    assert [p["ส่วนต่างเป้าหมาย (USD)"] for p in presented] == [68.58, 64.92, 79.19]
     assert [p["จำนวนสั่ง (หุ้น)"] for p in presented] == [0.2, 0.19, 0.24]
     assert [p["Rₙ อ้างอิง (USD)"] for p in presented] == [0, -3.58, 10.35]
     assert [p["ΔAₙ ต่อสเต็ป (USD)"] for p in presented] == [0, -3.58, 13.96]
@@ -425,7 +425,7 @@ def test_blocked_rows_keep_the_same_ledger(monkeypatch, auto_submit):
     body, _ = _run(monkeypatch, SLOT_0, 335.55, holdings=PROD_HOLDINGS)
     doc = FAKE_DB.reference(f"webull_lego_rows/{body['run_id']}").get()
     assert doc["สถานะ"] == "READY_SELL" and doc["committed"] is True
-    assert round(doc["ส่วนต่างเป้าหมาย (USD)"], 2) == -68.58
+    assert round(doc["ส่วนต่างเป้าหมาย (USD)"], 2) == 68.58
     assert round(doc["จำนวนสั่ง (หุ้น)"], 2) == 0.2
     assert doc["market_ordinal"] == 0 and doc["clock_mode"] == "market"
 

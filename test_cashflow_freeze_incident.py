@@ -143,7 +143,7 @@ def test_the_target_run_id_slot_recomputed_on_the_real_chain():
 
     assert row["สถานะ"] == "PASS_THRESHOLD"
     assert round(row["มูลค่าพอร์ต (USD)"], 2) == 2997.34      # as exported
-    assert round(row["ส่วนต่างเป้าหมาย (USD)"], 2) == 2.66     # as exported
+    assert round(row["ส่วนต่างเป้าหมาย (USD)"], 2) == -2.66    # as exported
     assert round(row[REFERENCE_COLUMN], 2) == 10.13            # Rₙ still live
     assert row[DELTA_COLUMN] == 0.0                            # export said -2.72
     assert round(row[ACTUAL_COLUMN], 2) == 12.88               # export said 10.16

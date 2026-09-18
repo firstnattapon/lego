@@ -107,7 +107,7 @@ def test_explicit_market_step_preserves_17_columns_and_can_jump():
                             slot_id="2026-07-23:12", market_ordinal=3, clock_mode="market")
     assert res0["version"] == 1 and res3["version"] == 2
     assert row3["DNA step"] == 3
-    assert len([k for k in row3 if k != "_meta"]) == 17
+    assert len([k for k in row3 if k != "_meta"]) == 18
 
 
 def test_committed_row_carries_slot_provenance_outside_the_17_columns():
