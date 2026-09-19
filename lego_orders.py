@@ -86,21 +86,54 @@ def normalize_status(raw) -> str:
 
 
 def _order_fields(detail) -> dict:
-    if isinstance(detail, list):
-        detail = detail[0] if detail else {}
-    if not isinstance(detail, dict):
-        return {}
-    for key in ("items", "orders", "data"):
-        inner = detail.get(key)
-        if isinstance(inner, list) and inner and isinstance(inner[0], dict):
-            merged = dict(detail)
-            merged.update(inner[0])
+    """Unwrap one NORMAL order, refusing ambiguous siblings or identity changes."""
+    merged = {}
+    seen = set()
+    for _ in range(16):
+        if isinstance(detail, list):
+            if len(detail) != 1:
+                raise ValueError("ambiguous order detail: expected exactly one order")
+            detail = detail[0]
+        if not isinstance(detail, dict):
             return merged
-        if isinstance(inner, dict):
-            merged = dict(detail)
-            merged.update(inner)
+        if id(detail) in seen:
+            raise ValueError("cyclic order detail")
+        seen.add(id(detail))
+        for key in ("client_order_id", "order_id", "symbol", "side"):
+            if merged.get(key) and detail.get(key) and str(merged[key]) != str(detail[key]):
+                raise ValueError("conflicting order identity: " + key)
+        merged.update(detail)
+        children = [detail[key] for key in ("items", "orders", "data", "sub_orders")
+                    if isinstance(detail.get(key), (dict, list)) and detail[key]]
+        if not children:
             return merged
-    return detail
+        if len(children) != 1:
+            raise ValueError("ambiguous order containers")
+        detail = children[0]
+    raise ValueError("order detail nesting too deep")
+
+
+REJECTION_FIELDS = (
+    "reject_reason", "rejected_reason", "fail_reason", "failed_reason",
+    "failure_reason", "error_message", "error_msg", "third_error_msg",
+    "rejectReason", "errorMessage", "reason", "remark", "message", "msg",
+)
+
+
+def _reject_reason(fields):
+    from security_text import redact_sensitive_text
+    for name in REJECTION_FIELDS:
+        value = fields.get(name)
+        if isinstance(value, (str, int)) and not isinstance(value, bool) and str(value).strip():
+            return redact_sensitive_text(value)[:500]
+    for key in ("error", "failure", "reject_info"):
+        nested = fields.get(key)
+        if isinstance(nested, dict):
+            for name in REJECTION_FIELDS:
+                value = nested.get(name)
+                if isinstance(value, str) and value.strip():
+                    return redact_sensitive_text(value)[:500]
+    return None
 
 
 def _coalesce_decimal_string(
@@ -132,10 +165,11 @@ def _coalesce_decimal_string(
 
 def summarize_order_result(place_response: dict, detail: dict | None = None) -> dict:
     fields = _order_fields(detail) if detail else {}
+    placed = _order_fields(place_response) if place_response else {}
     status = normalize_status(
         fields.get("order_status") or fields.get("status")
-        or (place_response or {}).get("order_status")
-        or (place_response or {}).get("status"))
+        or placed.get("order_status")
+        or placed.get("status"))
     filled = _coalesce_decimal_string(
         fields, ("filled_quantity", "filled_qty"))
     filled_number = Decimal(filled) if filled is not None else None
@@ -162,8 +196,7 @@ def summarize_order_result(place_response: dict, detail: dict | None = None) -> 
     fee = _actual_fee(fields)
     if fee is not None:
         out["filled_fee"] = fee
-    reason = (fields.get("reason") or fields.get("message")
-              or fields.get("error_msg") or fields.get("reject_reason"))
+    reason = _reject_reason(fields) or _reject_reason(placed)
     if reason:
         out["reject_reason"] = str(reason)
     return out

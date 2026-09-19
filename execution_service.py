@@ -367,6 +367,10 @@ def _recover_pending_order_intents(cfg, runtime_identity: str,
 
 
 def _persist_summary(intent: dict, summary: dict) -> None:
+    summary = dict(summary)
+    if normalize_status(summary.get("status")) in {"FAILED", "REJECTED"}:
+        summary["terminal_reason"] = "broker order failed: " + str(
+            summary.get("reject_reason") or "reason not supplied by broker")
     _persist(intent["chain_key"], intent["run_id"],
              {**summary, "status": normalize_status(summary.get("status"))})
 
@@ -425,12 +429,14 @@ def _persist_reconcile_failure(intent: dict, exc: Exception) -> dict:
     and the dashboard already renders that table.
     """
     ck, run_id = intent["chain_key"], intent["run_id"]
-    if isinstance(exc, tick_runtime.TickDeadlineExceeded):
+    from webull_io import is_auth_blocked
+    if isinstance(exc, tick_runtime.TickDeadlineExceeded) or is_auth_blocked(exc):
         # No unsuccessful broker query occurred. Preserve the durable status
         # and reconcile budget (particularly FILLED awaiting its late fee).
         current = read_intent(ck, run_id) or intent
         return {"run_id": run_id, "status": current.get("status", "PLACING_UNKNOWN"),
-                "deferred_reason": "tick_deadline", "error": _error_text(exc)}
+                "deferred_reason": "auth_backoff" if is_auth_blocked(exc) else "tick_deadline",
+                "error": _error_text(exc)}
     attempts = int(intent.get("reconcile_attempts", 0) or 0) + 1
     # last_error is overwritten every tick, and by the time a human reads it the
     # useful message ("insufficient buying power") has been buried under the

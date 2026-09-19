@@ -15,6 +15,7 @@ import time
 import traceback
 import uuid
 import tick_runtime
+import auth_circuit
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from datetime import datetime, timezone
@@ -61,6 +62,11 @@ EXECUTION_CATEGORIES = ("US_STOCK", "US_ETF")
 
 class WebullConfigError(ValueError):
     """A deployment value is unsafe or unsupported."""
+
+
+class TokenUnavailableError(WebullConfigError):
+    """Durable token needs operator rotation; use the same bounded auth pause."""
+    error_code = "INVALID_TOKEN"
 
 
 class IncompleteOpenOrdersError(RuntimeError):
@@ -264,6 +270,27 @@ def _http_status(exc: Exception) -> int | None:
 def is_transient_exception(exc: Exception) -> bool:
     code = str(getattr(exc, "error_code", "") or "").upper()
     return _http_status(exc) in _TRANSIENT_HTTP or code in _TRANSIENT_CODES
+
+
+def is_auth_failure(exc: Exception) -> bool:
+    return _http_status(exc) == 401 or str(getattr(exc, "error_code", "")).upper() in {
+        "UNAUTHORIZED", "INVALID_TOKEN", "TOKEN_EXPIRED", "INVALID_CREDENTIALS"}
+
+
+def is_auth_blocked(exc: Exception) -> bool:
+    return isinstance(exc, auth_circuit.AuthCircuitOpen) or is_auth_failure(exc)
+
+
+def auth_circuit_key() -> str:
+    return runtime_identity_fingerprint()[:32]
+
+
+def _record_auth_failure(exc):
+    if is_auth_failure(exc):
+        reset_clients()
+        if tick_runtime.correlation_id() and not getattr(exc, "_lego_auth_recorded", False):
+            auth_circuit.failed(auth_circuit_key())
+            exc._lego_auth_recorded = True
 
 
 def broker_error_details(exc: Exception) -> dict:
@@ -474,6 +501,9 @@ def _write_local_token(token: str, expires, status: str) -> None:
         handle.write(f"{token}\n{expires}\n{status}\n")
 
 
+_HYDRATED_TOKEN = None
+
+
 def hydrate_token_from_secret(secret_client=None) -> dict:
     """Materialize the deployment-bound token secret into the SDK cache.
 
@@ -481,11 +511,10 @@ def hydrate_token_from_secret(secret_client=None) -> dict:
     /tmp on cold start; Secret Manager is the durable source, not that file.
     No payload or account identity is ever returned or logged.
     """
+    global _HYDRATED_TOKEN
     resource = os.environ.get("WEBULL_TOKEN_SECRET", "").strip()
     if not resource:
         return {"configured": False, "hydrated": False}
-    if read_local_token() is not None:
-        return {"configured": True, "hydrated": False, "already_present": True}
     if not resource.startswith("projects/") or "/secrets/" not in resource:
         raise WebullConfigError(
             "WEBULL_TOKEN_SECRET ต้องเป็น Secret Manager resource name")
@@ -508,8 +537,10 @@ def hydrate_token_from_secret(secret_client=None) -> dict:
     lines = text.splitlines()
     if len(lines) != 3 or not lines[0].strip():
         raise WebullConfigError("token secret ต้องเป็น token/expires/status จำนวน 3 บรรทัด")
-    if _expires_datetime(lines[1]) is None or lines[2].strip() != "NORMAL":
-        raise WebullConfigError("token secret expiry/status ไม่ถูกต้อง")
+    expires_at = _expires_datetime(lines[1])
+    if (expires_at is None or expires_at <= datetime.now(timezone.utc)
+            or lines[2].strip() != "NORMAL"):
+        raise TokenUnavailableError("token secret expiry/status ไม่ถูกต้อง")
     path = token_file_path()
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     temporary = f"{path}.{uuid.uuid4().hex}.tmp"
@@ -523,6 +554,8 @@ def hydrate_token_from_secret(secret_client=None) -> dict:
                 os.unlink(temporary)
         except OSError:
             pass
+    _HYDRATED_TOKEN = (os.environ.get("WEBULL_TOKEN_SECRET", "").strip(),
+                       token_file_path(), hashlib.sha256(lines[0].strip().encode()).hexdigest())
     return {"configured": True, "hydrated": True, "resource": resource}
 
 
@@ -650,7 +683,15 @@ def token_health(now: datetime | None = None) -> dict:
             len(supersedable_reasons) == len(info["reasons"]))
         return info
 
-    if info["ephemeral_token_dir"]:
+    local = read_local_token()
+    durable_secret = bool(local and _HYDRATED_TOKEN == (
+        os.environ.get("WEBULL_TOKEN_SECRET", "").strip(), token_file_path(),
+        hashlib.sha256(local["token"].encode()).hexdigest()))
+    info["token_storage"] = "SECRET_MANAGER" if durable_secret else (
+        "EPHEMERAL" if info["ephemeral_token_dir"] else "LOCAL_VOLUME")
+    info["secret_configured"] = bool(os.environ.get("WEBULL_TOKEN_SECRET", "").strip())
+    info["rotation_mode"] = "OPERATOR_SECRET_ROTATION" if durable_secret else "LOCAL_REFRESH"
+    if info["ephemeral_token_dir"] and not durable_secret:
         fail(f"token dir {token_dir()} อยู่บน storage ที่หายเมื่อ instance ถูกรีไซเคิล — "
              "ตั้ง WEBULL_TOKEN_DIR ไปยัง volume ที่คงอยู่ (เช่น GCS FUSE mount)",
              blocks_now=not ephemeral_token_dir_accepted(),
@@ -669,7 +710,7 @@ def token_health(now: datetime | None = None) -> dict:
     days_left = (expires_at - now).total_seconds() / 86400.0
     info["expires_at"] = expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     info["days_left"] = round(days_left, 3)
-    if local["status"] and local["status"] != "NORMAL":
+    if local["status"] != "NORMAL":
         fail(f"token status={local['status']} (ต้องเป็น NORMAL)")
     if days_left <= _refresh_margin_days():
         fail(f"token เหลืออีก {days_left:.2f} วันก่อนหมดอายุ")
@@ -780,8 +821,10 @@ def _bounded_api_class(base):
             left = tick_runtime.remaining()
             if left is not None:
                 usable = left - 1.0
-                request.set_connect_timeout(min(2.0, usable / 2))
-                request.set_read_timeout(min(5.0, usable / 2))
+                request.set_connect_timeout(min(5.0, usable / 2))
+                request.set_read_timeout(min(10.0, usable / 2))
+            if tick_runtime.correlation_id():
+                auth_circuit.guard(auth_circuit_key())
             action = request.get_action_name()
             try:
                 response = super().get_response(request)
@@ -799,6 +842,7 @@ def _bounded_api_class(base):
                 }.get(action)
                 if operation:
                     exc._lego_operation = operation
+                _record_auth_failure(exc)
                 raise
             if action == "/openapi/config" and response.status_code == 200:
                 payload = response.json()
@@ -812,6 +856,9 @@ def _bounded_api_class(base):
                 payload = response.json()
                 if isinstance(payload, dict) and payload.get("status") == "PENDING":
                     raise WebullConfigError("token requires verification outside the scheduled tick")
+            if (tick_runtime.correlation_id() and response.status_code == 200
+                    and action.startswith("/trading/")):
+                auth_circuit.succeeded(auth_circuit_key())
             return response
     return BoundedApiClient
 
@@ -832,37 +879,7 @@ def _sdk_log_level() -> int:
     return getattr(logging, name, logging.INFO)
 
 
-_SECRET_FIELDS = (
-    "x-signature", "signature", "x-access-token", "x-app-key", "app_secret",
-    "app_key_secret", "access_token", "account_id", "webull_account_id",
-    "authorization", "x-app-secret", "app_key", "token", "refresh_token",
-    "account_number", "account_no",
-)
-_SECRET_PATTERN = re.compile(
-    r"(?P<label>%s)(?P<sep>['\"]?(?:\s*[:=]\s*|%%3A|%%3D)"
-    r"(?:['\"]|%%22|%%27)?)(?P<value>[^\"',\s}\]&]+)"
-    % "|".join(re.escape(f) for f in _SECRET_FIELDS), re.IGNORECASE)
-_REDACTED = "<redacted>"
-
-
-def redact_sensitive_text(value) -> str:
-    """Remove credentials/account identity from exceptions and persisted text."""
-    text = str(value)
-    # Redact the complete value before the generic field matcher can consume
-    # only "Bearer" and leave the credential behind.
-    text = re.sub(r"(?i)\b(Bearer|Basic)(?:\s+|%20)[^\s\"',}\]&]+",
-                  lambda m: m.group(1) + " " + _REDACTED, text)
-    text = _SECRET_PATTERN.sub(
-        lambda m: f"{m.group('label')}{m.group('sep')}{_REDACTED}", text)
-    for name in (
-        "WEBULL_APP_KEY",
-        "WEBULL_APP_SECRET",
-        "WEBULL_ACCOUNT_ID",
-    ):
-        secret = os.environ.get(name, "")
-        if len(secret) >= 4:
-            text = text.replace(secret, _REDACTED)
-    return text
+from security_text import redact_sensitive_text
 
 
 class _RedactSecrets(logging.Filter):
@@ -953,6 +970,8 @@ def build_clients():
     """
     global _CLIENTS, _AUTH_PROFILE
     cache_key = _client_identity()
+    if tick_runtime.correlation_id():
+        auth_circuit.guard(auth_circuit_key())
     if _CLIENTS is not None:
         key, built_at, trade, data = _CLIENTS
         if key == cache_key and (time.monotonic() - built_at) < _client_cache_ttl():
@@ -962,17 +981,27 @@ def build_clients():
     from webull.trade.trade_client import TradeClient
     from webull.data.data_client import DataClient
 
-    hydrate_token_from_secret()
+    try:
+        hydrate_token_from_secret()
+    except Exception as exc:
+        reset_clients()
+        _record_auth_failure(exc)
+        raise
     api = _bounded_api_class(ApiClient)(
         os.environ["WEBULL_APP_KEY"], os.environ["WEBULL_APP_SECRET"], "th")
     api.add_endpoint("th", _endpoint())
     api.set_token_dir(token_dir())
     _configure_sdk_stream_logger(api)
-    trade, data = TradeClient(api), DataClient(api)
-    _AUTH_PROFILE = (cache_key, time.monotonic(),
-                     getattr(api, "_lego_token_check_enabled", None))
-    ensure_token_fresh(api)
-    verify_account_access(trade)
+    try:
+        trade, data = TradeClient(api), DataClient(api)
+        _AUTH_PROFILE = (cache_key, time.monotonic(),
+                         getattr(api, "_lego_token_check_enabled", None))
+        ensure_token_fresh(api)
+        verify_account_access(trade)
+    except Exception as exc:
+        reset_clients()
+        _record_auth_failure(exc)
+        raise
     _CLIENTS = (cache_key, time.monotonic(), trade, data)
     return trade, data
 
@@ -1290,25 +1319,16 @@ def validate_place_response(payload, client_order_id: str) -> dict:
 
 def validate_order_detail_identity(payload, *, client_order_id: str,
                                    symbol: str) -> dict:
-    fields = payload
-    if isinstance(fields, list):
-        fields = fields[0] if len(fields) == 1 else None
-    if isinstance(fields, dict):
-        for key in ("data", "items", "orders"):
-            nested = fields.get(key)
-            if isinstance(nested, list) and len(nested) == 1:
-                fields = nested[0]
-                break
-            if isinstance(nested, dict):
-                fields = nested
-                break
-    if not isinstance(fields, dict):
-        raise WebullConfigError("Order detail shape ไม่รู้จัก")
+    from lego_orders import _order_fields
+    try:
+        fields = _order_fields(payload)
+    except ValueError as exc:
+        raise WebullConfigError(str(exc)) from exc
     if str(fields.get("client_order_id") or "") != str(client_order_id):
         raise WebullConfigError("Order detail client_order_id ไม่ตรง intent")
     if str(fields.get("symbol") or "").upper() != symbol.strip().upper():
         raise WebullConfigError("Order detail symbol ไม่ตรง intent")
-    return dict(payload)
+    return dict(payload) if isinstance(payload, dict) else list(payload)
 
 
 def place_market_order(trade_client, order: list[dict]) -> dict:

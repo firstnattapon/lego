@@ -483,6 +483,10 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 "hint": "ต่ออายุด้วย LEGO_DNA_CODE ที่ยาวขึ้น (chain ใหม่) "
                         "หรือหยุด scheduler ของ chain นี้"}, 200
     except Exception as exc:
+        from webull_io import is_auth_blocked
+        if is_auth_blocked(exc):
+            return {"status": "AUTH_BACKOFF", "committed": False,
+                    "pipeline_status": "AUTH_BACKOFF"}, 200
         try:
             db.reference(ERRORS_PATH).push({
                 "error": _error_text(exc, with_type=False),

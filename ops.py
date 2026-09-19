@@ -40,8 +40,15 @@ def binding_command(_args) -> dict:
 def bootstrap_command(args) -> dict:
     token_path = Path(args.token_file).resolve()
     lines = token_path.read_text(encoding="utf-8").splitlines()
-    if len(lines) != 3 or lines[2] != "NORMAL":
+    if len(lines) != 3 or not lines[0].strip() or lines[2] != "NORMAL":
         raise ValueError("token file ต้องเป็น token/expires/NORMAL จำนวน 3 บรรทัด")
+    from datetime import datetime, timezone
+    from webull_io import _expires_datetime
+    expiry = _expires_datetime(lines[1])
+    if expiry is None or expiry <= datetime.now(timezone.utc):
+        raise ValueError("token expiry must be readable and in the future")
+    if not args.secret.startswith("projects/") or "/secrets/" not in args.secret or "/versions/" in args.secret:
+        raise ValueError("secret must be projects/PROJECT/secrets/NAME")
     if not args.apply:
         return {"dry_run": True, "secret": args.secret, "bytes": token_path.stat().st_size}
     from google.cloud import secretmanager

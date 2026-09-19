@@ -6,6 +6,8 @@ from lego_outbox import TERMINAL, normalize_status
 
 
 def business_status(body: dict, http_status: int) -> str:
+    if body.get("pipeline_status") == "AUTH_BACKOFF":
+        return "AUTH_BACKOFF"
     decision = body.get("decision") or {}
     phases = [body.get("recovery") or {}, body.get("dispatch") or {}]
     results = [item for phase in phases for item in phase.get("results", [])]
@@ -38,7 +40,7 @@ def emit_tick(body: dict, code: int) -> None:
     event = {
         "event": "lego_tick_completed", "timestamp": datetime.now(timezone.utc).isoformat(),
         "severity": ("ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED"}
-                     else "WARNING" if health in {"WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
+                     else "WARNING" if health in {"AUTH_BACKOFF", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
                                                   "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW"}
                      else "INFO"),
         "revision": os.environ.get("K_REVISION"),
