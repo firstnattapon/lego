@@ -7,6 +7,7 @@ import time
 import traceback
 import uuid
 import tick_runtime
+import auth_circuit
 from observability import emit_tick
 from datetime import datetime, timedelta, timezone
 
@@ -299,6 +300,18 @@ def lego_tick(request):
     with tick_runtime.tick_scope(identifier):
         try:
             body, code = _run_tick(request)
+            # A lower layer may have preserved an uncertain order while opening
+            # the circuit. Scheduler acknowledges the pause; health remains explicit.
+            if body.get("pipeline_status") not in {"CONFIG_ERROR", "UNTRUSTED_REQUEST_OVERRIDE"} and firebase_admin._apps:
+                from webull_io import auth_circuit_key
+                circuit = auth_circuit.status(auth_circuit_key())
+                if circuit.get("active"):
+                    body["pipeline_status"] = "AUTH_BACKOFF"
+                    body["retry_after"] = circuit.get("retry_after")
+                    code = 200
+        except auth_circuit.AuthCircuitOpen as exc:
+            body, code = {"pipeline_status": "AUTH_BACKOFF",
+                          "retry_after": exc.state.get("retry_after")}, 200
         except tick_runtime.TickDeadlineExceeded as exc:
             body, code = {"pipeline_status": "TICK_DEFERRED", "error": _error_text(exc),
                           "error_type": type(exc).__name__}, 503
@@ -353,6 +366,9 @@ def _run_tick(request):
             "error_type": type(exc).__name__,
         }, 500
 
+    from webull_io import auth_circuit_key
+    auth_circuit.guard(auth_circuit_key())
+
     # Recovery is intentionally first and independent of active/mode. An
     # already-attempted order can move money while the strategy is paused.
     try:
@@ -375,7 +391,8 @@ def _run_tick(request):
     decision, decision_code = decision_service.run_decision(
         request, runtime=runtime, cfg_override=cfg)
     dispatch = None
-    if decision_code < 500 and runtime.allows_new_broker_mutation:
+    if (decision_code < 500 and runtime.allows_new_broker_mutation
+            and decision.get("pipeline_status") != "AUTH_BACKOFF"):
         try:
             # Recovery already queried this unresolved order in this tick. A
             # second query cannot unblock any newer intent and wastes deadline.

@@ -1,0 +1,67 @@
+# Review-only template: substitute PROJECT_ID, REGION, IMAGE_DIGEST and hashes.
+# Build image with functions-framework --target=lego_tick. No deployment occurs here.
+# Use deploy.ps1 for source-based Functions Gen2 deployment and IAM/Scheduler setup.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: lego-tick-prod
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '1'
+        run.googleapis.com/startup-cpu-boost: 'true'
+    spec:
+      serviceAccountName: lego-runtime-prod@PROJECT_ID.iam.gserviceaccount.com
+      containerConcurrency: 1
+      timeoutSeconds: 45
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT_ID/lego/runtime@sha256:IMAGE_DIGEST
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          env:
+            - name: WEBULL_ENV
+              value: PROD
+            - name: WEBULL_TOKEN_DIR
+              value: /tmp/webull_token
+            - name: WEBULL_TOKEN_SECRET
+              value: projects/PROJECT_ID/secrets/webull-token-prod
+            - name: FIREBASE_DB_URL
+              value: https://DATABASE_NAME.REGION.firebasedatabase.app
+            - name: LEGO_MODE
+              value: observe
+            - name: LEGO_ACTIVE
+              value: 'false'
+            - name: LEGO_SYMBOL
+              value: AAPL
+            - name: LEGO_FIX_C
+              value: '3000'
+            - name: LEGO_DIFF
+              value: '25'
+            - name: LEGO_DNA_BUNDLE
+              value: strategy.example.json
+            - name: LEGO_DNA_CLOCK_MODE
+              value: market
+            - name: LEGO_CANDIDATE_HASH
+              value: REPLACE_WITH_VERIFIED_CANDIDATE_HASH
+            - name: LEGO_RELEASE_AUTHORIZATION
+              value: ''
+            - name: WEBULL_ACCOUNT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: webull-account-id-prod
+                  key: latest
+            - name: WEBULL_APP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webull-app-key-prod
+                  key: latest
+            - name: WEBULL_APP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: webull-app-secret-prod
+                  key: latest

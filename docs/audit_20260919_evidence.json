@@ -1,0 +1,66 @@
+{
+  "input_sha256": {
+    "logs": "00a13d4926019be2fd5e69defdc18397d40fcfee8c730a40d05b9ae84ebf4274",
+    "database": "6e99f6e4f538ccf66d67cb1a3725accdeec227d31581f02a1a6e18827504aafd"
+  },
+  "log_records": 1460,
+  "tick_events": 400,
+  "first_log_utc": "2026-09-18T13:25:04.829635Z",
+  "last_log_utc": "2026-09-18T20:04:06.077599Z",
+  "log_severity": {
+    "INFO": 138,
+    "UNSPECIFIED": 660,
+    "ERROR": 662
+  },
+  "error_nodes": 330,
+  "unauthorized_error_nodes": 325,
+  "error_types": {
+    "ServerException": 325,
+    "ClientException": 5
+  },
+  "committed_rows": 4,
+  "observed_holdings": [
+    181.0
+  ],
+  "order_statuses": {
+    "SUPPRESSED_STATE_CHANGED": 2,
+    "FAILED": 2
+  },
+  "failed_orders_missing_reason": 2,
+  "persisted_equations_pass": true,
+  "equation_checks": [
+    {
+      "id": "E1",
+      "passed": true
+    },
+    {
+      "id": "E2",
+      "passed": true
+    },
+    {
+      "id": "E3",
+      "passed": true
+    },
+    {
+      "id": "E4",
+      "passed": true
+    },
+    {
+      "id": "E5",
+      "passed": true
+    },
+    {
+      "id": "E6",
+      "passed": true
+    },
+    {
+      "id": "E7",
+      "passed": true
+    },
+    {
+      "id": "E8",
+      "passed": true
+    }
+  ],
+  "scope": "Supplied historical snapshots only; not a live broker reconciliation or live approval"
+}
