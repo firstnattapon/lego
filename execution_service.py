@@ -841,8 +841,9 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
 
     A MARKET order may fill away from either quote, so tiny moves are expected.
     The guard nevertheless refuses a direction change, a stale intent that would
-    now rebalance past the target, or a quote beyond the configured drift/age
-    budget.  It never rewrites the committed row or silently changes quantity.
+    now overshoot by more than the strategy's economic deadband, or a quote
+    beyond the configured drift/age budget. It never rewrites the committed row
+    or silently changes quantity.
     """
     now_utc = now_utc or datetime.now(UTC)
     if now_utc.tzinfo is None:
@@ -905,6 +906,16 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
     intent_side = str(intent.get("side") or "").strip().upper()
     quantum = 10.0 ** (-cfg.decimal_precision)
     quantity_tolerance = max(1e-12, quantum / 2.0)
+    # Subtract in decimal space before valuing the excess: binary float
+    # subtraction can turn an exact budget boundary into a false rejection.
+    dispatch_safe_quantity = current.quantity if current.acted else 0.0
+    overshoot_quantity = max(
+        Decimal("0"),
+        Decimal(str(requested_quantity)) - Decimal(str(dispatch_safe_quantity)))
+    dispatch_price = Decimal(str(fresh_price))
+    overshoot_notional_usd = overshoot_quantity * dispatch_price
+    rounding_notional_usd = Decimal(str(quantity_tolerance)) * dispatch_price
+    max_overshoot_notional_usd = Decimal(str(cfg.diff)) + rounding_notional_usd
 
     reasons: list[str] = []
     if (not original.acted or original.side != intent_side
@@ -912,10 +923,10 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
         reasons.append("intent_decision_mismatch")
     if not current.acted or current.side != intent_side:
         reasons.append("side_changed_or_pass")
-    # An older, smaller quantity merely under-rebalances.  A larger one crosses
-    # the current constant-value target, so it is not the committed strategy any
-    # more and must wait for a new slot instead of being resized silently.
-    if current.acted and requested_quantity > current.quantity + quantity_tolerance:
+    # Keep the committed quantity when its excess value fits the same USD
+    # deadband used by the strategy. A material excess still needs a new slot.
+    # This allowance never applies to provenance or direction checks above.
+    if current.acted and overshoot_notional_usd > max_overshoot_notional_usd:
         reasons.append("quantity_would_overshoot")
     if price_drift_bps > max_price_drift_bps:
         reasons.append("price_drift_limit")
@@ -944,7 +955,12 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
         "intent_side": intent_side,
         "dispatch_side": current.side if current.acted else "PASS",
         "intent_quantity": requested_quantity,
-        "dispatch_safe_quantity": current.quantity if current.acted else 0.0,
+        "dispatch_safe_quantity": dispatch_safe_quantity,
+        "overshoot_quantity": float(overshoot_quantity),
+        "overshoot_notional_usd": float(overshoot_notional_usd),
+        "max_overshoot_notional_usd": float(max_overshoot_notional_usd),
+        "quantity_tolerance": quantity_tolerance,
+        "rounding_notional_usd": float(rounding_notional_usd),
     }
 
 
@@ -1099,7 +1115,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         "environment": env, "status": "PENDING_DISPATCH", "realized": False,
         "created_at": intent["created_at"],
         "audit_revision": int(intent.get("audit_revision", 0)),
-        "dispatch_quote_check": quote_safety,
+        "dispatch_quote_check": {**quote_safety, "dispatch_check_phase": "pre_preview"},
     })
     try:
         # Building the payload is part of the gate: a quantity that cannot be
