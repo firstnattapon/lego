@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 import execution_service as execution
+import lego_outbox
 import main
 from config import load_runtime_config
 from conftest import FAKE_DB, fake_trade_client
@@ -33,6 +34,9 @@ def isolate(monkeypatch):
             return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
 
     monkeypatch.setattr(execution, "datetime", FixedNow)
+    # Lease claims and dispatch must share a clock. Otherwise a historical
+    # fixture expires against wall time before the real fencing code runs.
+    monkeypatch.setattr(lego_outbox, "datetime", FixedNow)
 
 
 def intent_for(cfg=CFG, price=27.68, holdings=181):
