@@ -43,6 +43,7 @@ readonly TOKEN_SECRET_RESOURCE_OVERRIDE="${WEBULL_TOKEN_SECRET_OVERRIDE:-}"
 readonly SMOKE_TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-120}"
 readonly LEGO_SYMBOL_OVERRIDE="${LEGO_SYMBOL_OVERRIDE:-AAPL}"
 readonly LEGO_FIX_C_OVERRIDE="${LEGO_FIX_C_OVERRIDE:-3000}"
+readonly LEGO_ALLOW_FRACTIONAL_OVERRIDE="${LEGO_ALLOW_FRACTIONAL_OVERRIDE:-}"
 readonly LEGO_DIFF_OVERRIDE="${LEGO_DIFF_OVERRIDE:-25}"
 readonly LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-strategy.example.json}"
 readonly LEGO_SCHEDULE_OVERRIDE="${LEGO_SCHEDULE_OVERRIDE:-}"
@@ -193,6 +194,9 @@ require_command git
 [[ "${MODE}" == "observe" || "${MODE}" == "trade" ]] || \
     fail "LEGO_MODE_OVERRIDE ต้องเป็น observe หรือ trade"
 require_boolean "LEGO_ACTIVE_OVERRIDE" "${ACTIVE}"
+if [[ -n "${LEGO_ALLOW_FRACTIONAL_OVERRIDE}" ]]; then
+    require_boolean "LEGO_ALLOW_FRACTIONAL_OVERRIDE" "${LEGO_ALLOW_FRACTIONAL_OVERRIDE}"
+fi
 [[ "${SMOKE_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || \
     fail "SMOKE_TIMEOUT_SECONDS ต้องเป็นจำนวนเต็มบวก"
 (( SMOKE_TIMEOUT_SECONDS >= 30 )) || \
@@ -452,6 +456,7 @@ EXISTING_FUNCTION_JSON="$(
 
 SYMBOL="$(resolve_value "${LEGO_SYMBOL_OVERRIDE}" "$(read_existing_env LEGO_SYMBOL)" "AAPL")"
 FIX_C="$(resolve_value "${LEGO_FIX_C_OVERRIDE}" "$(read_existing_env LEGO_FIX_C)" "3000")"
+ALLOW_FRACTIONAL="$(resolve_value "${LEGO_ALLOW_FRACTIONAL_OVERRIDE}" "$(read_existing_env LEGO_ALLOW_FRACTIONAL)" "true")"
 DIFF="$(resolve_value "${LEGO_DIFF_OVERRIDE}" "$(read_existing_env LEGO_DIFF)" "25")"
 DNA_BUNDLE="$(resolve_value "${LEGO_DNA_BUNDLE_OVERRIDE}" "$(read_existing_env LEGO_DNA_BUNDLE)" "strategy.example.json")"
 
@@ -478,6 +483,7 @@ PY
 
 reject_comma "LEGO_SYMBOL" "${SYMBOL}"
 reject_comma "LEGO_FIX_C" "${FIX_C}"
+require_boolean "LEGO_ALLOW_FRACTIONAL" "${ALLOW_FRACTIONAL}"
 reject_comma "LEGO_DIFF" "${DIFF}"
 reject_comma "LEGO_DNA_BUNDLE" "${DNA_BUNDLE}"
 [[ -f "${DNA_BUNDLE}" ]] || fail "ไม่พบ DNA bundle '${DNA_BUNDLE}'"
@@ -589,6 +595,7 @@ fi
 
 echo "Symbol         : ${SYMBOL}"
 echo "Principal      : ${FIX_C}"
+echo "Fractional     : ${ALLOW_FRACTIONAL}"
 echo "Diff           : ${DIFF}"
 echo "DNA bundle     : ${DNA_BUNDLE}"
 echo "DNA report     : ${DNA_REPORT}"
@@ -616,7 +623,7 @@ step "8/10 DEPLOY DATABASE RULES + CLOUD FUNCTION GEN2"
     --project="${PROJECT_ID}" \
     --non-interactive
 
-ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=${SYMBOL},LEGO_FIX_C=${FIX_C},LEGO_DIFF=${DIFF},LEGO_DNA_BUNDLE=${DNA_BUNDLE},LEGO_MODE=${MODE},LEGO_ACTIVE=${ACTIVE},LEGO_CANDIDATE_HASH=${CANDIDATE_HASH},LEGO_RELEASE_AUTHORIZATION=${RELEASE_AUTHORIZATION_OVERRIDE},WEBULL_TOKEN_DIR=/tmp/webull_token,LEGO_DNA_CLOCK_MODE=market"
+ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=${SYMBOL},LEGO_FIX_C=${FIX_C},LEGO_ALLOW_FRACTIONAL=${ALLOW_FRACTIONAL},LEGO_DIFF=${DIFF},LEGO_DNA_BUNDLE=${DNA_BUNDLE},LEGO_MODE=${MODE},LEGO_ACTIVE=${ACTIVE},LEGO_CANDIDATE_HASH=${CANDIDATE_HASH},LEGO_RELEASE_AUTHORIZATION=${RELEASE_AUTHORIZATION_OVERRIDE},WEBULL_TOKEN_DIR=/tmp/webull_token,LEGO_DNA_CLOCK_MODE=market"
 
 if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
     ENV_VARS="${ENV_VARS},WEBULL_TOKEN_SECRET=${TOKEN_SECRET_RESOURCE}"
@@ -799,6 +806,7 @@ echo "Scheduler SA : ${SCHEDULER_SA}"
 echo "Build SA     : ${BUILD_SA}"
 echo "LEGO_SYMBOL  : ${SYMBOL}"
 echo "LEGO_FIX_C   : ${FIX_C}"
+echo "LEGO_ALLOW_FRACTIONAL: ${ALLOW_FRACTIONAL}"
 echo "LEGO_MODE    : ${MODE}"
 echo "LEGO_ACTIVE  : ${ACTIVE}"
 echo "Smoke        : ${SMOKE_SUMMARY}"
