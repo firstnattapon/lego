@@ -162,7 +162,9 @@ def dispatch_fixture(monkeypatch, *, environment="UAT", final_price=27.6843,
         preview={"estimated_cost": "4990.48", "estimated_transaction_fee": "1"},
         place={"client_order_id": run_id, "order_id": "test-broker-order"})
     monkeypatch.setattr(execution, "_poll_order_status",
-                        lambda *_: {"status": "SUBMITTED", "filled_quantity": 0})
+                        lambda *_, **__: {"status": "SUBMITTED", "filled_quantity": 0})
+    monkeypatch.setattr(execution, "token_health", lambda: {
+        "status": "NORMAL", "expires_at": (NOW + timedelta(days=14)).isoformat()})
     return runtime, intent, claim, client, committed
 
 

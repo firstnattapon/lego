@@ -76,7 +76,7 @@ DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS = 360.0
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
 RECONCILE_STATUSES = {
-    "PLACING_UNKNOWN", "PLACING", "SUBMITTED", "UNKNOWN",
+    "PLACING_UNKNOWN", "PLACING", "PENDING", "SUBMITTED", "UNKNOWN",
     "PARTIAL_FILLED", "PARTIALLY_FILLED", AWAITING_FILL_CONFIRMATION,
     AWAITING_BROKER_FEE,
 }
@@ -422,6 +422,8 @@ def _run_tick(request):
             archive = {"status": "ARCHIVE_DEFERRED", "error": _error_text(exc)}
 
     dispatch_error = bool(dispatch and dispatch.get("error"))
+    import broker_circuit
+    circuit = broker_circuit.status(runtime_identity, cfg.symbol)
     return {
         "pipeline_status": ("TICK_DISPATCH_ERROR" if dispatch_error else
                             "TICK_OK" if decision_code < 400 else "TICK_DECISION_ERROR"),
@@ -430,6 +432,7 @@ def _run_tick(request):
         "mode": runtime.operator.mode,
         "active": runtime.operator.active,
         "new_mutations_authorized": runtime.allows_new_broker_mutation,
+        "broker_reject_halted": bool(circuit.get("halted")),
         "recovery": recovery,
         "decision": decision,
         "dispatch": dispatch,

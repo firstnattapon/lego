@@ -36,6 +36,9 @@ spec:
               value: observe
             - name: LEGO_ACTIVE
               value: 'false'
+            # Start validation with whole shares; explicitly review any change.
+            - name: LEGO_ALLOW_FRACTIONAL
+              value: 'false'
             - name: LEGO_SYMBOL
               value: AAPL
             - name: LEGO_FIX_C

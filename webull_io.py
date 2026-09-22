@@ -710,11 +710,36 @@ def token_health(now: datetime | None = None) -> dict:
     days_left = (expires_at - now).total_seconds() / 86400.0
     info["expires_at"] = expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     info["days_left"] = round(days_left, 3)
+    info["expiry_warning"] = days_left <= 7
     if local["status"] != "NORMAL":
         fail(f"token status={local['status']} (ต้องเป็น NORMAL)")
     if days_left <= _refresh_margin_days():
         fail(f"token เหลืออีก {days_left:.2f} วันก่อนหมดอายุ")
     return seal()
+
+
+def new_order_token_block(health: dict, environment: str,
+                          now: datetime | None = None) -> str | None:
+    """Hard PROD floor for new orders only; never prevents order reconciliation.
+
+    The existing token readiness policy can be stricter (default three days).
+    Compare exact expiry, not the rounded days_left display value.
+    """
+    if environment != "PROD" or health.get("token_check_enabled") is False:
+        return None
+    try:
+        expiry = datetime.fromisoformat(str(health.get("expires_at")).replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            expiry = None
+    except (TypeError, ValueError):
+        expiry = None
+    if expiry is None:
+        return "token expiry unavailable; new production orders blocked"
+    if health.get("status") != "NORMAL":
+        return "token is not NORMAL; new production orders blocked"
+    if (expiry - (now or datetime.now(timezone.utc))).total_seconds() < 86400:
+        return "token expiry < 24h; rotate token before new production orders"
+    return None
 
 
 def ensure_token_fresh(api_client) -> dict:

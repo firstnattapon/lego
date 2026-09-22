@@ -1,0 +1,55 @@
+{
+  "rows": 15,
+  "orders": 15,
+  "row_statuses": {
+    "READY_BUY": 15
+  },
+  "order_statuses": {
+    "FAILED": 14,
+    "NOT_PLACED": 1
+  },
+  "place_attempted": 14,
+  "failed_orders": 14,
+  "failed_explicit_zero_fill": 14,
+  "failed_reason_missing": 14,
+  "raw_detail_available": 0,
+  "fractional_quantities": 15,
+  "quantity_range": [
+    "13.30671",
+    "13.40967"
+  ],
+  "holding_values": [
+    "0"
+  ],
+  "step_range": [
+    245,
+    259
+  ],
+  "created_at_range": [
+    "2026-09-21T16:29:36Z",
+    "2026-09-21T19:45:16Z"
+  ],
+  "order_http_errors": {
+    "417": 1
+  },
+  "log_entries": 502,
+  "log_severities": {
+    "NOTICE": 2,
+    "INFO": 489,
+    "DEFAULT": 10,
+    "ERROR": 1
+  },
+  "tick_events": 243,
+  "tick_business_statuses": {
+    "ROW_COMMITTED": 15,
+    "SLOT_CONSUMED": 196,
+    "ERROR": 1,
+    "MARKET_CLOSED": 31
+  },
+  "live_readiness": "NOT_PROVEN",
+  "broker_rejection_cause": "UNDETERMINED_WITHOUT_BROKER_DETAIL_OR_SUPPORT",
+  "source_sha256": {
+    "database": "0a2a14c8c02e60903ec9b07ab39c4229943978d21600914a628b758a8079c80f",
+    "logs": "d64905a9c3b6057c01d10a97775ba9038eb8593e5266f1f42419625a09385230"
+  }
+}

@@ -170,8 +170,11 @@ class DeploymentProfile:
     account_id: str
     candidate_hash: str
     release_authorization: str
+    allow_fractional: bool = True
 
     def __post_init__(self) -> None:
+        if type(self.allow_fractional) is not bool:
+            raise ConfigurationError("LEGO_ALLOW_FRACTIONAL must be boolean")
         environment = self.environment.strip().upper()
         if environment == "PRODUCTION":
             environment = "PROD"
@@ -266,6 +269,8 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         account_id=env.get("WEBULL_ACCOUNT_ID", ""),
         candidate_hash=env.get("LEGO_CANDIDATE_HASH", ""),
         release_authorization=env.get("LEGO_RELEASE_AUTHORIZATION", ""),
+        allow_fractional=_bool(env.get("LEGO_ALLOW_FRACTIONAL", "true"),
+                               name="LEGO_ALLOW_FRACTIONAL"),
     )
     return RuntimeConfig(operator=operator, deployment=deployment)
 

@@ -117,6 +117,7 @@ REJECTION_FIELDS = (
     "reject_reason", "rejected_reason", "fail_reason", "failed_reason",
     "failure_reason", "error_message", "error_msg", "third_error_msg",
     "rejectReason", "errorMessage", "reason", "remark", "message", "msg",
+    "order_status_desc", "status_description",
 )
 
 
@@ -187,6 +188,14 @@ def summarize_order_result(place_response: dict, detail: dict | None = None) -> 
         "realized": realized,
         "note": "realized ใช้เฉพาะ fill จริง; model ledger แยกจาก broker ledger",
     }
+    import re
+    for target, aliases in (("broker_order_id", ("order_id",)),
+                             ("broker_request_id", ("request_id", "requestId"))):
+        for name in aliases:
+            value = fields.get(name) or placed.get(name)
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value):
+                out[target] = value
+                break
     if filled is not None:
         out["filled_quantity"] = filled
     price = _coalesce_decimal_string(
@@ -199,6 +208,23 @@ def summarize_order_result(place_response: dict, detail: dict | None = None) -> 
     reason = _reject_reason(fields) or _reject_reason(placed)
     if reason:
         out["reject_reason"] = str(reason)
+    if status in {"FAILED", "REJECTED"}:
+        from security_text import broker_diagnostic_json
+        out["broker_raw_detail"] = broker_diagnostic_json({
+            "place_response": place_response, "detail": detail})
+        out["broker_reason_missing"] = not bool(reason)
+        from security_text import redact_sensitive_text
+        containers = [fields] + [fields[key] for key in ("error", "failure", "reject_info")
+                                  if isinstance(fields.get(key), dict)]
+        for container in containers:
+            for name in ("error_code", "reject_code", "code"):
+                code = container.get(name)
+                if (code is not None and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", str(code))
+                        and redact_sensitive_text(code) == str(code)):
+                    out["broker_reject_code"] = str(code)
+                    break
+            if "broker_reject_code" in out:
+                break
     return out
 
 

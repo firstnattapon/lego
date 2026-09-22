@@ -920,6 +920,7 @@ def mark_order_intent_materialized(cfg: Config, run_id: str, *,
 
 
 _AUDIT_SECRET_FIELDS = {
+    "broker_raw_detail",
     "app_key", "app_secret", "access_token", "x-signature",
     "x-access-token", "x-app-key", "account_id", "webull_account_id",
     "authorization",

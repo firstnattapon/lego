@@ -79,7 +79,7 @@ DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS = 360.0
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
 RECONCILE_STATUSES = {
-    "PLACING_UNKNOWN", "PLACING", "SUBMITTED", "UNKNOWN",
+    "PLACING_UNKNOWN", "PLACING", "PENDING", "SUBMITTED", "UNKNOWN",
     "PARTIAL_FILLED", "PARTIALLY_FILLED", AWAITING_FILL_CONFIRMATION,
 }
 # These statuses leave either the broker result or a strategy ledger requiring
@@ -223,6 +223,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 quantity_increment=float(capability.quantity_increment),
                 decimal_precision=precision,
             )
+            if not runtime.deployment.allow_fractional:
+                # Quantize in the engine before row/intent commit. Never alter
+                # an already committed order at the broker boundary.
+                cfg = replace(cfg, quantity_increment=max(1, capability.lot_size),
+                              decimal_precision=0)
         # Before the model is touched: if this revision's accounting is behind
         # the chain's, nothing it computes afterwards is worth writing. Existing
         # execution ledgers are retained; only pre-execution ledgers reset.
@@ -263,6 +268,10 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         # cases it cannot fix by itself — an ephemeral token dir, a token already
         # gone — are visible days before they stop the chain.
         health = token_health()
+        if health.get("expiry_warning"):
+            import alerting
+            alerting.notify("TOKEN_EXPIRY_WARNING", runtime_identity,
+                            symbol=cfg.symbol, expires_at=health.get("expires_at"))
         token_warning = None if health["ok"] else "; ".join(health["reasons"])
         if token_warning:
             _record_warning("webull_token", token_warning, {
@@ -311,6 +320,17 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         preflight = None
         pending_intent = None
 
+        import broker_circuit
+        circuit = broker_circuit.status(runtime_identity, cfg.symbol)
+        if auto and circuit.get("halted"):
+            auto = False
+            outbox_blocked = broker_circuit.HALT
+            _record_warning(broker_circuit.HALT, "broker rejects require operator review",
+                            {"symbol": cfg.symbol, "halt_id": circuit.get("halt_id")})
+            import alerting
+            alerting.notify(broker_circuit.HALT, runtime_identity + cfg.symbol,
+                            symbol=cfg.symbol, count=circuit.get("consecutive_broker_rejects"))
+
         # Evaluate a candidate before the state transaction so the exact payload
         # can be stored in that same transaction.  row_durable=True here means
         # "activate only if commit succeeds"; no broker/outbox write happens yet.
@@ -328,6 +348,8 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                     cfg, row, snapshot, slot, decision_time,
                     typed_v2=runtime is not None)
                 pending_intent["runtime_identity_fingerprint"] = runtime_identity
+                if runtime is not None:
+                    pending_intent["allow_fractional"] = runtime.deployment.allow_fractional
                 if capability is not None:
                     pending_intent["instrument_capability"] = {
                         "symbol": str(capability.symbol),
@@ -409,7 +431,8 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             out["outbox_skipped"] = outbox_skipped
         if outbox_blocked:
             out["outbox_blocked"] = outbox_blocked
-            out["outbox_blocked_checks"] = preflight["blocked_by"]
+            out["outbox_blocked_checks"] = ((preflight or {}).get("blocked_by")
+                                             or [outbox_blocked])
         # The deployed typed runtime reports headroom on every slot for alerts.
         # Keep the legacy response shape for non-deployed migration consumers.
         if runtime is not None or remaining <= int(

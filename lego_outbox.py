@@ -146,6 +146,8 @@ def fence_chain_dispatch(chain_key: str, run_id: str, worker_id: str,
                 # that uncertainty merely because it acquired the owner lease.
                 or (inflight and inflight != str(run_id))):
             return doc
+        if not inflight and (doc.get("broker_reject_circuit") or {}).get("halted"):
+            return doc
         doc.update({
             "lease_until": lease_text,
             "place_fence": fence,
