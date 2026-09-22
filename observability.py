@@ -19,6 +19,15 @@ def business_status(body: dict, http_status: int) -> str:
     if any(item.get("needs_manual_check") for item in results) or any(
             phase.get("dispatch_blocked") for phase in phases):
         return "MANUAL_RECONCILIATION_REQUIRED"
+    if (decision.get("outbox_blocked") == "BROKER_REJECT_HALT"
+            or any(item.get("broker_reject_halted") for item in results)
+            or body.get("broker_reject_halted")):
+        return "BROKER_REJECT_HALT"
+    if any(normalize_status(item.get("broker_status") or item.get("status"))
+           in {"FAILED", "REJECTED"} for item in results):
+        return "BROKER_ORDER_FAILED"
+    if any(item.get("token_preflight_blocked") for item in results):
+        return "TOKEN_PREFLIGHT_BLOCKED"
     if any(item.get("status") == "AWAITING_BROKER_FEE" for item in results):
         return "WAITING_BROKER_FEE"
     if any(normalize_status(item.get("status")) not in TERMINAL for item in results):
@@ -39,7 +48,8 @@ def emit_tick(body: dict, code: int) -> None:
     decision = body.get("decision") or {}
     event = {
         "event": "lego_tick_completed", "timestamp": datetime.now(timezone.utc).isoformat(),
-        "severity": ("ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED"}
+        "severity": ("ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED",
+                                           "BROKER_REJECT_HALT", "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED"}
                      else "WARNING" if health in {"AUTH_BACKOFF", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
                                                   "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW"}
                      else "INFO"),
@@ -77,7 +87,9 @@ def emit_tick(body: dict, code: int) -> None:
                                         **({"broker_error": details} if details else {})})
             event["execution"].append({"phase": phase_name, **{
                 key: item.get(key) for key in ("run_id", "status", "broker_status", "broker_fee_status",
-                                             "cashflow_finalized", "fee_overdue", "fee_pending_age_seconds")}})
+                                             "cashflow_finalized", "fee_overdue", "fee_pending_age_seconds",
+                                             "broker_reason_missing", "broker_reject_code",
+                                             "broker_reject_halted", "token_preflight_blocked")}})
     print(json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
 
 

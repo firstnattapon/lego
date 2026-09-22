@@ -1,6 +1,8 @@
 # LEGO PRINCIPAL v2
 
 Accounting update: [initial-funding baseline and audit notes](docs/FUNDING_BASELINE_20260916.md).
+Broker rejection audit, safety halt and operator runbook:
+[22 September 2026 audit](docs/AUDIT_20260922_TH.md).
 The v3 accounting writer needs the matching reader update; existing data requires
 reviewed reconciliation. Source tests do not constitute production approval.
 

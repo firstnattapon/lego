@@ -61,6 +61,10 @@
     "webull_lego_errors": {
       ".read": false,
       ".write": false
+    },
+    "webull_lego_alert_delivery": {
+      ".read": false,
+      ".write": false
     }
   }
 }

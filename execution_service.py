@@ -8,6 +8,7 @@ import os
 import time
 import traceback
 import uuid
+import broker_circuit
 from datetime import datetime, timedelta, timezone
 
 import firebase_admin
@@ -88,7 +89,7 @@ UAT_QUOTE_DELAY_SECONDS = 900.0
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
 RECONCILE_STATUSES = {
-    "PLACING_UNKNOWN", "PLACING", "SUBMITTED", "UNKNOWN",
+    "PLACING_UNKNOWN", "PLACING", "PENDING", "SUBMITTED", "UNKNOWN",
     "PARTIAL_FILLED", "PARTIALLY_FILLED", AWAITING_FILL_CONFIRMATION,
     AWAITING_BROKER_FEE, REALIZED_MATCHING_PENDING,
 }
@@ -154,17 +155,30 @@ def _error_text(exc: Exception, *, with_type: bool = True) -> str:
     return f"{type(exc).__name__}: {text}" if with_type else text
 
 
-def _poll_order_status(trade_client, client_order_id: str, place_res: dict) -> dict:
+def _execution_summary(place_response, detail):
+    summary = summarize_order_result(place_response, detail)
+    from lego_orders import REALIZED_STATUSES
+    if summary["status"] not in (TERMINAL_STATUSES | REALIZED_STATUSES |
+                                  {"PENDING", "SUBMITTED"}):
+        summary["status"] = "UNKNOWN"
+    return summary
+
+
+def _poll_order_status(trade_client, client_order_id: str, place_res: dict,
+                       expected_symbol: str | None = None) -> dict:
     detail = None
     for i in range(ORDER_POLL_ATTEMPTS):
         if i:
             tick_runtime.require_budget(ORDER_POLL_DELAY_S + 2.0)
             time.sleep(ORDER_POLL_DELAY_S)
         detail = fetch_order_detail(trade_client, client_order_id)
-        summary = summarize_order_result(place_res, detail)
+        if expected_symbol is not None:
+            validate_order_detail_identity(detail, client_order_id=client_order_id,
+                                           symbol=expected_symbol)
+        summary = _execution_summary(place_res, detail)
         if normalize_status(summary.get("status")) in TERMINAL_STATUSES:
             return summary
-    return summarize_order_result(place_res, detail)
+    return _execution_summary(place_res, detail)
 
 
 def _record_warning(kind: str, message: str, extra: dict | None = None) -> None:
@@ -295,6 +309,7 @@ def _mirror_order_audit(chain_key_: str, run_id: str, fields: dict) -> None:
 _AUDIT_INTERNAL_FIELDS = {
     "audit_pending", "claim_owner", "claim_until", "claim_generation",
     "place_fence",
+    "broker_raw_detail",
 }
 
 
@@ -687,6 +702,19 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
     matched broker legs, and the 17-column model ledger this function finalizes
     from the same confirmed fill. A decision never reaches either one.
     """
+    # Diagnostics stay private. Record the breaker while this run still owns
+    # the money fence, BEFORE any terminal outbox write can remove recovery.
+    summary = dict(summary)
+    raw = summary.pop("broker_raw_detail", None)
+    if raw is not None:
+        update_intent(intent["chain_key"], intent["run_id"], {"broker_raw_detail": raw})
+    circuit = broker_circuit.record_outcome(intent, summary)
+    if circuit.get("halted"):
+        summary["broker_reject_halted"] = True
+        import alerting
+        alerting.notify(broker_circuit.HALT,
+                        str(intent.get("runtime_identity_fingerprint")) + cfg.symbol,
+                        symbol=cfg.symbol, count=circuit.get("consecutive_broker_rejects"))
     try:
         summary = _apply_realized_if_available(intent, summary)
     except RealizedMathError as exc:
@@ -1008,7 +1036,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             if runtime is not None:
                 validate_order_detail_identity(
                     detail, client_order_id=run_id, symbol=cfg.symbol)
-            summary = summarize_order_result({}, detail)
+            summary = _execution_summary({}, detail)
             if normalize_status(summary.get("status")) == "UNKNOWN":
                 raise RuntimeError("broker order detail still UNKNOWN")
         except Exception as exc:
@@ -1020,6 +1048,24 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
 
     if status != "PENDING_DISPATCH":
         return {"run_id": run_id, "status": status}
+
+    identity = intent.get("runtime_identity_fingerprint") or runtime_identity_fingerprint()
+    circuit = broker_circuit.status(identity, cfg.symbol)
+    if circuit.get("halted"):
+        return _stop(ck, run_id, "NOT_PLACED", {
+            "terminal_reason": broker_circuit.HALT, "broker_reject_halted": True},
+            broker_reject_halted=True)
+    if runtime is not None:
+        from webull_io import new_order_token_block
+        token_block = new_order_token_block(token_health(), runtime.deployment.environment)
+        if token_block:
+            return _stop(ck, run_id, "NOT_PLACED", {
+                "terminal_reason": token_block, "token_preflight_blocked": True},
+                token_preflight_blocked=True)
+        if (not runtime.deployment.allow_fractional
+                and is_fractional_quantity(intent["quantity"])):
+            return _stop(ck, run_id, "NOT_PLACED", {
+                "terminal_reason": "LEGO_ALLOW_FRACTIONAL=false blocks committed fractional intent"})
 
     # Pause/observe stops only an order that has not crossed the irreversible
     # boundary. Attempted/unknown/submitted orders take the reconcile branch
@@ -1310,6 +1356,12 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
     if tick_runtime.remaining() is not None and tick_runtime.remaining() < 10.0:
         return _stop(ck, run_id, "NOT_PLACED", {
             "terminal_reason": "tick budget exhausted before Place; no broker attempt"})
+    if runtime is not None:
+        token_block = new_order_token_block(token_health(), runtime.deployment.environment)
+        if token_block:
+            return _stop(ck, run_id, "NOT_PLACED", {
+                "terminal_reason": token_block, "token_preflight_blocked": True},
+                token_preflight_blocked=True)
     started = begin_place_attempt(
         ck, run_id, str(intent.get("claim_owner") or ""),
         int(intent.get("claim_generation", 0) or 0))
@@ -1322,7 +1374,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         place_res = place_market_order(trade_client, order)
         if runtime is not None:
             validate_place_response(place_res, run_id)
-        summary = _poll_order_status(trade_client, run_id, place_res)
+        summary = _poll_order_status(trade_client, run_id, place_res,
+                                     expected_symbol=cfg.symbol if runtime is not None else None)
     except Exception as exc:
         # Same open question as a failed reconcile — "does this order exist?" —
         # so it draws on the same bounded budget.
@@ -1422,6 +1475,8 @@ def _run_order_worker(cfg, limit: int = 3,
                 }
             inflight_status = normalize_status(inflight.get("status"))
             if _chain_fence_can_clear(inflight):
+                # Repair an older terminal record before releasing its fence.
+                broker_circuit.record_outcome(inflight, inflight)
                 if not clear_chain_dispatch_inflight(
                         dispatch_scope, inflight_run_id, worker_id,
                         str(dispatch_claim.get("claim_token") or "")):

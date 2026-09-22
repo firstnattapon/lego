@@ -60,7 +60,10 @@ def failed(key):
                 "last_at": stamp, "retry_after": now + delay,
                 "probe_until": 0, "probe_owner": ""}
 
-    return _reference(key).transaction(record)
+    result = _reference(key).transaction(record)
+    import alerting
+    alerting.notify("AUTH_BACKOFF", key, count=result.get("consecutive_failures"))
+    return result
 
 
 def succeeded(key):

@@ -25,6 +25,7 @@ def check_command(_args) -> dict:
         "symbol": runtime.operator.symbol,
         "mode": runtime.operator.mode,
         "active": runtime.operator.active,
+        "allow_fractional": runtime.deployment.allow_fractional,
         "config_hash": runtime.operator.config_hash,
         "account_fingerprint": runtime.deployment.account_fingerprint,
         "release_authorized": runtime.deployment.release_is_authorized,
@@ -83,6 +84,8 @@ def status_command(_args) -> dict:
         "active_intent_id": active_id,
         "execution_status": intent.get("status"),
         "broker_status": intent.get("broker_status"),
+        "broker_reject_circuit": fence.get("broker_reject_circuit") or {},
+        "allow_fractional": runtime.deployment.allow_fractional,
         "broker_fee_status": intent.get("broker_fee_status"),
         "fee_pending_since": intent.get("fee_pending_since"),
         "fee_overdue": intent.get("fee_overdue", False),
@@ -119,9 +122,22 @@ def repair_audit_command(args) -> dict:
     return result
 
 
+def reset_reject_halt_command(args) -> dict:
+    import main
+    import broker_circuit
+    runtime = load_runtime_config()
+    if runtime.operator.allows_new_intents:
+        raise ValueError("pause trading (LEGO_ACTIVE=false) before resetting a broker halt")
+    main._init_firebase()
+    return broker_circuit.reset(main.runtime_identity_fingerprint(), runtime.operator.symbol,
+                                expected_halt_id=args.halt_id, reason=args.reason,
+                                apply=args.apply)
+
+
 COMMANDS = {"check": check_command, "release-binding": binding_command,
             "bootstrap-auth": bootstrap_command, "status": status_command,
-            "repair-audit": repair_audit_command}
+            "repair-audit": repair_audit_command,
+            "reset-reject-halt": reset_reject_halt_command}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -138,6 +154,10 @@ def parser() -> argparse.ArgumentParser:
     repair = sub.add_parser("repair-audit")
     repair.add_argument("--run-id", required=True)
     repair.add_argument("--apply", action="store_true")
+    reset = sub.add_parser("reset-reject-halt")
+    reset.add_argument("--halt-id", required=True)
+    reset.add_argument("--reason", required=True)
+    reset.add_argument("--apply", action="store_true")
     return cli
 
 

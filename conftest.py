@@ -131,6 +131,9 @@ FAKE_DB = FakeDB()
 @pytest.fixture(autouse=True)
 def _runtime_identity_test_default(monkeypatch):
     """HTTP pipeline tests use an opaque, non-production account identity."""
+    # A developer's configured receiver must never receive test notifications.
+    # Alert tests explicitly install a fake HTTPS URL and mock the transport.
+    monkeypatch.delenv("ALERT_WEBHOOK_URL", raising=False)
     if not os.environ.get("WEBULL_ACCOUNT_ID"):
         monkeypatch.setenv("WEBULL_ACCOUNT_ID", "codex-test-account")
 
