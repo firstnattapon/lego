@@ -73,6 +73,47 @@ on_error() {
 
 trap on_error ERR
 
+# A paused operator job must only be enabled long enough to run the smoke tick.
+SCHEDULER_TEMP_RESUMED=false
+
+restore_scheduler_state() {
+    if [[ "${SCHEDULER_TEMP_RESUMED}" != true ]]; then
+        return 0
+    fi
+
+    echo "Restoring Cloud Scheduler to PAUSED..."
+    gcloud scheduler jobs pause "${SCHEDULER_JOB}" \
+        --location="${REGION}" \
+        --project="${PROJECT_ID}" \
+        --quiet || return 1
+
+    local state
+    for _ in {1..10}; do
+        state="$(gcloud scheduler jobs describe "${SCHEDULER_JOB}" \
+            --location="${REGION}" \
+            --project="${PROJECT_ID}" \
+            --format='value(state)')" || return 1
+        [[ "${state}" == PAUSED ]] && break
+        sleep 2
+    done
+    [[ "${state}" == PAUSED ]] || return 1
+    SCHEDULER_TEMP_RESUMED=false
+}
+
+on_exit() {
+    local exit_code=$?
+    trap - EXIT
+    if ! restore_scheduler_state; then
+        echo "ERROR: Could not restore Cloud Scheduler to PAUSED; check ${SCHEDULER_JOB} immediately." >&2
+        if (( exit_code == 0 )); then
+            exit_code=1
+        fi
+    fi
+    exit "${exit_code}"
+}
+
+trap on_exit EXIT
+
 require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "ไม่พบคำสั่ง '$1'"
 }
@@ -693,8 +734,19 @@ if gcloud scheduler jobs describe "${SCHEDULER_JOB}" \
     --location="${REGION}" \
     --project="${PROJECT_ID}" >/dev/null 2>&1; then
     SCHEDULER_VERB="update"
+    SCHEDULER_ORIGINAL_STATE="$(gcloud scheduler jobs describe "${SCHEDULER_JOB}" \
+        --location="${REGION}" \
+        --project="${PROJECT_ID}" \
+        --format='value(state)')"
+    [[ "${SCHEDULER_ORIGINAL_STATE}" == PAUSED || "${SCHEDULER_ORIGINAL_STATE}" == ENABLED ]] || \
+        fail "Unexpected Cloud Scheduler state: ${SCHEDULER_ORIGINAL_STATE}"
+    if [[ "${SCHEDULER_ORIGINAL_STATE}" == PAUSED ]]; then
+        # An update might partially succeed even if the command reports an error.
+        SCHEDULER_TEMP_RESUMED=true
+    fi
 else
     SCHEDULER_VERB="create"
+    SCHEDULER_ORIGINAL_STATE=""
 fi
 
 gcloud scheduler jobs "${SCHEDULER_VERB}" http "${SCHEDULER_JOB}" \
@@ -708,6 +760,30 @@ gcloud scheduler jobs "${SCHEDULER_VERB}" http "${SCHEDULER_JOB}" \
     --oidc-token-audience="${FUNCTION_URI}" \
     --max-retry-attempts=0 \
     --quiet
+
+SCHEDULER_STATE="$(gcloud scheduler jobs describe "${SCHEDULER_JOB}" \
+    --location="${REGION}" \
+    --project="${PROJECT_ID}" \
+    --format='value(state)')"
+echo "Scheduler state after ${SCHEDULER_VERB}: ${SCHEDULER_STATE}"
+
+if [[ "${SCHEDULER_STATE}" == PAUSED ]]; then
+    gcloud scheduler jobs resume "${SCHEDULER_JOB}" \
+        --location="${REGION}" \
+        --project="${PROJECT_ID}" \
+        --quiet
+
+    for _ in {1..30}; do
+        SCHEDULER_STATE="$(gcloud scheduler jobs describe "${SCHEDULER_JOB}" \
+            --location="${REGION}" \
+            --project="${PROJECT_ID}" \
+            --format='value(state)')"
+        [[ "${SCHEDULER_STATE}" != PAUSED ]] && break
+        sleep 2
+    done
+fi
+[[ "${SCHEDULER_STATE}" == ENABLED ]] || \
+    fail "Cloud Scheduler must be ENABLED before smoke test; state=${SCHEDULER_STATE}"
 
 # -----------------------------------------------------------------------------
 # 10. SMOKE TRIGGER + FINAL STATUS
@@ -796,6 +872,15 @@ print(json.dumps({
     fail "structured smoke event ไม่ผ่าน validation"
 fi
 
+# Restore the operator's pause as soon as smoke validation completes.
+restore_scheduler_state || fail "Could not restore Cloud Scheduler to PAUSED; check ${SCHEDULER_JOB} immediately"
+FINAL_SCHEDULER_STATE="$(gcloud scheduler jobs describe "${SCHEDULER_JOB}" \
+    --location="${REGION}" \
+    --project="${PROJECT_ID}" \
+    --format='value(state)')"
+[[ "${FINAL_SCHEDULER_STATE}" == "${SCHEDULER_ORIGINAL_STATE:-ENABLED}" ]] || \
+    fail "Cloud Scheduler state changed unexpectedly: ${FINAL_SCHEDULER_STATE}"
+
 if [[ "${ORDER_SUBMISSION_EXPECTED}" == "true" ]]; then
     ORDER_STATUS="ENABLED (explicit release binding verified)"
 else
@@ -816,6 +901,7 @@ echo "Revision     : ${REVISION}"
 echo "URL          : ${FUNCTION_URI}"
 echo "Scheduler    : ${SCHEDULER_JOB}"
 echo "Schedule     : ${SCHEDULE} UTC"
+echo "Scheduler state: ${FINAL_SCHEDULER_STATE}"
 echo "RTDB         : ${DATABASE_URL}"
 echo "Runtime SA   : ${RUNTIME_SA}"
 echo "Scheduler SA : ${SCHEDULER_SA}"
