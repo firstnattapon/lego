@@ -1,0 +1,24 @@
+{
+  "candidate_hash": "d06847ddd66914e2c472ddd5599834f8a12abed80d53a4174edfc14f66bdceca",
+  "compiled_python_files": 90,
+  "dependency_audit": {
+    "dependencies": 63,
+    "evidence": "pip-audit.json",
+    "known_vulnerabilities": 0
+  },
+  "dependency_lock_hash": "83fe34847c136c16702bb842ce58b1603d5ddfcdca1a812bed30ec258067031c",
+  "deployed": false,
+  "deployment_syntax": "PowerShell parser and bash -n passed",
+  "generated_at": "2026-09-23T04:55:28.882162+00:00",
+  "junit_sha256": "59b792e2af4bbc6d2998368a1d0e8ed4f287e0e2bb821456b894cc332ef7e662",
+  "live_broker_orders": 0,
+  "scope": "local source and real RTDB emulator; Webull I/O doubled",
+  "source_matches_git_index_bytes": true,
+  "status": "PASS",
+  "tests": {
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "tests": 1015
+  }
+}

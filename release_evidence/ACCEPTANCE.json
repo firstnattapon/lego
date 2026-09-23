@@ -1,0 +1,113 @@
+{
+  "checks": [
+    {
+      "criterion": "snapshot_integrity",
+      "detail": {
+        "intents": 15,
+        "issues": {
+          "manual_reconciliation_required": 1,
+          "unresolved_execution": 1
+        },
+        "mirrors_matched": 15,
+        "positive_fills": 1,
+        "statuses": {
+          "EXPIRED_UNSENT": 12,
+          "FILLED": 1,
+          "RECONCILE_ABANDONED": 1,
+          "SUPPRESSED_STATE_CHANGED": 1
+        }
+      },
+      "status": "FAIL"
+    },
+    {
+      "criterion": "money_fences_resolved",
+      "detail": {
+        "unresolved_fences": 1
+      },
+      "status": "FAIL"
+    },
+    {
+      "criterion": "tick_fields",
+      "detail": {
+        "business_statuses": {
+          "ERROR": 1,
+          "ROW_COMMITTED": 1,
+          "SLOT_CONSUMED": 28,
+          "WAITING_RECONCILIATION": 391
+        },
+        "malformed_entries": 0,
+        "ticks": 421
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "unique_tick_correlations",
+      "detail": {
+        "ticks": 421
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "request_tick_pairing",
+      "detail": {
+        "requests": 421,
+        "tick_traces_present": 0,
+        "ticks": 421
+      },
+      "status": "FAIL"
+    },
+    {
+      "criterion": "candidate_revision_binding",
+      "detail": {
+        "expected_candidate": "d06847ddd66914e2c472ddd5599834f8a12abed80d53a4174edfc14f66bdceca",
+        "expected_revision": "lego-tick-uat-00024-yuy"
+      },
+      "status": "FAIL"
+    },
+    {
+      "criterion": "current_broker_orders_positions_cash_fees",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "complete_transition_history",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "exact_candidate_ci_emulator",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "deployed_identity_config_image_binding",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "uat_buy_sell_restart_timeout_soak",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "alert_delivery_and_operator_drill",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "prod_observe_and_canary_authorization",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    }
+  ],
+  "cutover_safe": false,
+  "evidence": {
+    "export_sha256": "7f76adc434c8190bc041cfd4022c8f75c6055046662ad411ed7ec16e47e59092",
+    "logs_sha256": "ee9fd836ddd08eaac40c8adaefea266590a1e1fa504334eff6ba57df569f9670"
+  },
+  "generated_at": "2026-09-23T04:54:57.993927+00:00",
+  "real_money_ready": false,
+  "schema_version": 1,
+  "scope": "offline snapshot and supplied log window; not broker certification",
+  "status": "BLOCKED"
+}
