@@ -1,5 +1,11 @@
 # LEGO PRINCIPAL v2
 
+23 September readiness hardening: [implementation plan and incident evidence](docs/IMPLEMENTATION_PLAN_20260923_TH.md).
+New submissions now require deployment-bound execution limits and a v3 release
+binding. Recovery remains enabled with missing/expired limits. The supplied
+incident evidence is still **NO-GO for real money** until broker reconciliation
+and the operational acceptance gates are closed.
+
 Accounting update: [initial-funding baseline and audit notes](docs/FUNDING_BASELINE_20260916.md).
 Broker rejection audit, safety halt and operator runbook:
 [22 September 2026 audit](docs/AUDIT_20260922_TH.md).

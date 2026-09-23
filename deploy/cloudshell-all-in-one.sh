@@ -47,6 +47,10 @@ readonly LEGO_ALLOW_FRACTIONAL_OVERRIDE="${LEGO_ALLOW_FRACTIONAL_OVERRIDE:-}"
 readonly LEGO_DIFF_OVERRIDE="${LEGO_DIFF_OVERRIDE:-25}"
 readonly LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-strategy.example.json}"
 readonly LEGO_SCHEDULE_OVERRIDE="${LEGO_SCHEDULE_OVERRIDE:-}"
+readonly MAX_ORDER_QUANTITY="${LEGO_MAX_ORDER_QUANTITY_OVERRIDE:-}"
+readonly MAX_ORDER_NOTIONAL="${LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE:-}"
+readonly MAX_SESSION_ORDERS="${LEGO_MAX_SESSION_ORDERS_OVERRIDE:-}"
+readonly TRADING_WINDOW_END="${LEGO_TRADING_WINDOW_END_OVERRIDE:-}"
 
 step() {
     echo
@@ -223,6 +227,14 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
     fail "Git working tree ไม่สะอาด — commit/stash การเปลี่ยนแปลงก่อน deploy"
 fi
 echo "Repo commit: ${DEPLOY_COMMIT}"
+
+if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
+    python3 -c 'import sys; from datetime import datetime,timezone; from execution_limits import ExecutionLimits; x=ExecutionLimits.parse(sys.argv[1:]); sys.exit("trading window expired" if datetime.now(timezone.utc) >= x.end else 0)' \
+        "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}"
+fi
+for limit_value in "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}"; do
+    reject_comma "execution limit" "${limit_value}"
+done
 
 # -----------------------------------------------------------------------------
 # 1. GOOGLE CLOUD + FIREBASE ACCESS
@@ -540,6 +552,9 @@ import hashlib
 import sys
 
 environment, candidate = sys.argv[1:3]
+from execution_limits import policy_hash
+symbol = sys.argv[3].strip().upper()
+limits_hash = policy_hash([value.strip() for value in sys.argv[4:8]])
 account_id = sys.stdin.read().strip()
 if not account_id:
     raise SystemExit("WEBULL account secret is empty")
@@ -547,9 +562,9 @@ account_fingerprint = hashlib.sha256(
     f"webull-runtime-v2\0{environment}\0{account_id}".encode()
 ).hexdigest()
 print(hashlib.sha256(
-    f"lego-release-v2\0{environment}\0{account_fingerprint}\0{candidate}".encode()
+    f"lego-release-v3\0{environment}\0{account_fingerprint}\0{candidate}\0{symbol}\0{limits_hash}".encode()
 ).hexdigest())
-' "${ENVIRONMENT}" "${CANDIDATE_HASH}"
+' "${ENVIRONMENT}" "${CANDIDATE_HASH}" "${SYMBOL}" "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}"
 )"
 require_sha256 "computed release binding" "${EXPECTED_RELEASE_BINDING}"
 
@@ -624,6 +639,7 @@ step "8/10 DEPLOY DATABASE RULES + CLOUD FUNCTION GEN2"
     --non-interactive
 
 ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=${SYMBOL},LEGO_FIX_C=${FIX_C},LEGO_ALLOW_FRACTIONAL=${ALLOW_FRACTIONAL},LEGO_DIFF=${DIFF},LEGO_DNA_BUNDLE=${DNA_BUNDLE},LEGO_MODE=${MODE},LEGO_ACTIVE=${ACTIVE},LEGO_CANDIDATE_HASH=${CANDIDATE_HASH},LEGO_RELEASE_AUTHORIZATION=${RELEASE_AUTHORIZATION_OVERRIDE},WEBULL_TOKEN_DIR=/tmp/webull_token,LEGO_DNA_CLOCK_MODE=market"
+ENV_VARS+=",LEGO_TRACE_PROJECT_ID=${PROJECT_ID},LEGO_MAX_ORDER_QUANTITY=${MAX_ORDER_QUANTITY},LEGO_MAX_ORDER_NOTIONAL_USD=${MAX_ORDER_NOTIONAL},LEGO_MAX_SESSION_ORDERS=${MAX_SESSION_ORDERS},LEGO_TRADING_WINDOW_END=${TRADING_WINDOW_END}"
 
 if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
     ENV_VARS="${ENV_VARS},WEBULL_TOKEN_SECRET=${TOKEN_SECRET_RESOURCE}"

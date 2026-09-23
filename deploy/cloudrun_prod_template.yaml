@@ -53,6 +53,17 @@ spec:
               value: REPLACE_WITH_VERIFIED_CANDIDATE_HASH
             - name: LEGO_RELEASE_AUTHORIZATION
               value: ''
+            - name: LEGO_TRACE_PROJECT_ID
+              value: REPLACE_WITH_PROJECT_ID
+            # Missing limits intentionally block every new order; recovery runs.
+            - name: LEGO_MAX_ORDER_QUANTITY
+              value: ''
+            - name: LEGO_MAX_ORDER_NOTIONAL_USD
+              value: ''
+            - name: LEGO_MAX_SESSION_ORDERS
+              value: ''
+            - name: LEGO_TRADING_WINDOW_END
+              value: ''
             - name: WEBULL_ACCOUNT_ID
               valueFrom:
                 secretKeyRef:

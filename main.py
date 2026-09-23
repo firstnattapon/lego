@@ -321,7 +321,9 @@ def lego_tick(request):
                           "broker_error": broker_error_details(exc)}, 500
         body["correlation_id"] = identifier
         body["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
-        emit_tick(body, code)
+        emit_tick(body, code, request=request)
+        from alerting import notify_tick
+        notify_tick(body)
         return body, code
 
 

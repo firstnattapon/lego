@@ -1,0 +1,9 @@
+# Verified SHA-256 checksums, not credentials. Exact historical fingerprints
+# only: do not allowlist the files, generic-api-key rule, or arbitrary hex values.
+# Public Webull token documentation digest (downloaded and hashed locally).
+ee7ee1918cc1d69574c6f6ce87ec6a77376e5344:release_evidence/WEBULL_CONTRACT_HASHES.json:generic-api-key:2
+# Candidate file digests: auth_circuit.py, deploy/token-dir.md,
+# tools/backfill_outbox_query_keys.py. Recomputed against the committed files.
+ee7ee1918cc1d69574c6f6ce87ec6a77376e5344:release_evidence/CANDIDATE.json:generic-api-key:26
+ee7ee1918cc1d69574c6f6ce87ec6a77376e5344:release_evidence/CANDIDATE.json:generic-api-key:38
+ee7ee1918cc1d69574c6f6ce87ec6a77376e5344:release_evidence/CANDIDATE.json:generic-api-key:117
