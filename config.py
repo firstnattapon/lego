@@ -171,6 +171,8 @@ class DeploymentProfile:
     candidate_hash: str
     release_authorization: str
     allow_fractional: bool = True
+    execution_limits: tuple[str, ...] = ("", "", "", "")
+    trading_symbol: str = ""
 
     def __post_init__(self) -> None:
         if type(self.allow_fractional) is not bool:
@@ -197,9 +199,11 @@ class DeploymentProfile:
 
     @property
     def expected_release_binding(self) -> str:
+        from execution_limits import policy_hash
         raw = (
-            f"lego-release-v2\0{self.environment}\0"
-            f"{self.account_fingerprint}\0{self.candidate_hash}"
+            f"lego-release-v3\0{self.environment}\0"
+            f"{self.account_fingerprint}\0{self.candidate_hash}\0"
+            f"{self.trading_symbol}\0{policy_hash(self.execution_limits)}"
         )
         return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -244,6 +248,7 @@ def _load_bundle(env: Mapping[str, str]) -> DNABundle:
 
 
 def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
+    from execution_limits import ENV_KEYS
     env = os.environ if env is None else env
     # AUTO_SUBMIT belongs to the legacy facade only. Letting it influence v2
     # made an obsolete environment variable silently opt a deployment into
@@ -271,6 +276,8 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         release_authorization=env.get("LEGO_RELEASE_AUTHORIZATION", ""),
         allow_fractional=_bool(env.get("LEGO_ALLOW_FRACTIONAL", "true"),
                                name="LEGO_ALLOW_FRACTIONAL"),
+        execution_limits=tuple(env.get(key, "").strip() for key in ENV_KEYS),
+        trading_symbol=operator.symbol,
     )
     return RuntimeConfig(operator=operator, deployment=deployment)
 

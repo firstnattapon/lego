@@ -66,6 +66,10 @@ def main() -> None:
         "GOOGLE_CLOUD_PROJECT": project,
         "FIREBASE_DB_URL": f"https://{project}-default-rtdb.firebaseio.com",
         "LEGO_CANDIDATE_HASH": f"emulator-candidate-{nonce}",
+        "LEGO_MAX_ORDER_QUANTITY": "100",
+        "LEGO_MAX_ORDER_NOTIONAL_USD": "2000",
+        "LEGO_MAX_SESSION_ORDERS": "1",
+        "LEGO_TRADING_WINDOW_END": "2030-01-01T00:00:00Z",
     }
     staged = load_runtime_config(env)
     env["LEGO_RELEASE_AUTHORIZATION"] = staged.deployment.expected_release_binding

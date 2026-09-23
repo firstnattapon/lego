@@ -11,11 +11,22 @@ param(
   [string]$Mode = 'observe',
   [bool]$Active = $false,
   [string]$ReleaseAuthorization = '',
-  [string]$TokenSecret = ''
+  [string]$TokenSecret = '',
+  [string]$MaxOrderQuantity = '',
+  [string]$MaxOrderNotionalUsd = '',
+  [string]$MaxSessionOrders = '',
+  [string]$TradingWindowEnd = ''
 )
 $ErrorActionPreference = 'Stop'
 if (-not $DatabaseUrl.StartsWith('https://')) { throw 'DatabaseUrl must be HTTPS' }
 if ($Mode -notin @('observe','trade')) { throw 'Mode must be observe or trade' }
+if ($Mode -eq 'trade' -and $Active) {
+  & python -c 'import sys; from execution_limits import ExecutionLimits; from datetime import datetime,timezone; x=ExecutionLimits.parse(sys.argv[1:]); sys.exit("trading window expired" if datetime.now(timezone.utc) >= x.end else 0)' $MaxOrderQuantity $MaxOrderNotionalUsd $MaxSessionOrders $TradingWindowEnd
+  if ($LASTEXITCODE -ne 0) { throw 'Valid explicit execution limits required for trade+active' }
+}
+foreach ($value in @($MaxOrderQuantity, $MaxOrderNotionalUsd, $MaxSessionOrders, $TradingWindowEnd)) {
+  if ($value.Contains(',')) { throw 'Execution limits must not contain commas' }
+}
 $manifestJson = & python tools/candidate_manifest.py
 if ($LASTEXITCODE -ne 0) { throw 'Cannot compute source candidate manifest' }
 $manifest = $manifestJson | ConvertFrom-Json
@@ -32,6 +43,11 @@ $envVars = @(
   "LEGO_ACTIVE=$($Active.ToString().ToLowerInvariant())",
   "LEGO_CANDIDATE_HASH=$CandidateHash",
   "LEGO_RELEASE_AUTHORIZATION=$ReleaseAuthorization",
+  "LEGO_TRACE_PROJECT_ID=$ProjectId",
+  "LEGO_MAX_ORDER_QUANTITY=$MaxOrderQuantity",
+  "LEGO_MAX_ORDER_NOTIONAL_USD=$MaxOrderNotionalUsd",
+  "LEGO_MAX_SESSION_ORDERS=$MaxSessionOrders",
+  "LEGO_TRADING_WINDOW_END=$TradingWindowEnd",
   'WEBULL_TOKEN_DIR=/tmp/webull_token',
   'LEGO_DNA_CLOCK_MODE=market'
 )

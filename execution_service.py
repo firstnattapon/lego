@@ -399,7 +399,8 @@ def _persist_error(chain_key_: str, run_id: str, status: str, exc: Exception,
              {"status": status, "last_error": err[:500],
               "broker_error": details, **(extra or {})})
     return {"run_id": run_id, "status": status, "error": err,
-            "error_type": type(exc).__name__, "broker_error": details}
+            "error_type": type(exc).__name__, "broker_error": details,
+            **({"needs_manual_check": True} if (extra or {}).get("needs_manual_check") else {})}
 
 
 def _intent_is_v2(intent: dict) -> bool:
@@ -705,6 +706,17 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
     # Diagnostics stay private. Record the breaker while this run still owns
     # the money fence, BEFORE any terminal outbox write can remove recovery.
     summary = dict(summary)
+    # A successful SUBMITTED read must not hide a stuck order indefinitely.
+    # This is an operator alert threshold, never permission to cancel/re-submit.
+    summary["reconciliation_overdue"] = False
+    if normalize_status(summary.get("status")) not in TERMINAL_STATUSES:
+        try:
+            since = _parse_utc(intent.get("placed_at") or intent.get("created_at"), "placed_at")
+            age = max(0.0, (datetime.now(UTC) - since).total_seconds())
+            summary["reconciliation_age_seconds"] = round(age, 3)
+            summary["reconciliation_overdue"] = age >= 900
+        except (ValueError, TypeError):
+            summary["reconciliation_overdue"] = True
     raw = summary.pop("broker_raw_detail", None)
     if raw is not None:
         update_intent(intent["chain_key"], intent["run_id"], {"broker_raw_detail": raw})
@@ -1025,11 +1037,6 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
     ck = intent["chain_key"]
     status = normalize_status(intent.get("status"))
 
-    committed_row = read_committed_row(run_id)
-    if committed_row is None:
-        return _stop(ck, run_id, "NOT_PLACED",
-                     {"terminal_reason": "source row was not committed"})
-
     if status in RECONCILE_STATUSES:
         try:
             detail = fetch_order_detail(trade_client, run_id)
@@ -1048,6 +1055,11 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
 
     if status != "PENDING_DISPATCH":
         return {"run_id": run_id, "status": status}
+
+    committed_row = read_committed_row(run_id)
+    if committed_row is None:
+        return _stop(ck, run_id, "NOT_PLACED",
+                     {"terminal_reason": "source row was not committed"})
 
     identity = intent.get("runtime_identity_fingerprint") or runtime_identity_fingerprint()
     circuit = broker_circuit.status(identity, cfg.symbol)
@@ -1149,6 +1161,16 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
     if not quote_safety["ok"]:
         return _reject_unsafe_dispatch_quote(
             ck, run_id, quote_safety, phase="pre_preview")
+
+    if runtime is not None:
+        from execution_limits import ExecutionLimits, ExecutionLimitError, reserve_attempt
+        try:
+            limits = ExecutionLimits.parse(runtime.deployment.execution_limits)
+            limits.check(intent["quantity"], fresh["price"], now=datetime.now(UTC))
+        except ExecutionLimitError as exc:
+            return _stop(ck, run_id, "NOT_PLACED", {
+                "terminal_reason": str(exc), "execution_limit_blocked": True},
+                execution_limit_blocked=True)
 
     env = environment_label()
     # Audit-only on purpose: the outbox already holds every one of these fields
@@ -1362,6 +1384,27 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             return _stop(ck, run_id, "NOT_PLACED", {
                 "terminal_reason": token_block, "token_preflight_blocked": True},
                 token_preflight_blocked=True)
+        try:
+            evidence = limits.check(intent["quantity"], final_fresh["price"], now=datetime.now(UTC))
+            session_key = str(limits.end.timestamp())
+            evidence.update(reserve_attempt(
+                dispatch_scope, dispatch_claim, run_id, limits, session_key,
+                now=datetime.now(UTC)))
+            _persist(ck, run_id, {"execution_limit_check": evidence})
+            # Reservation and audit persistence are network operations too.
+            limits.check(intent["quantity"], final_fresh["price"], now=datetime.now(UTC))
+            final_deadline = _dispatch_quote_safety(
+                cfg, intent, final_fresh, max_price_drift_bps=max_price_drift_bps,
+                max_quote_age_seconds=max_quote_age_seconds,
+                max_decision_age_seconds=max_decision_age_seconds)
+            if not final_deadline["ok"]:
+                return _reject_unsafe_dispatch_quote(
+                    ck, run_id, final_deadline, phase="post_reservation")
+            tick_runtime.require_budget(10.0)
+        except ExecutionLimitError as exc:
+            return _stop(ck, run_id, "NOT_PLACED", {
+                "terminal_reason": str(exc), "execution_limit_blocked": True},
+                execution_limit_blocked=True)
     started = begin_place_attempt(
         ck, run_id, str(intent.get("claim_owner") or ""),
         int(intent.get("claim_generation", 0) or 0))
@@ -1370,6 +1413,24 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         # the irreversible call.  Do not place; that winner owns reconciliation.
         return {"run_id": run_id, "status": normalize_status(intent.get("status"))}
     _mirror_order_audit(ck, run_id, started)
+    if runtime is not None:
+        try:
+            # Both durable marker and mirror can block on network I/O. A
+            # window/quote that expired during those writes must never Place.
+            limits.check(intent["quantity"], final_fresh["price"], now=datetime.now(UTC))
+            last_quote = _dispatch_quote_safety(
+                cfg, intent, final_fresh, max_price_drift_bps=max_price_drift_bps,
+                max_quote_age_seconds=max_quote_age_seconds,
+                max_decision_age_seconds=max_decision_age_seconds)
+            if not last_quote["ok"]:
+                raise ExecutionLimitError("quote expired after durable attempt marker")
+            tick_runtime.require_budget(5.0)
+        except (ValueError, tick_runtime.TickDeadlineExceeded) as exc:
+            # The irreversible marker already exists. Preserve its fence for
+            # reviewed resolution, even though this worker did not call Place.
+            return _persist_error(ck, run_id, "RECONCILE_ABANDONED", exc, {
+                "needs_manual_check": True, "broker_not_called_after_marker": True,
+                "terminal_reason": "pre-Place evidence expired after durable marker"})
     try:
         place_res = place_market_order(trade_client, order)
         if runtime is not None:

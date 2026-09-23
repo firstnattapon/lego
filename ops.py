@@ -18,6 +18,13 @@ def candidate_hash(root: Path = Path(__file__).parent) -> str:
 def check_command(_args) -> dict:
     runtime = load_runtime_config()
     local_candidate = candidate_hash()
+    from execution_limits import ExecutionLimits, ExecutionLimitError
+    from datetime import datetime, timezone
+    try:
+        limits = ExecutionLimits.parse(runtime.deployment.execution_limits)
+        limit_status = "EXPIRED" if datetime.now(timezone.utc) >= limits.end else "CONFIGURED"
+    except ExecutionLimitError:
+        limit_status = "MISSING_OR_INVALID"
     return {
         "ok": True,
         "environment": runtime.deployment.environment,
@@ -31,6 +38,8 @@ def check_command(_args) -> dict:
         "release_authorized": runtime.deployment.release_is_authorized,
         "candidate_hash_local": local_candidate,
         "candidate_matches": runtime.deployment.candidate_hash == local_candidate,
+        "execution_limits_status": limit_status,
+        "session_budget_note": "inspect durable account-symbol counter; configured is not remaining capacity",
     }
 
 

@@ -15,7 +15,29 @@ from firebase_admin import db
 import tick_runtime
 
 logger = logging.getLogger(__name__)
-EVENTS = {"BROKER_REJECT_HALT", "AUTH_BACKOFF", "TOKEN_EXPIRY_WARNING"}
+EVENTS = {"BROKER_REJECT_HALT", "AUTH_BACKOFF", "TOKEN_EXPIRY_WARNING",
+          "MANUAL_RECONCILIATION_REQUIRED", "FEE_OVERDUE", "EXECUTION_LIMIT_BLOCKED",
+          "RECONCILIATION_OVERDUE"}
+
+
+def notify_tick(body):
+    """Reuse durable rate limiting for actionable execution health only."""
+    if not os.environ.get("ALERT_WEBHOOK_URL", "").strip():
+        return False
+    kind = body.get("business_status")
+    if kind not in {"MANUAL_RECONCILIATION_REQUIRED", "FEE_OVERDUE", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}:
+        return False
+    try:
+        account = os.environ.get("WEBULL_ACCOUNT_ID", "").strip()
+        if not account:
+            return False
+        identity = hashlib.sha256(
+            f"{os.environ.get('WEBULL_ENV', 'UAT')}\0{account}".encode()).hexdigest()
+        symbol = os.environ.get("LEGO_SYMBOL", "")
+        return notify(kind, f"{identity}:{symbol}", symbol=symbol)
+    except Exception:
+        logger.warning("lego tick alert unavailable event=%s", kind)
+        return False
 
 
 def notify(kind, scope, *, symbol=None, count=None, expires_at=None):
