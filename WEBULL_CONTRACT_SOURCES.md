@@ -1,4 +1,4 @@
-# Webull contract sources (v2 candidate)
+# Webull contract sources
 
 Retrieved from the official Webull Thailand developer site on 2026-09-05.
 The adapter uses the pinned SDK for signing; these hashes bind the reviewed
@@ -17,3 +17,18 @@ The documented balance contract exposes `account_currency_assets[].buying_power`
 The position contract exposes `quantity`, not a separate stock `sellable_quantity`;
 therefore the v2 pre-Place rule conservatively requires a complete empty
 open-order scan and limits SELL to the freshly read position quantity.
+
+## Open Orders route update (2026-09-24 review)
+
+The pinned Webull 3.0.1 wheel exposes two methods for the same path. The old
+`get_order_open(account_id, page_size, last_client_order_id)` uses `x-version=v2`.
+The active adapter now calls `list_order_open(account_id, pagination_key)` using
+`x-version=v3` and requires the `{data: [...], pagination_key: ...}` response.
+It does not infer completion from page length. An absent cursor ends the scan;
+malformed/repeated cursors and unreadable group legs block new orders.
+
+This route change follows the [official 2026-09-05 cursor migration](https://developer.webull.com/apis/docs/changelog/)
+and the [Thailand Open Orders reference](https://developer.webull.co.th/apis/docs/reference/trade-api/order-open/).
+It has SDK contract and local parser tests; it still needs read-only UAT
+validation on the deployed candidate. The [Order Detail reference](https://developer.webull.co.th/apis/docs/reference/trade-api/order-detail/)
+remains the exact-client-ID recovery source for an attempted order.

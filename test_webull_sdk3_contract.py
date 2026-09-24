@@ -9,6 +9,7 @@ from webull.trade.request.v2.get_account_list_request import GetAccountListReque
 from webull.trade.request.v2.get_account_positions_request import AccountPositionsRequest
 from webull.trade.request.v3.get_order_detail_request import OrderDetailRequest
 from webull.trade.request.v3.get_order_open_request import OrderOpenRequest
+from webull.trade.request.v3.get_order_open_request_v2 import OrderOpenRequestV2
 from webull.trade.request.v3.place_order_request import PlaceOrderRequest
 from webull.trade.request.v3.preview_order_request import PreviewOrderRequest
 
@@ -36,3 +37,4 @@ def test_order_and_market_data_routes_are_not_legacy_openapi_paths():
     assert _route(OrderDetailRequest()) == ("/trading/orders/get", "v3", "GET")
     assert _route(GetSnapshotRequest()) == ("/market-data/stocks/snapshots/list", "v3", "GET")
     assert _route(OrderOpenRequest()) == ("/trading/orders/open-orders/list", "v2", "GET")
+    assert _route(OrderOpenRequestV2()) == ("/trading/orders/open-orders/list", "v3", "GET")

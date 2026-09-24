@@ -203,8 +203,8 @@ def _chain_fence_can_clear(*args, **kwargs):
     return _execution_call('_chain_fence_can_clear', *args, **kwargs)
 
 
-def _holdings_moved(*args, **kwargs):
-    return _execution_call('_holdings_moved', *args, **kwargs)
+def _holdings_match_fill(*args, **kwargs):
+    return _execution_call('_holdings_match_fill', *args, **kwargs)
 
 
 def _finalize_model_ledger(*args, **kwargs):

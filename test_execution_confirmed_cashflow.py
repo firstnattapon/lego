@@ -485,8 +485,9 @@ def test_concurrent_workers_finalize_exactly_once(monkeypatch):
 
 # --- holdings come from the broker, never from the ordered quantity ----------
 
-def test_post_execution_holdings_are_read_back_not_assumed(monkeypatch):
-    """The broker's own position wins even when it disagrees with the order."""
+def test_extra_same_side_position_movement_does_not_finalize_our_fill(monkeypatch):
+    """A second account trade cannot be booked as part of this order."""
+    monkeypatch.setenv("LEGO_FILL_CONFIRM_MAX_ATTEMPTS", "1")
     _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
     body, _ = _run(monkeypatch, SLOT_1, 330.0, holdings=8.0)
     run_id = body["run_id"]
@@ -497,10 +498,12 @@ def test_post_execution_holdings_are_read_back_not_assumed(monkeypatch):
         "order_status": "FILLED", "filled_quantity": quantity,
         "avg_filled_price": 331.25,
     })
-    _work()
+    result = [r for r in _work() if r["run_id"] == run_id][0]
 
-    assert _row(run_id)["post_execution_holdings"] == pytest.approx(broker_holdings)
-    assert _state()["prev_holdings"] == pytest.approx(broker_holdings)
+    assert result["needs_manual_check"] is True
+    assert result["cashflow_finalized"] is False
+    assert _row(run_id)[DELTA_COLUMN] == 0.0
+    assert _state()["prev_holdings"] == pytest.approx(8.0)
 
 
 def test_a_fill_whose_position_never_moves_defers_then_stops_asking(monkeypatch):
@@ -574,14 +577,14 @@ def test_an_unreadable_position_defers_instead_of_ending_the_intent(monkeypatch)
     assert _row(body["run_id"])[DELTA_COLUMN] == 0.0
 
 
-def test_a_buy_whose_position_fell_is_not_a_confirmation(monkeypatch):
-    """Direction matters: a BUY confirmed by a *smaller* position is somebody
-    else's trade landing in the same account."""
-    assert main._holdings_moved("BUY", 9.0, 10.0, 1e-6) is True
-    assert main._holdings_moved("BUY", 9.0, 8.0, 1e-6) is False
-    assert main._holdings_moved("SELL", 9.0, 8.0, 1e-6) is True
-    assert main._holdings_moved("SELL", 9.0, 10.0, 1e-6) is False
-    assert main._holdings_moved("BUY", 9.0, 9.0, 1e-6) is False
+def test_position_delta_must_match_this_orders_filled_quantity():
+    assert main._holdings_match_fill("BUY", 9.0, 10.0, 1.0, 1e-6) is True
+    assert main._holdings_match_fill("BUY", 9.0, 10.5, 1.0, 1e-6) is False
+    assert main._holdings_match_fill("BUY", 9.0, 8.0, 1.0, 1e-6) is False
+    assert main._holdings_match_fill("SELL", 9.0, 8.0, 1.0, 1e-6) is True
+    assert main._holdings_match_fill("SELL", 9.0, 7.5, 1.0, 1e-6) is False
+    assert main._holdings_match_fill("SELL", 9.0, 10.0, 1.0, 1e-6) is False
+    assert main._holdings_match_fill("BUY", 9.0, 9.0, 1.0, 1e-6) is False
 
 
 # --- the guards the split must not weaken ------------------------------------

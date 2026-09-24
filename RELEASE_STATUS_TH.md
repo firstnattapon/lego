@@ -1,4 +1,8 @@
-# สถานะหลัง audit วันที่ 17 กันยายน 2026
+# สถานะล่าสุดหลัง audit วันที่ 24 กันยายน 2026
+
+**ยังไม่ผ่านเกณฑ์เปิดเงินจริง (NO-GO)** เพราะยังไม่มีหลักฐาน broker และ deployed-candidate proof ครบตาม release gates. โค้ดแก้ v3 open-orders cursor, grouped legs, audit pairing และ fence/accounting safeguards แล้ว แต่ต้องยืนยันกับ Webull และ environment จริงก่อนเปิด Place ใน Production
+
+## หลักฐานย้อนหลัง 17 กันยายน 2026
 
 **ยังไม่ผ่านเกณฑ์เปิดเงินจริง (NO-GO)**
 

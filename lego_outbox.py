@@ -43,6 +43,17 @@ TERMINAL = {
     "REALIZED_MATH_ERROR",
 }
 
+# These outcomes are valid only while the broker has never been called.  A
+# delayed pre-Place worker must not turn an attempted order into an unsent one.
+UNSENT_TERMINAL = {
+    "EXPIRED_UNSENT", "SUPPRESSED_ACTIVE_ORDER", "SUPPRESSED_STATE_CHANGED",
+    "NOT_PLACED", "UNSENT_ABORTED",
+}
+
+
+class StaleIntentClaim(RuntimeError):
+    """A worker lost the intent generation before its result could commit."""
+
 
 def normalize_status(value) -> str:
     """Same normalization as lego_orders; a missing status reads as UNKNOWN."""
@@ -251,21 +262,47 @@ def put_intent(chain_key: str, run_id: str, payload: dict) -> dict:
     return ref.transaction(txn) or doc
 
 
-def update_intent(chain_key: str, run_id: str, fields: dict) -> dict:
+def update_intent(chain_key: str, run_id: str, fields: dict, *,
+                  expected_claim_owner: str | None = None,
+                  expected_claim_generation: int | None = None) -> dict:
+    if (expected_claim_owner is None) != (expected_claim_generation is None):
+        raise ValueError("claim owner and generation must be supplied together")
     ref = db.reference(f"{OUTBOX_PATH}/{chain_key}/{run_id}")
 
     def txn(current):
         current = dict(current or {})
+        if expected_claim_owner is not None:
+            active_until = _parse_utc(current.get("claim_until"))
+            if (current.get("claim_owner") != expected_claim_owner
+                    or int(current.get("claim_generation", 0) or 0)
+                    != int(expected_claim_generation)
+                    or active_until is None
+                    or active_until <= datetime.now(timezone.utc)):
+                raise StaleIntentClaim("intent claim changed or expired")
         incoming = dict(fields)
         old_status = normalize_status(current.get("status"))
         new_status = normalize_status(incoming.get("status")) if "status" in incoming else old_status
-        # Terminal statuses are absorbing, and an in-flight intent can never be
-        # reset to PENDING_DISPATCH by a stale worker response.
-        if old_status in TERMINAL and new_status != old_status:
-            incoming.pop("status", None)
-        elif new_status == "PENDING_DISPATCH" and old_status not in {
+        # A terminal broker/ledger outcome is an accounting snapshot, not just
+        # a status label.  A stale lease holder may return after a successor has
+        # finalized the order; allowing its non-status fields through can turn
+        # FILLED/qty=1 into FILLED/qty=0 and incorrectly affect the money fence.
+        # Audit repair is the only ordinary post-terminal update.  Operator
+        # reconciliation uses its own explicit transaction and evidence checks.
+        if old_status in TERMINAL:
+            if expected_claim_owner is not None:
+                raise StaleIntentClaim("intent became terminal before result write")
+            if set(incoming) == {"audit_pending"}:
+                current["audit_pending"] = incoming["audit_pending"]
+                if incoming["audit_pending"] is True:
+                    current["audit_revision"] = int(current.get("audit_revision", 0)) + 1
+            return current
+        # An attempted order cannot become an unsent outcome, even if an old
+        # worker made that decision using a snapshot from before Place started.
+        if current.get("place_attempted") is True and new_status in UNSENT_TERMINAL:
+            return current
+        if new_status == "PENDING_DISPATCH" and old_status not in {
                 "", "UNKNOWN", "PENDING_DISPATCH"}:
-            incoming.pop("status", None)
+            return current
         current.update(incoming)
         current["status"] = normalize_status(current.get("status"))
         if current["status"] != old_status or fields.get("audit_pending") is True:
@@ -344,6 +381,77 @@ def claim_intent(chain_key: str, run_id: str, worker_id: str, *,
     if result.get("claim_owner") != worker_id or result.get("claim_until") != lease_text:
         return None
     return result
+
+
+def renew_intent_claim(chain_key: str, run_id: str, worker_id: str,
+                       claim_generation: int, *,
+                       now_utc: datetime | None = None,
+                       lease_seconds: int | None = None) -> dict | None:
+    """Validate the current generation and extend its lease before accounting.
+
+    This prevents a worker that already lost the claim from applying a broker
+    snapshot. It cannot make the separate RTDB ledger paths atomic with outbox.
+    """
+    now_utc = (now_utc or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    lease_seconds = _claim_lease_seconds() if lease_seconds is None else max(
+        1, int(lease_seconds))
+    lease_text = (now_utc + timedelta(seconds=lease_seconds)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    ref = db.reference(f"{OUTBOX_PATH}/{chain_key}/{run_id}")
+
+    def txn(current):
+        if not isinstance(current, dict):
+            return current
+        doc = dict(current)
+        active_until = _parse_utc(doc.get("claim_until"))
+        if (normalize_status(doc.get("status")) in TERMINAL
+                or doc.get("claim_owner") != worker_id
+                or int(doc.get("claim_generation", 0) or 0) != int(claim_generation)
+                or active_until is None or active_until <= now_utc):
+            return doc
+        if active_until < _parse_utc(lease_text):
+            doc["claim_until"] = lease_text
+        return doc
+
+    result = ref.transaction(txn)
+    if not isinstance(result, dict):
+        return None
+    active_until = _parse_utc(result.get("claim_until"))
+    if (normalize_status(result.get("status")) in TERMINAL
+            or result.get("claim_owner") != worker_id
+            or int(result.get("claim_generation", 0) or 0) != int(claim_generation)
+            or active_until is None or active_until <= now_utc):
+        return None
+    return result
+
+
+def recover_fenced_intent(chain_key: str, run_id: str) -> dict | None:
+    """Mark a chain-fenced run uncertain only while it is still undispatched.
+
+    The dispatch owner calls this after finding a durable inflight run with an
+    outbox status that predates the Place marker. A newer broker observation may
+    commit between its read and this transaction, so the transition must be
+    conditional on the current status.
+    """
+    ref = db.reference(f"{OUTBOX_PATH}/{chain_key}/{run_id}")
+
+    def txn(current):
+        if not isinstance(current, dict):
+            return current
+        doc = dict(current)
+        if normalize_status(doc.get("status")) != "PENDING_DISPATCH":
+            return doc
+        doc.update({
+            "status": "PLACING_UNKNOWN",
+            "place_attempted": True,
+            "recovered_chain_fence": True,
+            "audit_pending": True,
+            "audit_revision": int(doc.get("audit_revision", 0)) + 1,
+            "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+        return doc
+
+    return ref.transaction(txn)
 
 
 def begin_place_attempt(chain_key: str, run_id: str, worker_id: str,
@@ -461,18 +569,43 @@ def expire_unsent_before(chain_key: str, now_utc: datetime) -> int:
     for intent in list_actionable(chain_key, limit=100):
         if normalize_status(intent.get("status")) != "PENDING_DISPATCH":
             continue
-        claim_until = _parse_utc(intent.get("claim_until"))
-        if intent.get("claim_owner") and claim_until and claim_until > now_utc:
-            continue
         raw = intent.get("expires_at")
         if not raw:
             continue
         expiry = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        if now_utc >= expiry:
-            update_intent(chain_key, intent["run_id"], {
+        if now_utc < expiry:
+            continue
+        ref = db.reference(f"{OUTBOX_PATH}/{chain_key}/{intent['run_id']}")
+        expired_token = uuid.uuid4().hex
+
+        def txn(current):
+            if not isinstance(current, dict):
+                return current
+            doc = dict(current)
+            # Recheck inside the transaction.  The candidate list can be stale
+            # while another worker writes the durable Place marker.
+            if (normalize_status(doc.get("status")) != "PENDING_DISPATCH"
+                    or doc.get("place_attempted") is True
+                    or doc.get("place_fence")):
+                return doc
+            active_until = _parse_utc(doc.get("claim_until"))
+            if doc.get("claim_owner") and active_until and active_until > now_utc:
+                return doc
+            current_expiry = _parse_utc(doc.get("expires_at"))
+            if current_expiry is None or now_utc < current_expiry:
+                return doc
+            doc.update({
                 "status": "EXPIRED_UNSENT",
                 "terminal_reason": "slot execution window expired before place",
                 "audit_pending": True,
+                "audit_revision": int(doc.get("audit_revision", 0)) + 1,
+                "actionable_sort": None,
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "expired_token": expired_token,
             })
+            return doc
+
+        written = ref.transaction(txn)
+        if isinstance(written, dict) and written.get("expired_token") == expired_token:
             count += 1
     return count

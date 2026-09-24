@@ -24,13 +24,15 @@ from lego_orders import (TERMINAL_STATUSES, UAT, evaluate_submit_gate,
                          normalize_status, order_confirmation_phrase,
                          summarize_order_result)
 from lego_outbox import (TERMINAL as OUTBOX_TERMINAL,
-                         DISPATCH_LOCK_PATH, account_symbol_fence_key,
+                         DISPATCH_LOCK_PATH, StaleIntentClaim,
+                         account_symbol_fence_key,
                          begin_place_attempt,
                          claim_chain_dispatch, claim_intent,
                          clear_chain_dispatch_inflight, expire_unsent_before,
                          fence_chain_dispatch, list_actionable,
                          list_audit_pending, put_intent, read_committed_row,
-                         read_intent, release_chain_dispatch,
+                         read_intent, recover_fenced_intent,
+                         renew_intent_claim, release_chain_dispatch,
                          release_intent_claim, update_intent)
 from lego_preflight import DEFAULT_MIN_DNA_REMAINING, auto_submit_preflight
 from lego_state import (CASHFLOW_SEMANTICS, CalendarDriftError,
@@ -275,9 +277,22 @@ def _apply_realized_if_available(intent: dict, summary: dict) -> dict:
     return out
 
 
-def _persist(chain_key_: str, run_id: str, fields: dict) -> dict:
+def _claim_update_kwargs(claim: dict | None) -> dict:
+    if not isinstance(claim, dict):
+        return {}
+    owner = claim.get("claim_owner")
+    generation = claim.get("claim_generation")
+    if not owner or generation is None:
+        return {}
+    return {"expected_claim_owner": str(owner),
+            "expected_claim_generation": int(generation)}
+
+
+def _persist(chain_key_: str, run_id: str, fields: dict, *,
+             claim: dict | None = None) -> dict:
     """Keep the outbox authoritative and make an interrupted audit repairable."""
-    durable = update_intent(chain_key_, run_id, {**fields, "audit_pending": True})
+    durable = update_intent(chain_key_, run_id, {**fields, "audit_pending": True},
+                            **_claim_update_kwargs(claim))
     _mirror_order_audit(chain_key_, run_id, durable)
     return {"run_id": run_id, **fields, "status": durable.get("status", fields.get("status"))}
 
@@ -387,17 +402,18 @@ def _persist_summary(intent: dict, summary: dict) -> None:
         summary["terminal_reason"] = "broker order failed: " + str(
             summary.get("reject_reason") or "reason not supplied by broker")
     _persist(intent["chain_key"], intent["run_id"],
-             {**summary, "status": normalize_status(summary.get("status"))})
+             {**summary, "status": normalize_status(summary.get("status"))},
+             claim=intent)
 
 
 def _persist_error(chain_key_: str, run_id: str, status: str, exc: Exception,
-                   extra: dict | None = None) -> dict:
+                   extra: dict | None = None, *, claim: dict | None = None) -> dict:
     from webull_io import broker_error_details
     err = _error_text(exc)
     details = broker_error_details(exc)
     _persist(chain_key_, run_id,
              {"status": status, "last_error": err[:500],
-              "broker_error": details, **(extra or {})})
+              "broker_error": details, **(extra or {})}, claim=claim)
     return {"run_id": run_id, "status": status, "error": err,
             "error_type": type(exc).__name__, "broker_error": details,
             **({"needs_manual_check": True} if (extra or {}).get("needs_manual_check") else {})}
@@ -461,13 +477,14 @@ def _persist_reconcile_failure(intent: dict, exc: Exception) -> dict:
     if not intent.get("first_error"):
         extra["first_error"] = _error_text(exc)[:500]
     if attempts < _reconcile_max_attempts(intent):
-        return _persist_error(ck, run_id, "PLACING_UNKNOWN", exc, extra)
+        return _persist_error(ck, run_id, "PLACING_UNKNOWN", exc, extra,
+                              claim=intent)
     return _persist_error(ck, run_id, "RECONCILE_ABANDONED", exc, {
         **extra,
         "needs_manual_check": True,
         "terminal_reason": (f"broker ไม่ยืนยันสถานะครบ {attempts} ครั้ง — "
                             "ต้องเช็คที่ broker เองว่า order นี้มีจริงหรือไม่"),
-    })
+    }, claim=intent)
 
 
 def _persist_realized_math_error(intent: dict, summary: dict, exc: Exception) -> dict:
@@ -491,7 +508,7 @@ def _persist_realized_math_error(intent: dict, summary: dict, exc: Exception) ->
     for key in ("filled_quantity", "filled_price", "filled_fee", "reject_reason"):
         if key in summary:
             fields[key] = summary[key]
-    _persist(intent["chain_key"], intent["run_id"], fields)
+    _persist(intent["chain_key"], intent["run_id"], fields, claim=intent)
     _record_warning("realized_math_error",
                     "order fill ยืนยันแล้วแต่คำนวณ realized ไม่ได้ — ต้องกระทบยอดเอง",
                     {"run_id": intent["run_id"], "chain_key": intent["chain_key"]})
@@ -569,18 +586,19 @@ def _chain_fence_can_clear(intent: dict | None) -> bool:
             and intent.get("realized") is not True)
 
 
-def _holdings_moved(side: str, before: float, after: float, tolerance: float) -> bool:
-    """Did the position move the way this side of the trade requires?
+def _holdings_match_fill(side: str, before: float, after: float,
+                         filled_quantity: float, tolerance: float) -> bool:
+    """Require the account position delta to match this order's cumulative fill.
 
-    Direction, not just difference: a BUY whose position went *down* between the
-    decision and the fill is somebody else's trade landing in the same account,
-    and booking our ΔAₙ against it would be inventing a cashflow.
+    A direction-only check can attribute a different trade in a shared account
+    to this order, then persist the wrong model holdings and cashflow.
     """
-    if side == "BUY":
-        return after > before + tolerance
-    if side == "SELL":
-        return after < before - tolerance
-    return False
+    if (side not in {"BUY", "SELL"} or not all(math.isfinite(x) for x in
+            (before, after, filled_quantity, tolerance))
+            or before < 0 or after < 0 or filled_quantity <= 0 or tolerance < 0):
+        return False
+    expected = before + (filled_quantity if side == "BUY" else -filled_quantity)
+    return expected >= 0 and abs(after - expected) <= tolerance
 
 
 def _finalize_model_ledger(trade_client, cfg, intent: dict, summary: dict) -> dict:
@@ -620,12 +638,12 @@ def _finalize_model_ledger(trade_client, cfg, intent: dict, summary: dict) -> di
         raise FillNotConfirmed(
             f"chain เคยถือ {before} หุ้น แต่ post-execution holdings อ่านได้ 0 — "
             "อาจเป็น positions response ที่ไม่ครบ จึงยังไม่ finalize cashflow")
-    if not _holdings_moved(str(intent.get("side", "")).upper(), before,
-                           holdings_after, _holdings_drift_tolerance(
-                               typed_v2=cfg.strategy_id.endswith("_v2"))):
+    if not _holdings_match_fill(str(intent.get("side", "")).upper(), before,
+                                holdings_after, quantity, _holdings_drift_tolerance(
+                                    typed_v2=cfg.strategy_id.endswith("_v2"))):
         raise FillNotConfirmed(
             f"broker แจ้ง filled {quantity} แต่ holdings หลังส่งยังเป็น {holdings_after} "
-            f"(ตอนตัดสินใจ {before}) — ยังไม่ยืนยันว่าจำนวนถือครองเปลี่ยน")
+            f"(ตอนตัดสินใจ {before}) — จำนวนถือครองไม่ตรงกับ fill ของ order นี้")
     return finalize_execution_fill(
         cfg, str(intent["run_id"]),
         ExecutionFill(filled_price=price, filled_quantity=quantity,
@@ -653,7 +671,7 @@ def _defer_fill_confirmation(intent: dict, summary: dict, exc: Exception) -> dic
     }
     if attempts < _fill_confirm_max_attempts(intent):
         fields["status"] = AWAITING_FILL_CONFIRMATION
-        _persist(intent["chain_key"], intent["run_id"], fields)
+        _persist(intent["chain_key"], intent["run_id"], fields, claim=intent)
         return {"run_id": intent["run_id"], **fields}
     fields.update({
         "status": broker_status,
@@ -662,7 +680,7 @@ def _defer_fill_confirmation(intent: dict, summary: dict, exc: Exception) -> dic
         "terminal_reason": (f"broker แจ้ง fill แต่ holdings ไม่ยืนยันครบ {attempts} ครั้ง "
                             "— ΔAₙ/Aₙ/Eₙ ของแถวนี้ยังไม่ finalize ต้องกระทบยอดเอง"),
     })
-    _persist(intent["chain_key"], intent["run_id"], fields)
+    _persist(intent["chain_key"], intent["run_id"], fields, claim=intent)
     _record_warning(
         "cashflow_unconfirmed",
         "fill ยืนยันจาก broker แล้วแต่ holdings ไม่ขยับ — model ledger ยังไม่ finalize",
@@ -689,7 +707,7 @@ def _persist_cashflow_error(intent: dict, summary: dict, exc: Exception) -> dict
         "terminal_reason": ("fill จริงแต่ finalize ΔAₙ/Aₙ/Eₙ ไม่ได้ — "
                             "ห้ามส่ง order ซ้ำ ต้องกระทบยอด model ledger เอง"),
     }
-    _persist(intent["chain_key"], intent["run_id"], fields)
+    _persist(intent["chain_key"], intent["run_id"], fields, claim=intent)
     _record_warning("cashflow_finalize_error",
                     "fill ยืนยันแล้วแต่ finalize model ledger ไม่ได้ — ต้องกระทบยอดเอง",
                     {"run_id": intent["run_id"], "chain_key": intent["chain_key"]})
@@ -703,6 +721,23 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
     matched broker legs, and the 17-column model ledger this function finalizes
     from the same confirmed fill. A decision never reaches either one.
     """
+    # A broker read can outlive the intent lease.  Refuse known stale workers
+    # before any circuit, broker-cashflow, FIFO, or model-ledger side effect.
+    # Ledger paths are separate RTDB transactions, so this renewal is a bounded
+    # lease guard rather than a cross-path atomic commit.
+    claim_kwargs = _claim_update_kwargs(intent)
+    if claim_kwargs:
+        renewed = renew_intent_claim(
+            intent["chain_key"], intent["run_id"],
+            claim_kwargs["expected_claim_owner"],
+            claim_kwargs["expected_claim_generation"],
+            lease_seconds=120)
+        if renewed is None:
+            current = read_intent(intent["chain_key"], intent["run_id"]) or intent
+            return {"run_id": intent["run_id"],
+                    "status": normalize_status(current.get("status")),
+                    "stale_claim": True}
+        intent = {**intent, **renewed}
     # Diagnostics stay private. Record the breaker while this run still owns
     # the money fence, BEFORE any terminal outbox write can remove recovery.
     summary = dict(summary)
@@ -719,7 +754,8 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
             summary["reconciliation_overdue"] = True
     raw = summary.pop("broker_raw_detail", None)
     if raw is not None:
-        update_intent(intent["chain_key"], intent["run_id"], {"broker_raw_detail": raw})
+        update_intent(intent["chain_key"], intent["run_id"],
+                      {"broker_raw_detail": raw}, **_claim_update_kwargs(intent))
     circuit = broker_circuit.record_outcome(intent, summary)
     if circuit.get("halted"):
         summary["broker_reject_halted"] = True
@@ -843,9 +879,10 @@ def _committed_row_shape(doc: dict) -> dict:
 
 
 def _stop(chain_key_: str, run_id: str, status: str, extra: dict | None = None,
-          **reported) -> dict:
+          *, claim: dict | None = None, **reported) -> dict:
     """Close an unsent intent and leave a repairable execution audit."""
-    _persist(chain_key_, run_id, {"status": status, **(extra or {})})
+    _persist(chain_key_, run_id, {"status": status, **(extra or {})},
+             claim=claim)
     return {"run_id": run_id, "status": status, **reported}
 
 
@@ -1006,7 +1043,8 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
 
 def _reject_unsafe_dispatch_quote(chain_key_: str, run_id: str,
                                   quote_safety: dict, *, phase: str,
-                                  extra: dict | None = None) -> dict:
+                                  extra: dict | None = None,
+                                  claim: dict | None = None) -> dict:
     """Persist one quote-guard failure with phase-labelled evidence."""
     evidence = {
         key: value for key, value in quote_safety.items() if key != "ok"
@@ -1021,11 +1059,12 @@ def _reject_unsafe_dispatch_quote(chain_key_: str, run_id: str,
             ValueError(
                 "confirmation phrase/outbox intent ไม่ตรงกับ committed decision"),
             {"terminal_reason": "intent decision provenance mismatch",
-             **evidence})
+             **evidence}, claim=claim)
     return _stop(
         chain_key_, run_id, "SUPPRESSED_STATE_CHANGED",
         {"terminal_reason": "dispatch blocked: " + ", ".join(evidence["reasons"]),
          **evidence},
+        claim=claim,
         state_change_reasons=evidence["reasons"],
         price_drift_bps=evidence["price_drift_bps"])
 
@@ -1059,25 +1098,27 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
     committed_row = read_committed_row(run_id)
     if committed_row is None:
         return _stop(ck, run_id, "NOT_PLACED",
-                     {"terminal_reason": "source row was not committed"})
+                     {"terminal_reason": "source row was not committed"},
+                     claim=intent)
 
     identity = intent.get("runtime_identity_fingerprint") or runtime_identity_fingerprint()
     circuit = broker_circuit.status(identity, cfg.symbol)
     if circuit.get("halted"):
         return _stop(ck, run_id, "NOT_PLACED", {
             "terminal_reason": broker_circuit.HALT, "broker_reject_halted": True},
-            broker_reject_halted=True)
+            claim=intent, broker_reject_halted=True)
     if runtime is not None:
         from webull_io import new_order_token_block
         token_block = new_order_token_block(token_health(), runtime.deployment.environment)
         if token_block:
             return _stop(ck, run_id, "NOT_PLACED", {
                 "terminal_reason": token_block, "token_preflight_blocked": True},
-                token_preflight_blocked=True)
+                claim=intent, token_preflight_blocked=True)
         if (not runtime.deployment.allow_fractional
                 and is_fractional_quantity(intent["quantity"])):
             return _stop(ck, run_id, "NOT_PLACED", {
-                "terminal_reason": "LEGO_ALLOW_FRACTIONAL=false blocks committed fractional intent"})
+                "terminal_reason": "LEGO_ALLOW_FRACTIONAL=false blocks committed fractional intent"},
+                claim=intent)
 
     # Pause/observe stops only an order that has not crossed the irreversible
     # boundary. Attempted/unknown/submitted orders take the reconcile branch
@@ -1086,11 +1127,12 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         return _stop(
             ck, run_id, "UNSENT_ABORTED",
             {"terminal_reason": "mode/active/release authorization blocks new mutation"},
+            claim=intent,
         )
 
     expiry = datetime.fromisoformat(str(intent["expires_at"]).replace("Z", "+00:00"))
     if datetime.now(UTC) >= expiry:
-        return _stop(ck, run_id, "EXPIRED_UNSENT")
+        return _stop(ck, run_id, "EXPIRED_UNSENT", claim=intent)
 
     try:
         open_orders = fetch_open_orders(trade_client, cfg.symbol)
@@ -1098,10 +1140,12 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         return _persist_error(
             ck, run_id, "PENDING_DISPATCH", exc,
             {"pagination_complete": False},
+            claim=intent,
         )
     if open_orders:
         return _stop(ck, run_id, "SUPPRESSED_ACTIVE_ORDER",
-                     {"terminal_reason": f"{len(open_orders)} active broker order(s)"})
+                     {"terminal_reason": f"{len(open_orders)} active broker order(s)"},
+                     claim=intent)
 
     fresh = fetch_snapshot(trade_client, data_client, cfg)
     try:
@@ -1127,7 +1171,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         # particular, NaN must not turn ``drift > tolerance`` into False.
         return _persist_error(
             ck, run_id, "PENDING_DISPATCH", exc,
-            {"configuration_error": True})
+            {"configuration_error": True}, claim=intent)
     try:
         decision_holdings = float(intent["decision_holdings"])
         fresh_holdings = float(fresh["holdings"])
@@ -1139,12 +1183,13 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         return _persist_error(
             ck, run_id, "NOT_PLACED",
             ValueError("holdings provenance ตรวจสอบไม่ได้"),
-            {"terminal_reason": "invalid holdings provenance"})
+            {"terminal_reason": "invalid holdings provenance"},
+            claim=intent)
     drift = abs(fresh_holdings - decision_holdings)
     if drift > tolerance:
         return _stop(ck, run_id, "SUPPRESSED_STATE_CHANGED",
-                     {"holdings_drift": drift, "dispatch_holdings": fresh["holdings"]},
-                     holdings_drift=drift)
+                      {"holdings_drift": drift, "dispatch_holdings": fresh["holdings"]},
+                      claim=intent, holdings_drift=drift)
 
     try:
         quote_safety = _dispatch_quote_safety(
@@ -1157,10 +1202,11 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         # heal on retry and must not occupy the queue forever.
         return _persist_error(
             ck, run_id, "NOT_PLACED", exc,
-            {"terminal_reason": "invalid dispatch provenance"})
+            {"terminal_reason": "invalid dispatch provenance"},
+            claim=intent)
     if not quote_safety["ok"]:
         return _reject_unsafe_dispatch_quote(
-            ck, run_id, quote_safety, phase="pre_preview")
+            ck, run_id, quote_safety, phase="pre_preview", claim=intent)
 
     if runtime is not None:
         from execution_limits import ExecutionLimits, ExecutionLimitError, reserve_attempt
@@ -1170,7 +1216,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         except ExecutionLimitError as exc:
             return _stop(ck, run_id, "NOT_PLACED", {
                 "terminal_reason": str(exc), "execution_limit_blocked": True},
-                execution_limit_blocked=True)
+                claim=intent, execution_limit_blocked=True)
 
     env = environment_label()
     # Audit-only on purpose: the outbox already holds every one of these fields
@@ -1248,7 +1294,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 "funding_check": funding,
                 "preview_at": _iso(datetime.now(UTC)),
                 "state": "PREVIEWED",
-            })
+            }, **_claim_update_kwargs(intent))
         else:
             preview_ok = preview_market_order(trade_client, order)
         # Two independent witnesses: the gate judges the committed row, the
@@ -1264,7 +1310,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             ),
         )
     except Exception as exc:
-        return _persist_error(ck, run_id, "NOT_PLACED", exc)
+        return _persist_error(ck, run_id, "NOT_PLACED", exc, claim=intent)
 
     # Preview is a network call and can take long enough for both price and
     # position/open orders to change. Fetch independent evidence again after it returns;
@@ -1276,19 +1322,22 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             return _persist_error(
                 ck, run_id, "PENDING_DISPATCH", exc,
                 {"pagination_complete": False,
-                 "dispatch_check_phase": "post_preview"})
+                 "dispatch_check_phase": "post_preview"},
+                claim=intent)
         if final_open_orders:
             return _stop(
                 ck, run_id, "SUPPRESSED_ACTIVE_ORDER",
                 {"terminal_reason":
                  f"{len(final_open_orders)} active broker order(s) after Preview",
-                 "dispatch_check_phase": "post_preview"})
+                 "dispatch_check_phase": "post_preview"},
+                claim=intent)
     try:
         final_fresh = fetch_snapshot(trade_client, data_client, cfg)
     except Exception as exc:
         return _persist_error(
             ck, run_id, "PENDING_DISPATCH", exc,
-            {"dispatch_check_phase": "post_preview_refetch"})
+            {"dispatch_check_phase": "post_preview_refetch"},
+            claim=intent)
     try:
         final_holdings = float(final_fresh["holdings"])
         if not (math.isfinite(final_holdings) and final_holdings >= 0):
@@ -1298,7 +1347,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             ck, run_id, "NOT_PLACED",
             ValueError("holdings provenance ตรวจสอบไม่ได้"),
             {"terminal_reason": "invalid holdings provenance",
-             "dispatch_check_phase": "post_preview"})
+             "dispatch_check_phase": "post_preview"},
+            claim=intent)
     final_holdings_drift = abs(final_holdings - decision_holdings)
     if final_holdings_drift > tolerance:
         return _stop(
@@ -1307,7 +1357,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
              "dispatch_holdings": final_fresh["holdings"],
              "dispatch_check_phase": "post_preview",
              "terminal_reason": "fresh holdings invalidated committed intent"},
-            holdings_drift=final_holdings_drift)
+            claim=intent, holdings_drift=final_holdings_drift)
     try:
         final_quote_safety = _dispatch_quote_safety(
             cfg, intent, final_fresh,
@@ -1318,10 +1368,12 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         return _persist_error(
             ck, run_id, "NOT_PLACED", exc,
             {"terminal_reason": "invalid dispatch provenance",
-             "dispatch_check_phase": "post_preview"})
+             "dispatch_check_phase": "post_preview"},
+            claim=intent)
     if not final_quote_safety["ok"]:
         return _reject_unsafe_dispatch_quote(
-            ck, run_id, final_quote_safety, phase="post_preview")
+            ck, run_id, final_quote_safety, phase="post_preview",
+            claim=intent)
 
     # The per-intent claim below prevents a duplicate client_order_id.  This
     # second, chain-wide fence prevents two workers that claimed different
@@ -1330,7 +1382,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
     if not dispatch_claim:
         return _persist_error(
             ck, run_id, "PENDING_DISPATCH",
-            RuntimeError("ไม่มี chain dispatch lease — ห้าม place order"))
+            RuntimeError("ไม่มี chain dispatch lease — ห้าม place order"),
+            claim=intent)
     dispatch_scope = str(dispatch_claim.get("dispatch_scope_key") or ck)
     tick_runtime.require_budget(12.0)
     try:
@@ -1370,27 +1423,31 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         return _persist_error(
             ck, run_id, "NOT_PLACED", exc,
             {"terminal_reason": "dispatch evidence expired before place",
-             "dispatch_check_phase": "pre_place_deadline"})
+             "dispatch_check_phase": "pre_place_deadline"},
+            claim=intent)
     if not deadline_safety["ok"]:
         return _reject_unsafe_dispatch_quote(
-            ck, run_id, deadline_safety, phase="pre_place_deadline")
+            ck, run_id, deadline_safety, phase="pre_place_deadline",
+            claim=intent)
 
     if tick_runtime.remaining() is not None and tick_runtime.remaining() < 10.0:
         return _stop(ck, run_id, "NOT_PLACED", {
-            "terminal_reason": "tick budget exhausted before Place; no broker attempt"})
+            "terminal_reason": "tick budget exhausted before Place; no broker attempt"},
+            claim=intent)
     if runtime is not None:
         token_block = new_order_token_block(token_health(), runtime.deployment.environment)
         if token_block:
             return _stop(ck, run_id, "NOT_PLACED", {
                 "terminal_reason": token_block, "token_preflight_blocked": True},
-                token_preflight_blocked=True)
+                claim=intent, token_preflight_blocked=True)
         try:
             evidence = limits.check(intent["quantity"], final_fresh["price"], now=datetime.now(UTC))
             session_key = str(limits.end.timestamp())
             evidence.update(reserve_attempt(
                 dispatch_scope, dispatch_claim, run_id, limits, session_key,
                 now=datetime.now(UTC)))
-            _persist(ck, run_id, {"execution_limit_check": evidence})
+            _persist(ck, run_id, {"execution_limit_check": evidence},
+                     claim=intent)
             # Reservation and audit persistence are network operations too.
             limits.check(intent["quantity"], final_fresh["price"], now=datetime.now(UTC))
             final_deadline = _dispatch_quote_safety(
@@ -1399,12 +1456,13 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 max_decision_age_seconds=max_decision_age_seconds)
             if not final_deadline["ok"]:
                 return _reject_unsafe_dispatch_quote(
-                    ck, run_id, final_deadline, phase="post_reservation")
+                    ck, run_id, final_deadline, phase="post_reservation",
+                    claim=intent)
             tick_runtime.require_budget(10.0)
         except ExecutionLimitError as exc:
             return _stop(ck, run_id, "NOT_PLACED", {
                 "terminal_reason": str(exc), "execution_limit_blocked": True},
-                execution_limit_blocked=True)
+                claim=intent, execution_limit_blocked=True)
     started = begin_place_attempt(
         ck, run_id, str(intent.get("claim_owner") or ""),
         int(intent.get("claim_generation", 0) or 0))
@@ -1430,7 +1488,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             # reviewed resolution, even though this worker did not call Place.
             return _persist_error(ck, run_id, "RECONCILE_ABANDONED", exc, {
                 "needs_manual_check": True, "broker_not_called_after_marker": True,
-                "terminal_reason": "pre-Place evidence expired after durable marker"})
+                "terminal_reason": "pre-Place evidence expired after durable marker"},
+                claim=intent)
     try:
         place_res = place_market_order(trade_client, order)
         if runtime is not None:
@@ -1568,11 +1627,15 @@ def _run_order_worker(cfg, limit: int = 3,
                     # Crash between the durable chain fence and the per-intent
                     # PLACING_UNKNOWN write: make the ambiguity explicit before
                     # an expired prior worker can resume its place path.
-                    inflight = update_intent(inflight_chain, inflight_run_id, {
-                        "status": "PLACING_UNKNOWN",
-                        "place_attempted": True,
-                        "recovered_chain_fence": True,
-                    })
+                    inflight = recover_fenced_intent(
+                        inflight_chain, inflight_run_id)
+                    if inflight is None:
+                        return {"processed": 0, "actionable": len(candidates),
+                                "expired_unsent": expired,
+                                "dispatch_blocked": True,
+                                "dispatch_inflight_run_id": inflight_run_id,
+                                "dispatch_block_reason": "inflight outbox intent disappeared",
+                                "results": []}
                 candidates = [inflight]
 
         if not candidates:
@@ -1602,9 +1665,17 @@ def _run_order_worker(cfg, limit: int = 3,
                         "outbox runtime identity ไม่ตรงกับ worker "
                         "(account/environment คนละชุด)")
                 intent_cfg = _config_for_intent(cfg, claimed)
-                result = _dispatch_or_reconcile_one(
-                    trade_client, data_client, intent_cfg, claimed, dispatch_claim,
-                    runtime=runtime)
+                try:
+                    result = _dispatch_or_reconcile_one(
+                        trade_client, data_client, intent_cfg, claimed,
+                        dispatch_claim, runtime=runtime)
+                except StaleIntentClaim:
+                    # A successor now owns the same run.  Report the durable
+                    # status instead of the stale worker's uncommitted result.
+                    current = read_intent(intent_chain, intent["run_id"]) or {}
+                    result = {"run_id": intent["run_id"],
+                              "status": normalize_status(current.get("status")),
+                              "stale_claim": True}
                 results.append(result)
             finally:
                 release_intent_claim(

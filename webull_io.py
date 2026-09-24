@@ -1376,48 +1376,48 @@ def fetch_order_detail(trade_client, client_order_id: str) -> dict:
         lambda: trade_client.order_v3.get_order_detail(account_id, client_order_id).json())
 
 
-def _open_order_items(res) -> list:
-    if isinstance(res, list):
-        return res
-    if isinstance(res, dict):
-        if res.get("pagination_key") not in (None, ""):
-            # This adapter is pinned to /openapi/trade/order/open. The newer
-            # /trading/orders/open-orders/list uses an opaque pagination_key;
-            # never apply the legacy short-page rule to that response.
+def _open_order_page(res) -> tuple[list, str | None]:
+    """Read the pinned SDK's v3 cursor response without guessing its end."""
+    if not isinstance(res, dict) or "data" not in res:
+        raise IncompleteOpenOrdersError(
+            "open-orders v3 response shape ไม่รู้จัก — fail closed")
+    items = res["data"]
+    if not isinstance(items, list):
+        raise IncompleteOpenOrdersError("open-orders data ต้องเป็น list — fail closed")
+    cursor = res.get("pagination_key")
+    if cursor is not None and (not isinstance(cursor, str) or not cursor.strip()):
+        raise IncompleteOpenOrdersError(
+            "open-orders pagination_key ไม่ถูกต้อง — fail closed")
+    if cursor is not None and not items:
+        raise IncompleteOpenOrdersError(
+            "open-orders มี cursor แต่ไม่มีรายการ — fail closed")
+    return items, cursor
+
+
+def _open_order_legs(entry) -> list[dict]:
+    if not isinstance(entry, dict):
+        raise IncompleteOpenOrdersError(
+            "open-orders contains an unreadable order — fail closed")
+    group_keys = [key for key in ("items", "orders") if key in entry]
+    if len(group_keys) > 1:
+        raise IncompleteOpenOrdersError(
+            "open-orders group มี leg collections ซ้ำ — fail closed")
+    if group_keys:
+        legs = entry[group_keys[0]]
+        if not isinstance(legs, list) or not legs:
             raise IncompleteOpenOrdersError(
-                "open-orders pagination_key requires the cursor API adapter — fail closed")
-        for key in ("orders", "items", "data"):
-            if key in res:
-                items = res[key]
-                if not isinstance(items, list):
-                    raise ValueError("open-orders items ต้องเป็น list — fail closed")
-                return items
-    raise ValueError("open-orders response shape ไม่รู้จัก — fail closed")
-
-
-def _page_cursor(items: list) -> str | None:
-    """The client_order_id the next page continues from.
-
-    Group orders arrive as a wrapper whose own id may be absent while the legs
-    underneath carry theirs, so the last leg answers when the wrapper cannot.
-    Returning None ends the walk, which is the safe direction: one page short is
-    the behaviour we already had, an endless loop is not.
-    """
-    for entry in reversed(items):
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("client_order_id"):
-            return str(entry["client_order_id"])
-        legs = entry.get("items")
-        if isinstance(legs, list):
-            for leg in reversed(legs):
-                if isinstance(leg, dict) and leg.get("client_order_id"):
-                    return str(leg["client_order_id"])
-    return None
-
-
-def _open_order_page_size() -> int:
-    return max(1, int(os.environ.get("LEGO_OPEN_ORDER_PAGE_SIZE", "50")))
+                "open-orders contains an unreadable group — fail closed")
+    else:
+        legs = [entry]
+    for leg in legs:
+        if (not isinstance(leg, dict)
+                or not isinstance(leg.get("symbol"), str)
+                or not leg["symbol"].strip()
+                or not isinstance(leg.get("client_order_id"), str)
+                or not leg["client_order_id"].strip()):
+            raise IncompleteOpenOrdersError(
+                "open-orders cannot identify an order symbol/client ID — fail closed")
+    return legs
 
 
 def _open_order_max_pages() -> int:
@@ -1425,49 +1425,26 @@ def _open_order_max_pages() -> int:
 
 
 def fetch_open_orders(trade_client, symbol: str) -> list[dict]:
-    """Every open order for *symbol*, following the broker's paging.
-
-    get_order_open answers 10 orders per page by default and the reply is a page,
-    not the whole book. The dispatcher uses an empty result to mean 'nothing of
-    ours is live at the broker', so ten unrelated orders on the first page were
-    enough to hide our own and let a second order go out on top of it.
-    """
+    """Every open order for *symbol*, following the v3 opaque cursor."""
     account_id = os.environ["WEBULL_ACCOUNT_ID"]
-    page_size = _open_order_page_size()
     cursor = None
+    seen_cursors: set[str] = set()
     out: list[dict] = []
     for _ in range(_open_order_max_pages()):
         res = _retry_transient(
-            lambda after=cursor: trade_client.order_v3.get_order_open(
-                account_id, page_size=page_size, last_client_order_id=after).json())
-        items = _open_order_items(res)
+            lambda after=cursor: trade_client.order_v3.list_order_open(
+                account_id, pagination_key=after).json())
+        items, next_cursor = _open_order_page(res)
         for o in items:
-            if not isinstance(o, dict):
-                raise IncompleteOpenOrdersError(
-                    "open-orders contains an unreadable order — fail closed")
-            if "items" in o:
-                cands = o["items"]
-                if not isinstance(cands, list) or not cands:
-                    raise IncompleteOpenOrdersError(
-                        "open-orders contains an unreadable group — fail closed")
-            else:
-                cands = [o]
-            for c in cands:
-                if (not isinstance(c, dict) or not isinstance(c.get("symbol"), str)
-                        or not c["symbol"].strip()):
-                    raise IncompleteOpenOrdersError(
-                        "open-orders cannot identify an order symbol — fail closed")
+            for c in _open_order_legs(o):
                 if c["symbol"].strip().upper() == symbol.strip().upper():
                     out.append(c)
-        if len(items) < page_size:
+        if next_cursor is None:
             return out
-        next_cursor = _page_cursor(items)
-        if not next_cursor:
+        if next_cursor in seen_cursors:
             raise IncompleteOpenOrdersError(
-                "open-orders page เต็มแต่ไม่มี cursor — ยืนยันรายการทั้งหมดไม่ได้")
-        if next_cursor == cursor:
-            raise IncompleteOpenOrdersError(
-                "open-orders cursor ไม่เดินหน้า — ยืนยันรายการทั้งหมดไม่ได้")
+                "open-orders cursor ซ้ำ — ยืนยันรายการทั้งหมดไม่ได้")
+        seen_cursors.add(next_cursor)
         cursor = next_cursor
     raise IncompleteOpenOrdersError(
         f"open-orders ยังมีหน้าถัดไปหลังครบ {_open_order_max_pages()} หน้า — "

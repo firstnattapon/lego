@@ -144,25 +144,29 @@ def test_fetch_snapshot_refuses_a_foreign_price():
 # ---- open orders: every unknown shape stops the dispatch --------------------
 
 def test_open_orders_shapes():
-    for payload in ({"orders": [{"symbol": "FFWM", "id": 1}]},
-                    {"items": [{"symbol": "FFWM", "id": 1}]},
-                    {"data": [{"symbol": "FFWM", "id": 1}]},
-                    [{"symbol": "FFWM", "id": 1}]):
-        client = fake_trade_client(open_orders=payload)
-        assert fetch_open_orders(client, "FFWM") == [{"symbol": "FFWM", "id": 1}]
+    order = {"symbol": "FFWM", "client_order_id": "ours"}
+    client = fake_trade_client(open_orders={"data": [order], "pagination_key": None})
+    assert fetch_open_orders(client, "FFWM") == [order]
+    assert client.order_v3.get_order_open.calls == []
+    assert client.order_v3.list_order_open.calls[0][0] == ("acc-1",)
 
 
 def test_open_orders_filters_by_symbol_and_flattens_groups():
-    client = fake_trade_client(open_orders={"orders": [
-        {"items": [{"symbol": "TSLA", "id": 1}, {"symbol": "FFWM", "id": 2}]},
-        {"symbol": "FFWM", "id": 3},
+    client = fake_trade_client(open_orders={"data": [
+        {"orders": [{"symbol": "TSLA", "client_order_id": "other"},
+                    {"symbol": "FFWM", "client_order_id": "ours"}]},
+        {"items": [{"symbol": "FFWM", "client_order_id": "legacy-group"}]},
+        {"symbol": "FFWM", "client_order_id": "flat"},
     ]})
-    assert [o["id"] for o in fetch_open_orders(client, "FFWM")] == [2, 3]
+    assert [o["client_order_id"] for o in fetch_open_orders(client, "FFWM")] == [
+        "ours", "legacy-group", "flat"]
 
 
-@pytest.mark.parametrize("payload", [{"unexpected": []}, "text", {"orders": "nope"}])
+@pytest.mark.parametrize("payload", [{"unexpected": []}, "text", {"orders": []},
+                                     [{"symbol": "FFWM", "client_order_id": "a"}],
+                                     {"data": "nope"}])
 def test_open_orders_unknown_shape_fails_closed(payload):
-    with pytest.raises(ValueError, match="fail closed"):
+    with pytest.raises(webull_io.IncompleteOpenOrdersError, match="fail closed"):
         fetch_open_orders(fake_trade_client(open_orders=payload), "FFWM")
 
 
@@ -184,54 +188,70 @@ def test_preview_rejects_error_payloads(payload, expected):
 
 
 def test_open_orders_follow_the_broker_paging(monkeypatch):
-    """A full page is a page, not the whole book — our own order may be on page 2."""
-    monkeypatch.setenv("LEGO_OPEN_ORDER_PAGE_SIZE", "2")
+    """An opaque cursor is the only evidence of a following page."""
     pages = [
-        {"orders": [{"symbol": "TSLA", "client_order_id": "a"},
-                    {"symbol": "TSLA", "client_order_id": "b"}]},
-        {"orders": [{"symbol": "FFWM", "client_order_id": "c"}]},
+        {"data": [{"symbol": "TSLA", "client_order_id": "a"}],
+         "pagination_key": "opaque=="},
+        {"data": [{"symbol": "FFWM", "client_order_id": "c"}],
+         "pagination_key": None},
     ]
     client = fake_trade_client(open_orders=lambda *a, **k: pages.pop(0))
     assert fetch_open_orders(client, "FFWM") == [{"symbol": "FFWM", "client_order_id": "c"}]
-    assert client.order_v3.get_order_open.calls[1][1]["last_client_order_id"] == "b"
+    assert client.order_v3.list_order_open.calls[1][1]["pagination_key"] == "opaque=="
 
 
-def test_open_order_paging_fails_closed_without_a_usable_cursor(monkeypatch):
-    """A full page without a cursor cannot prove that no later order exists."""
-    monkeypatch.setenv("LEGO_OPEN_ORDER_PAGE_SIZE", "2")
-    client = fake_trade_client(open_orders={"orders": [{"symbol": "TSLA"}, {"symbol": "TSLA"}]})
+def test_open_order_paging_fails_closed_on_empty_page_with_cursor():
+    client = fake_trade_client(open_orders={"data": [], "pagination_key": "next"})
     with pytest.raises(webull_io.IncompleteOpenOrdersError, match="cursor"):
         fetch_open_orders(client, "FFWM")
-    assert len(client.order_v3.get_order_open.calls) == 1
+    assert len(client.order_v3.list_order_open.calls) == 1
 
 
-def test_open_order_paging_reads_the_cursor_out_of_a_group_order(monkeypatch):
-    """The wrapper of a group order carries no id of its own; its legs do."""
-    monkeypatch.setenv("LEGO_OPEN_ORDER_PAGE_SIZE", "2")
+def test_open_order_grouped_orders_on_second_page_are_visible():
     pages = [
-        {"orders": [{"symbol": "TSLA", "client_order_id": "a"},
-                    {"items": [{"symbol": "TSLA", "client_order_id": "b1"},
-                               {"symbol": "TSLA", "client_order_id": "b2"}]}]},
-        {"orders": [{"symbol": "FFWM", "client_order_id": "c"}]},
+        {"data": [{"symbol": "TSLA", "client_order_id": "a"}],
+         "pagination_key": "p2"},
+        {"data": [{"orders": [{"symbol": "TSLA", "client_order_id": "b1"},
+                             {"symbol": "FFWM", "client_order_id": "b2"}]}]},
     ]
     client = fake_trade_client(open_orders=lambda *a, **k: pages.pop(0))
-    assert [o["client_order_id"] for o in fetch_open_orders(client, "FFWM")] == ["c"]
-    assert client.order_v3.get_order_open.calls[1][1]["last_client_order_id"] == "b2"
+    assert [o["client_order_id"] for o in fetch_open_orders(client, "FFWM")] == ["b2"]
 
 
 def test_open_order_paging_bound_blocks_instead_of_returning_partial_data(monkeypatch):
-    monkeypatch.setenv("LEGO_OPEN_ORDER_PAGE_SIZE", "1")
     monkeypatch.setenv("LEGO_OPEN_ORDER_MAX_PAGES", "3")
     seq = {"n": 0}
 
     def page(*args, **kwargs):
         seq["n"] += 1
-        return {"orders": [{"symbol": "TSLA", "client_order_id": f"id-{seq['n']}"}]}
+        return {"data": [{"symbol": "TSLA", "client_order_id": f"id-{seq['n']}"}],
+                "pagination_key": f"p{seq['n']}"}
 
     client = fake_trade_client(open_orders=page)
     with pytest.raises(webull_io.IncompleteOpenOrdersError, match="fail-closed"):
         fetch_open_orders(client, "FFWM")
-    assert len(client.order_v3.get_order_open.calls) == 3
+    assert len(client.order_v3.list_order_open.calls) == 3
+
+
+def test_open_order_repeated_cursor_blocks_dispatch():
+    client = fake_trade_client(open_orders={
+        "data": [{"symbol": "TSLA", "client_order_id": "a"}],
+        "pagination_key": "same"})
+    with pytest.raises(webull_io.IncompleteOpenOrdersError, match="cursor"):
+        fetch_open_orders(client, "FFWM")
+    assert len(client.order_v3.list_order_open.calls) == 2
+
+
+@pytest.mark.parametrize("entry", [
+    {"orders": []}, {"orders": None}, {"orders": [{}]},
+    {"items": [{"symbol": "FFWM"}]},
+    {"orders": [{"symbol": "FFWM", "client_order_id": "x"}], "items": []},
+    {"symbol": "FFWM"},
+])
+def test_open_order_unidentified_leg_blocks_dispatch(entry):
+    client = fake_trade_client(open_orders={"data": [entry]})
+    with pytest.raises(webull_io.IncompleteOpenOrdersError):
+        fetch_open_orders(client, "FFWM")
 
 
 def test_place_and_detail_pass_the_account_and_payload_through():
@@ -270,7 +290,7 @@ def test_permanent_broker_error_is_not_retried():
     client = fake_trade_client(open_orders=ValueError("bad request"))
     with pytest.raises(ValueError, match="bad request"):
         fetch_open_orders(client, "FFWM")
-    assert len(client.order_v3.get_order_open.calls) == 1
+    assert len(client.order_v3.list_order_open.calls) == 1
 
 
 class _Throttled(Exception):
