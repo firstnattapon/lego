@@ -165,6 +165,49 @@ def test_terminal_zero_fill_requires_explicit_quantity_and_broker_id():
     assert "broker_order_id_missing" in plan["blockers"]
 
 
+@pytest.mark.parametrize(("field", "blocker"), [
+    ("client_order_id", "broker_client_order_id_missing"),
+    ("account_id", "broker_account_id_missing"),
+    ("side", "broker_side_missing"),
+    ("symbol", "broker_symbol_missing"),
+])
+def test_admin_refuses_terminal_detail_without_broker_identity(field, blocker):
+    _seed_zero_fill()
+    detail = _detail()
+    detail.pop(field)
+    plan = admin.inspect_reconciliation(CHAIN, RUN, _client(detail), now_utc=NOW)
+    assert plan["allowed"] is False
+    assert blocker in plan["blockers"]
+
+
+@pytest.mark.parametrize("field", ["client_order_id", "account_id", "side", "symbol"])
+@pytest.mark.parametrize("container", ["orders", "data"])
+def test_admin_refuses_conflicting_group_and_leg_identity(field, container):
+    _seed_zero_fill()
+    detail = {field: "different", container: [_detail()] if container == "orders"
+              else _detail()}
+    with pytest.raises(admin.ReconcileRefusal, match="conflicting"):
+        admin.inspect_reconciliation(CHAIN, RUN, _client(detail), now_utc=NOW)
+
+
+@pytest.mark.parametrize(("canonical", "alias"), [
+    ("client_order_id", "clientOrderId"),
+    ("account_id", "accountId"),
+    ("side", "order_side"),
+    ("symbol", "ticker"),
+])
+def test_admin_refuses_conflicting_broker_identity_aliases(canonical, alias):
+    _seed_zero_fill()
+    detail = _detail()
+    detail[alias] = "different"
+    with pytest.raises(admin.ReconcileRefusal, match="conflicting"):
+        admin.inspect_reconciliation(CHAIN, RUN, _client(detail), now_utc=NOW)
+
+    wrapped = {alias: "different", "orders": [_detail()]}
+    with pytest.raises(admin.ReconcileRefusal, match="conflicting"):
+        admin.inspect_reconciliation(CHAIN, RUN, _client(wrapped), now_utc=NOW)
+
+
 @pytest.mark.parametrize(("row_overrides", "intent_overrides", "blocker"), [
     ({"cashflow_status": "NO_ACTION"}, {}, "zero_fill_row_not_pending"),
     ({"execution_quantity": 0.1}, {}, "zero_fill_row_has_execution_evidence"),
@@ -245,6 +288,7 @@ def _seed_positive_fill(*, break_witness: str | None = None):
             "filled_quantity": qty,
             "filled_price": price,
             "filled_fee": 0.1,
+            "broker_fee_status": "KNOWN",
         },
         row_overrides={
             "cashflow_status": CASHFLOW_FINALIZED,
@@ -309,7 +353,7 @@ def _seed_positive_fill(*, break_witness: str | None = None):
 
 def test_terminal_positive_fill_requires_both_ledgers_and_matching_row():
     _seed_positive_fill()
-    detail = _detail(status="CANCELLED", qty=0.5, price=101.25)
+    detail = _detail(status="CANCELLED", qty=0.5, price=101.25, fee=0.1)
     plan = admin.inspect_reconciliation(CHAIN, RUN, _client(detail), now_utc=NOW)
     assert plan["allowed"] is True, plan["blockers"]
 
@@ -336,7 +380,7 @@ def test_admin_accepts_bounded_fifo_v3_head_and_rejects_bad_or_pending_cursor():
         "fifo_write_cursor": {"buys": 1, "sells": 0},
         "active_matching_event_id": None,
     })
-    detail = _detail(status="CANCELLED", qty=0.5, price=101.25)
+    detail = _detail(status="CANCELLED", qty=0.5, price=101.25, fee=0.1)
     valid = admin.inspect_reconciliation(CHAIN, RUN, _client(detail), now_utc=NOW)
     assert valid["allowed"] is True, valid["blockers"]
 
@@ -396,7 +440,7 @@ def test_positive_fill_requires_one_consistent_durable_ledger_head(
     _seed_positive_fill()
     FAKE_DB.reference(path).set(value)
     plan = admin.inspect_reconciliation(
-        CHAIN, RUN, _client(_detail(status="CANCELLED", qty=0.5, price=101.25)),
+        CHAIN, RUN, _client(_detail(status="CANCELLED", qty=0.5, price=101.25, fee=0.1)),
         now_utc=NOW)
     assert plan["allowed"] is False
     assert blocker in plan["blockers"]
@@ -417,7 +461,7 @@ def test_positive_fill_rejects_consistently_corrupted_mirrors_by_equation():
 
     plan = admin.inspect_reconciliation(
         CHAIN, RUN,
-        _client(_detail(status="CANCELLED", qty=0.5, price=101.25)),
+        _client(_detail(status="CANCELLED", qty=0.5, price=101.25, fee=0.1)),
         now_utc=NOW)
     assert plan["allowed"] is False
     assert "model_cashflow_delta_equation_mismatch" in plan["blockers"]
@@ -461,21 +505,19 @@ def test_positive_fill_requires_transactional_realized_ledger_witnesses(
     else:
         FAKE_DB.reference(path).set(value)
     plan = admin.inspect_reconciliation(
-        CHAIN, RUN, _client(_detail(status="CANCELLED", qty=0.5, price=101.25)),
+        CHAIN, RUN, _client(_detail(status="CANCELLED", qty=0.5, price=101.25, fee=0.1)),
         now_utc=NOW)
     assert plan["allowed"] is False
     assert blocker in plan["blockers"]
 
 
-def test_positive_fill_fee_requires_broker_or_persisted_evidence():
+def test_positive_fill_fee_requires_broker_and_persisted_evidence():
     _seed_positive_fill()
-    FAKE_DB.reference(f"{OUTBOX_PATH}/{CHAIN}/{RUN}/filled_fee").delete()
-
     missing = admin.inspect_reconciliation(
         CHAIN, RUN, _client(_detail(status="CANCELLED", qty=0.5, price=101.25)),
         now_utc=NOW)
     assert missing["allowed"] is False
-    assert "realized_ledger_fee_mismatch" in missing["blockers"]
+    assert "broker_filled_fee_missing" in missing["blockers"]
 
     broker = admin.inspect_reconciliation(
         CHAIN, RUN,
@@ -483,12 +525,45 @@ def test_positive_fill_fee_requires_broker_or_persisted_evidence():
         now_utc=NOW)
     assert broker["allowed"] is True, broker["blockers"]
 
+    FAKE_DB.reference(f"{OUTBOX_PATH}/{CHAIN}/{RUN}/filled_fee").delete()
+    missing_intent = admin.inspect_reconciliation(
+        CHAIN, RUN,
+        _client(_detail(status="CANCELLED", qty=0.5, price=101.25, fee=0.1)),
+        now_utc=NOW)
+    assert missing_intent["allowed"] is False
+    assert "intent_filled_fee_missing" in missing_intent["blockers"]
+
     invalid = admin.inspect_reconciliation(
         CHAIN, RUN,
         _client(_detail(status="CANCELLED", qty=0.5, price=101.25, fee="NaN")),
         now_utc=NOW)
     assert invalid["allowed"] is False
     assert "broker_filled_fee_invalid" in invalid["blockers"]
+
+
+def test_positive_fill_requires_known_fee_state_and_matching_actual_fee():
+    _seed_positive_fill()
+    detail = _detail(status="CANCELLED", qty=0.5, price=101.25, fee=0.1)
+    FAKE_DB.reference(f"{OUTBOX_PATH}/{CHAIN}/{RUN}/broker_fee_status").delete()
+    unknown = admin.inspect_reconciliation(CHAIN, RUN, _client(detail), now_utc=NOW)
+    assert "intent_broker_fee_not_known" in unknown["blockers"]
+
+    FAKE_DB.reference(f"{OUTBOX_PATH}/{CHAIN}/{RUN}/broker_fee_status").set("KNOWN")
+    wrong = admin.inspect_reconciliation(
+        CHAIN, RUN,
+        _client(_detail(status="CANCELLED", qty=0.5, price=101.25, fee=0.2)),
+        now_utc=NOW)
+    assert "intent_broker_fee_mismatch" in wrong["blockers"]
+    assert "realized_ledger_fee_mismatch" in wrong["blockers"]
+
+
+def test_positive_fill_accepts_complete_actual_fee_breakdown():
+    _seed_positive_fill()
+    detail = _detail(status="CANCELLED", qty=0.5, price=101.25)
+    detail["commission"] = {"actual_commission": "0.07"}
+    detail["fees"] = [{"type": "regulatory", "actual_value": "0.03"}]
+    plan = admin.inspect_reconciliation(CHAIN, RUN, _client(detail), now_utc=NOW)
+    assert plan["allowed"] is True, plan["blockers"]
 
 
 def test_wrong_confirmation_changes_nothing():

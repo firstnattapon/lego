@@ -195,6 +195,7 @@ def fake_trade_client(*, positions=None, balance=None, open_orders=None, order_d
         ),
         order_v3=FakeNamespace(
             get_order_open=FakeCall(open_orders),
+            list_order_open=FakeCall(open_orders),
             get_order_detail=FakeCall(order_detail),
             preview_order=FakeCall(preview),
             place_order=FakeCall(place),

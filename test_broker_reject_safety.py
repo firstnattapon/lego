@@ -326,7 +326,12 @@ def test_three_real_worker_rejects_prevent_fourth_preview_and_place(monkeypatch)
 
 
 def test_dispatch_blocks_old_fractional_intent_without_resizing(monkeypatch):
-    from test_dispatch_overshoot import dispatch_fixture, CFG
+    from test_dispatch_overshoot import dispatch_fixture, CFG, NOW as DISPATCH_NOW
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return DISPATCH_NOW.astimezone(tz) if tz else DISPATCH_NOW.replace(tzinfo=None)
+    monkeypatch.setattr(outbox, "datetime", Clock)
     runtime, intent, claim, client, _ = dispatch_fixture(monkeypatch)
     runtime = replace(runtime, deployment=replace(runtime.deployment, allow_fractional=False))
     result = execution._dispatch_or_reconcile_one(client, None, CFG, intent, claim, runtime)

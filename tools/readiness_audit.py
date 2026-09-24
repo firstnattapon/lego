@@ -8,12 +8,13 @@ to the source evidence. The output intentionally excludes account/order IDs.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from datetime import datetime, timezone
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from pathlib import Path
+import re
 
 from tools.migration_audit import audit_export, safe_unsent
 
@@ -29,6 +30,109 @@ def number(value):
 def read_json(path):
     raw = path.read_bytes()
     return json.loads(raw), hashlib.sha256(raw).hexdigest()
+
+
+_HTTP_LATENCY = re.compile(r"\d+(?:\.\d+)?s\Z")
+_PAIRING_CLOCK_TOLERANCE = timedelta(seconds=2)
+
+
+def _utc_timestamp(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else None
+
+
+def _cloud_run_scope(entry):
+    resource = entry.get("resource")
+    if not isinstance(resource, dict) or resource.get("type") != "cloud_run_revision":
+        return None
+    labels = resource.get("labels")
+    if not isinstance(labels, dict):
+        return None
+    scope = tuple(labels.get(name) for name in (
+        "project_id", "location", "service_name", "revision_name"))
+    return scope if all(isinstance(part, str) and part for part in scope) else None
+
+
+def _log_trace(entry, payload=None):
+    value = entry.get("trace") or (payload or {}).get("logging.googleapis.com/trace")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def pair_request_ticks(ticks, requests):
+    """Prove a one-to-one Cloud Run request/tick link without equating span IDs.
+
+    Cloud Run's request log and the application log are different spans of the
+    same trace. A shared trace is useful evidence only when it is unique in
+    each set, both records belong to the same service revision, and the tick
+    occurred during the HTTP request's recorded lifetime.
+    """
+    problems = Counter()
+    tick_by_trace, request_by_trace = defaultdict(list), defaultdict(list)
+    for entry, payload in ticks:
+        trace = _log_trace(entry, payload)
+        if trace is None:
+            problems["tick_trace_missing"] += 1
+        else:
+            tick_by_trace[trace].append((entry, payload))
+    for entry in requests:
+        trace = _log_trace(entry)
+        if trace is None:
+            problems["request_trace_missing"] += 1
+        else:
+            request_by_trace[trace].append(entry)
+    problems["duplicate_tick_traces"] = sum(
+        len(group) - 1 for group in tick_by_trace.values() if len(group) > 1)
+    problems["duplicate_request_traces"] = sum(
+        len(group) - 1 for group in request_by_trace.values() if len(group) > 1)
+    problems["ticks_without_request"] = len(tick_by_trace.keys() - request_by_trace.keys())
+    problems["requests_without_tick"] = len(request_by_trace.keys() - tick_by_trace.keys())
+
+    matched = 0
+    for trace in tick_by_trace.keys() & request_by_trace.keys():
+        tick_group, request_group = tick_by_trace[trace], request_by_trace[trace]
+        if len(tick_group) != 1 or len(request_group) != 1:
+            continue
+        tick_entry, payload = tick_group[0]
+        request_entry = request_group[0]
+        tick_scope = _cloud_run_scope(tick_entry)
+        request_scope = _cloud_run_scope(request_entry)
+        if (tick_scope is None or request_scope is None or tick_scope != request_scope
+                or payload.get("revision") != tick_scope[-1]):
+            problems["service_or_revision_mismatch"] += 1
+            continue
+        tick_time = _utc_timestamp(tick_entry.get("timestamp"))
+        request_time = _utc_timestamp(request_entry.get("timestamp"))
+        http = request_entry.get("httpRequest")
+        latency_text = http.get("latency") if isinstance(http, dict) else None
+        if (tick_time is None or request_time is None
+                or not isinstance(latency_text, str)
+                or not _HTTP_LATENCY.fullmatch(latency_text)):
+            problems["request_window_missing"] += 1
+            continue
+        try:
+            request_end = request_time + timedelta(
+                seconds=float(Decimal(latency_text[:-1])))
+        except (ValueError, OverflowError):
+            problems["request_window_missing"] += 1
+            continue
+        if not request_time <= tick_time <= request_end + _PAIRING_CLOCK_TOLERANCE:
+            problems["tick_outside_request_window"] += 1
+            continue
+        if (type(payload.get("http_status")) is not int
+                or type(http.get("status")) is not int
+                or payload["http_status"] != http["status"]):
+            problems["http_status_mismatch"] += 1
+            continue
+        matched += 1
+    problems = {name: count for name, count in problems.items() if count}
+    return (bool(ticks) and bool(requests) and matched == len(ticks) == len(requests)
+            and not problems), {"requests": len(requests), "ticks": len(ticks),
+                               "matched": matched, "issues": problems}
 
 
 def build_report(export, logs, candidate, revision):
@@ -143,16 +247,8 @@ def build_report(export, logs, candidate, revision):
            "business_statuses": dict(Counter(str(p.get("business_status")) for _, p in ticks))})
     check("unique_tick_correlations", bool(ticks) and all(correlations)
           and len(set(correlations)) == len(correlations), {"ticks": len(ticks)})
-    def trace(entry, payload=None):
-        return (entry.get("trace") or (payload or {}).get("logging.googleapis.com/trace"),
-                entry.get("spanId") or (payload or {}).get("logging.googleapis.com/spanId"))
-    event_traces = Counter(trace(e, p) for e, p in ticks)
-    request_traces = Counter(trace(e) for e in requests)
-    check("request_tick_pairing", bool(ticks) and bool(requests)
-          and all(all(key) and count == 1 for key, count in event_traces.items())
-          and event_traces == request_traces,
-          {"requests": len(requests), "ticks": len(ticks),
-           "tick_traces_present": sum(all(trace(e, p)) for e, p in ticks)})
+    pairing_ok, pairing_detail = pair_request_ticks(ticks, requests)
+    check("request_tick_pairing", pairing_ok, pairing_detail)
     check("candidate_revision_binding", bool(candidate) and bool(revision) and bool(ticks)
           and all(p.get("candidate_hash") == candidate and p.get("revision") == revision for _, p in ticks),
           {"expected_candidate": candidate, "expected_revision": revision})

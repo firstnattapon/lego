@@ -185,6 +185,25 @@ def _admin_clear_recorded(lock: Any, event_id: str, run_id: str) -> bool:
             and _parse_utc(marker.get("cleared_at")) is not None)
 
 
+_BROKER_IDENTITY_ALIASES = {
+    "client order ID": ("client_order_id", "clientOrderId", "client_order_no",
+                        "client_order_number"),
+    "account ID": ("account_id", "accountId", "account_no", "account_number"),
+    "side": ("side", "order_side"),
+    "symbol": ("symbol", "ticker"),
+}
+
+
+def _reject_conflicting_broker_identity(*records: dict) -> None:
+    for name, aliases in _BROKER_IDENTITY_ALIASES.items():
+        values = [str(record[alias]).strip() for record in records
+                  for alias in aliases if record.get(alias) not in (None, "")]
+        if name in {"side", "symbol"}:
+            values = [value.upper() for value in values]
+        if len(set(values)) > 1:
+            raise ReconcileRefusal(f"broker detail has conflicting {name}")
+
+
 def _strict_order_fields(detail: Any) -> dict:
     """Unwrap one order without silently choosing among multiple records."""
     current = detail
@@ -205,17 +224,20 @@ def _strict_order_fields(detail: Any) -> dict:
                 if len(inner) != 1 or not isinstance(inner[0], dict):
                     raise ReconcileRefusal(
                         "broker detail contains an ambiguous order list")
+                _reject_conflicting_broker_identity(fields, inner[0])
                 fields.pop(key, None)
                 fields.update(inner[0])
                 unwrapped = True
                 break
             if isinstance(inner, dict):
+                _reject_conflicting_broker_identity(fields, inner)
                 fields.pop(key, None)
                 fields.update(inner)
                 unwrapped = True
                 break
         if not unwrapped:
             break
+    _reject_conflicting_broker_identity(fields)
     return fields
 
 
@@ -238,8 +260,12 @@ def broker_evidence(detail: Any, *, expected_run_id: str,
     raw_price = _first(fields, EXECUTION_PRICE_FIELDS)
     price = (_float(raw_price, allow_zero=False)
              if raw_price not in (None, "") else None)
-    raw_fee = _first(fields, FEE_FIELDS)
+    # Use the same actual-fee normalization as the order worker. Webull may
+    # supply commission and fees as a breakdown rather than a scalar total.
+    # A missing or incomplete breakdown cannot establish a zero fee.
+    raw_fee = summary.get("filled_fee")
     fee = _float(raw_fee) if raw_fee not in (None, "") else None
+    fee_fields_present = any(name in fields for name in FEE_FIELDS) or "fees" in fields
     broker_id = str(_first(fields, (
         "order_id", "orderId", "broker_order_id", "brokerOrderId")) or "")
     client_order_id = str(_first(fields, (
@@ -264,16 +290,26 @@ def broker_evidence(detail: Any, *, expected_run_id: str,
             _valid_identifier("broker order id", broker_id)
         except ReconcileRefusal:
             blockers.append("broker_order_id_invalid")
-    if client_order_id and not hmac.compare_digest(client_order_id, expected_run_id):
+    if not client_order_id:
+        blockers.append("broker_client_order_id_missing")
+    elif not hmac.compare_digest(client_order_id, expected_run_id):
         blockers.append("broker_client_order_id_mismatch")
-    if account_id and not hmac.compare_digest(account_id, expected_account_id):
+    if not account_id:
+        blockers.append("broker_account_id_missing")
+    elif not hmac.compare_digest(account_id, expected_account_id):
         blockers.append("broker_account_mismatch")
+    if not side:
+        blockers.append("broker_side_missing")
+    if not symbol:
+        blockers.append("broker_symbol_missing")
     if status == "FILLED" and quantity == 0:
         blockers.append("filled_status_with_zero_quantity")
     if quantity is not None and quantity > 0 and price is None:
         blockers.append("broker_filled_price_missing")
-    if raw_fee not in (None, "") and fee is None:
+    if fee_fields_present and fee is None:
         blockers.append("broker_filled_fee_invalid")
+    if quantity is not None and quantity > 0 and fee is None and not fee_fields_present:
+        blockers.append("broker_filled_fee_missing")
 
     return {
         "status": status,
@@ -495,11 +531,17 @@ def _positive_fill_blockers(*, cfg: Config, chain_key: str, run_id: str,
         intent_fee_raw = intent.get("filled_fee")
         intent_fee = (_float(intent_fee_raw)
                       if intent_fee_raw not in (None, "") else None)
-        if intent_fee_raw not in (None, "") and intent_fee is None:
+        if intent.get("broker_fee_status") != "KNOWN":
+            blockers.append("intent_broker_fee_not_known")
+        if intent_fee_raw in (None, ""):
+            blockers.append("intent_filled_fee_missing")
+        elif intent_fee is None:
             blockers.append("intent_filled_fee_invalid")
-        expected_fee = (broker_fee if broker_fee is not None
-                        else intent_fee if intent_fee is not None else 0.0)
-        if not _same_number(applied.get("fee"), expected_fee, _PRICE_TOLERANCE):
+        elif broker_fee is not None and not _same_number(
+                intent_fee, broker_fee, _PRICE_TOLERANCE):
+            blockers.append("intent_broker_fee_mismatch")
+        if broker_fee is not None and not _same_number(
+                applied.get("fee"), broker_fee, _PRICE_TOLERANCE):
             blockers.append("realized_ledger_fee_mismatch")
         # apply_realized_fill writes these witnesses in the same RTDB
         # transaction as FIFO open_legs and cumulative P&L.  Merely finding an
