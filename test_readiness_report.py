@@ -9,11 +9,20 @@ from tools.readiness_audit import build_report, main
 
 def evidence(tmp_path):
     root = {"webull_lego_order_outbox": {"chain": {"run": {
-        "status": "NOT_PLACED", "audit_revision": 1, "place_attempted": False}}}}
+        "status": "NOT_PLACED", "audit_revision": 1, "place_attempted": False,
+        "row_status": "READY_BUY", "chain_key": "chain", "run_id": "run",
+        "side": "BUY", "symbol": "TSLA", "quantity": "1"}}}}
     root["webull_lego_order_audit"] = copy.deepcopy(root["webull_lego_order_outbox"]["chain"])
+    root["webull_lego_rows"] = {"run": {
+        "run_id": "run", "chain_key": "chain", "committed": True,
+        "สถานะ": "READY_BUY", "ฝั่ง": "BUY", "สินทรัพย์": "TSLA",
+        "จำนวนสั่ง (หุ้น)": "1", "เวลา (UTC)": "2026-09-23T00:00:00Z",
+        "DNA step": 0, "market_slot_id": "slot"}}
     event = {"event": "lego_tick_completed", "correlation_id": "correlation",
              "business_status": "ROW_COMMITTED", "revision": "rev", "candidate_hash": "candidate",
-             "timestamp": "2026-09-23T00:00:00Z", "http_status": 200, "duration_ms": 20}
+             "timestamp": "2026-09-23T00:00:00Z", "http_status": 200, "duration_ms": 20,
+             "decision": {"run_id": "run", "status": "READY_BUY", "step": 0,
+                          "market_slot_id": "slot", "committed": True}}
     resource = {"type": "cloud_run_revision", "labels": {
         "project_id": "project", "location": "region", "service_name": "lego-tick",
         "revision_name": "rev"}}
@@ -40,6 +49,7 @@ def test_complete_local_evidence_still_does_not_certify_broker(tmp_path):
     result = report(tmp_path, *evidence(tmp_path))
     assert checks(result)["snapshot_integrity"] == "PASS"
     assert checks(result)["request_tick_pairing"] == "PASS"
+    assert checks(result)["committed_row_log_lineage"] == "PASS"
     pairing = next(c["detail"] for c in result["checks"]
                    if c["criterion"] == "request_tick_pairing")
     assert pairing == {"requests": 1, "ticks": 1, "matched": 1, "issues": {}}
@@ -152,6 +162,65 @@ def test_canceled_alias_is_terminal_in_snapshot_audit(tmp_path):
                   if c["criterion"] == "snapshot_integrity")
     assert detail["statuses"] == {"CANCELLED": 1}
     assert "unresolved_execution" not in detail["issues"]
+
+
+def test_intent_requires_committed_matching_decision_row(tmp_path):
+    root, logs = evidence(tmp_path)
+    root["webull_lego_rows"].clear()
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["committed_decision_row_missing"] == 1
+
+    root, logs = evidence(tmp_path)
+    root["webull_lego_rows"]["run"]["จำนวนสั่ง (หุ้น)"] = "2"
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["intent_decision_row_mismatch"] == 1
+
+
+def test_committed_row_requires_matching_tick_in_log_window(tmp_path):
+    root, logs = evidence(tmp_path)
+    logs[0]["jsonPayload"]["decision"]["run_id"] = "other"
+    result = report(tmp_path, root, logs)
+    lineage = next(c for c in result["checks"]
+                   if c["criterion"] == "committed_row_log_lineage")
+    assert lineage["status"] == "FAIL"
+    assert lineage["detail"]["issues"]["commit_event_row_missing_or_mismatched"] == 1
+    assert lineage["detail"]["issues"]["scoped_row_commit_event_missing"] == 1
+
+
+def test_positive_fill_witness_values_must_agree_across_ledgers(tmp_path):
+    root, logs = evidence(tmp_path)
+    intent = root["webull_lego_order_outbox"]["chain"]["run"]
+    intent.update(status="FILLED", place_attempted=True,
+                  filled_quantity="1", filled_price="10", filled_fee="0.25",
+                  broker_fee_status="KNOWN", cashflow_finalized=True, realized=True,
+                  order_payload=[{"client_order_id": "run", "symbol": "TSLA",
+                                  "side": "BUY", "quantity": "1"}])
+    root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
+    row = root["webull_lego_rows"]["run"]
+    row.update(cashflow_status="FINALIZED", execution_quantity="1",
+               execution_price="10")
+    root["webull_lego_broker_cashflow"] = {"chain": {"events": {"run": {
+        "cumulative_quantity": "1", "cumulative_notional": "10",
+        "actual_fees": "0.25", "cash_cumulative": "-10.25", "side": "BUY"}}}}
+    root["webull_lego_state"] = {"chain": {"execution_cashflow": {
+        "finalized_runs": {"run": {"filled_quantity": "1", "filled_price": "10"}}}}}
+    root["webull_lego_realized"] = {"chain": {"applied_fills": {"run": {
+        "quantity": "1", "average_price": "10", "fee": "0.25", "side": "BUY"}}}}
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"] == {}
+
+    root["webull_lego_realized"]["chain"]["applied_fills"]["run"]["average_price"] = 10.000000001
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"] == {}
+
+    root["webull_lego_realized"]["chain"]["applied_fills"]["run"]["quantity"] = "0.9"
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["model_or_realized_witness_mismatch"] == 1
 
 
 def test_cli_redacts_invalid_raw_content_and_returns_nonzero(tmp_path, monkeypatch, capsys):

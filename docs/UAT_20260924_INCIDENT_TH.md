@@ -6,7 +6,7 @@
 
 | ชุดข้อมูล | การผูกหลักฐาน | สิ่งที่ตรวจพบ |
 |---|---|---|
-| Cloud Logging export 24 ก.ย. | SHA-256 `6e309e21831e833e5efcceb670fd7018216f51d03c6971cb57139b243f8b2619`; revision `lego-tick-uat-00030-kuw`; candidate `d54c3bddf70a92f3ba29befdec358204dcf6e9307b9c42f6a0e50e9e6b40cd8a` | 131 tick จับคู่ request ด้วย trace/revision/เวลา/HTTP ได้ 131/131; business status `MANUAL_RECONCILIATION_REQUIRED` 124, `WAITING_RECONCILIATION` 4, `ERROR` 3 |
+| Cloud Logging export 24 ก.ย. | SHA-256 `6e309e21831e833e5efcceb670fd7018216f51d03c6971cb57139b243f8b2619`; revision `lego-tick-uat-00030-kuw`; candidate `d54c3bddf70a92f3ba29befdec358204dcf6e9307b9c42f6a0e50e9e6b40cd8a` | 131 tick จับคู่ request ด้วย trace/revision/เวลา/HTTP ได้ 131/131; committed decision ใน log ตรงกับแถว RTDB 10/10; business status `MANUAL_RECONCILIATION_REQUIRED` 124, `WAITING_RECONCILIATION` 4, `ERROR` 3 |
 | RTDB export 24 ก.ย. | SHA-256 `2275e059ba5081047b6fd26c12f4b6d4cb127a36fc7c6902d97eb527a76fd7c1` | 5 intents: `EXPIRED_UNSENT` 4, `FILLED` 1; audit mirror ตรง 5/5; มี money fence ค้าง 1 |
 | Intent ที่ `FILLED` | outbox, payload, broker cashflow และ ledger ใน export เดียวกัน | payload quantity `0.31721` แต่ cumulative filled quantity `0.320000`; fee เป็น `KNOWN` และ broker cashflow บันทึกแล้ว แต่ `cashflow_finalized=false`, `cashflow_abandoned=true`, `needs_manual_check=true`; ไม่มี model/realized witness ที่ครบ |
 
@@ -18,7 +18,7 @@
 - ยืนยัน client order ID, symbol, side และจำนวนใน payload ตรงกับ committed intent ก่อน Preview; ถ้าต่างกันหยุดก่อน Place
 - หลัง durable Place marker ใช้ intent จาก transaction ที่ยืนยันแล้วเพื่อตรวจ cumulative fill; fill เกินจำนวนที่ส่งหรือ payload/identity ไม่ชัดเจนจะคง manual money fence และไม่ลง ledger อัตโนมัติ
 - แยก `broker_reason_missing` จากเหตุ reject จริง; ข้อความ fallback ไม่อ้างว่า broker ส่งเหตุผลมา
-- Offline audit ตรวจ missing terminal quantity, payload/intent mismatch, overfill, identity mismatch และ reject reason gap โดยเก็บเฉพาะยอดรวมและ hash ของ source ในรายงาน
+- Offline audit ตรวจ committed row ต่อ intent และ log, missing terminal quantity, payload/intent mismatch, overfill, identity mismatch, ledger witness ที่ไม่ตรงกัน และ reject reason gap โดยเก็บเฉพาะยอดรวมและ hash ของ source ในรายงาน
 
 ## ขั้นตอนปิด incident ก่อนเปิดคำสั่งใหม่
 

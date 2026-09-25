@@ -28,6 +28,11 @@ def number(value):
         return None
 
 
+def same_number(left, right, tolerance):
+    a, b = number(left), number(right)
+    return a is not None and b is not None and abs(a - b) <= Decimal(tolerance)
+
+
 def read_json(path):
     raw = path.read_bytes()
     return json.loads(raw), hashlib.sha256(raw).hexdigest()
@@ -136,6 +141,71 @@ def pair_request_ticks(ticks, requests):
                                "matched": matched, "issues": problems}
 
 
+def link_committed_rows(rows, ticks, requests):
+    """Match committed decision rows to tick logs inside the supplied window.
+
+    Rows outside the request window are historical context, not proof that the
+    provided log export is incomplete. A missing row for a commit event inside
+    the export is always a failure.
+    """
+    problems = Counter()
+    committed = Counter()
+    matching = set()
+    for _entry, payload in ticks:
+        decision = payload.get("decision")
+        if not isinstance(decision, dict) or decision.get("committed") is not True:
+            continue
+        run = str(decision.get("run_id") or "")
+        committed[run] += 1
+        row = rows.get(run)
+        if (not run or not isinstance(row, dict) or row.get("committed") is not True
+                or str(row.get("run_id")) != run
+                or row.get("สถานะ") != decision.get("status")
+                or row.get("DNA step") != decision.get("step")
+                or row.get("market_slot_id") != decision.get("market_slot_id")):
+            problems["commit_event_row_missing_or_mismatched"] += 1
+        else:
+            matching.add(run)
+    problems["duplicate_commit_event"] = sum(
+        count - 1 for count in committed.values() if count > 1)
+
+    starts, ends = [], []
+    for entry in requests:
+        start = _utc_timestamp(entry.get("timestamp"))
+        http = entry.get("httpRequest")
+        latency = http.get("latency") if isinstance(http, dict) else None
+        if start is None or not isinstance(latency, str) or not _HTTP_LATENCY.fullmatch(latency):
+            continue
+        try:
+            end = start + timedelta(seconds=float(Decimal(latency[:-1])))
+        except (ValueError, OverflowError):
+            continue
+        starts.append(start)
+        ends.append(end)
+    scoped = 0
+    if starts:
+        first, last = min(starts), max(ends)
+        for run, row in rows.items():
+            if not isinstance(row, dict) or row.get("committed") is not True:
+                continue
+            observed = _utc_timestamp(row.get("เวลา (UTC)"))
+            if observed is None:
+                problems["committed_row_time_missing"] += 1
+            elif first <= observed <= last:
+                scoped += 1
+                if run not in matching:
+                    problems["scoped_row_commit_event_missing"] += 1
+    else:
+        problems["request_window_missing"] += 1
+    problems = {name: count for name, count in problems.items() if count}
+    return not problems and bool(starts), {
+        "commit_events": sum(committed.values()),
+        "rows_in_request_window": scoped,
+        "matched_rows": len(matching),
+        "issues": problems,
+    }
+
+
 def build_report(export, logs, candidate, revision):
     root, export_hash = read_json(export)
     entries, logs_hash = read_json(logs)
@@ -160,6 +230,7 @@ def build_report(export, logs, candidate, revision):
             intent = mapping(raw)
             intents.append((chain, run, intent))
     audit = mapping(root.get("webull_lego_order_audit"))
+    rows = mapping(root.get("webull_lego_rows"))
     cash = mapping(root.get("webull_lego_broker_cashflow", {}))
     state = mapping(root.get("webull_lego_state", {}))
     realized = mapping(root.get("webull_lego_realized", {}))
@@ -174,6 +245,16 @@ def build_report(export, logs, candidate, revision):
         status = normalize_status(intent.get("status") or "UNKNOWN")
         statuses[status] += 1
         ids[str(intent.get("client_order_id") or run)] += 1
+        row = rows.get(run)
+        if not isinstance(row, dict) or row.get("committed") is not True:
+            issues["committed_decision_row_missing"] += 1
+            row = {}
+        elif (str(row.get("run_id")) != run or row.get("chain_key") != chain
+              or row.get("สถานะ") != intent.get("row_status")
+              or row.get("ฝั่ง") != intent.get("side")
+              or row.get("สินทรัพย์") != intent.get("symbol")
+              or number(row.get("จำนวนสั่ง (หุ้น)")) != number(intent.get("quantity"))):
+            issues["intent_decision_row_mismatch"] += 1
         mirror = audit.get(run)
         version = intent.get("audit_revision")
         if (isinstance(mirror, dict) and type(version) is int and version >= 1
@@ -240,8 +321,20 @@ def build_report(export, logs, candidate, revision):
                     issues["cashflow_arithmetic_mismatch"] += 1
             flow = mapping(mapping(state.get(chain, {})).get("execution_cashflow", {}))
             applied = mapping(mapping(realized.get(chain, {})).get("applied_fills", {}))
-            if run not in mapping(flow.get("finalized_runs", {})) or run not in applied:
+            final = mapping(flow.get("finalized_runs", {})).get(run)
+            realized_fill = applied.get(run)
+            if not isinstance(final, dict) or not isinstance(realized_fill, dict):
                 issues["model_or_realized_witness_missing"] += 1
+            elif (not same_number(final.get("filled_quantity"), qty, "1e-9")
+                  or not same_number(final.get("filled_price"), price, "1e-8")
+                  or not same_number(realized_fill.get("quantity"), qty, "1e-9")
+                  or not same_number(realized_fill.get("average_price"), price, "1e-8")
+                  or not same_number(realized_fill.get("fee"), fee, "1e-8")
+                  or realized_fill.get("side") != intent.get("side")
+                  or row.get("cashflow_status") != "FINALIZED"
+                  or not same_number(row.get("execution_quantity"), qty, "1e-9")
+                  or not same_number(row.get("execution_price"), price, "1e-8")):
+                issues["model_or_realized_witness_mismatch"] += 1
     if any(count > 1 for count in ids.values()):
         issues["duplicate_client_order_identity"] += 1
     locks = mapping(root.get("webull_lego_order_dispatch_locks", {}))
@@ -276,6 +369,8 @@ def build_report(export, logs, candidate, revision):
           and len(set(correlations)) == len(correlations), {"ticks": len(ticks)})
     pairing_ok, pairing_detail = pair_request_ticks(ticks, requests)
     check("request_tick_pairing", pairing_ok, pairing_detail)
+    lineage_ok, lineage_detail = link_committed_rows(rows, ticks, requests)
+    check("committed_row_log_lineage", lineage_ok, lineage_detail)
     check("candidate_revision_binding", bool(candidate) and bool(revision) and bool(ticks)
           and all(p.get("candidate_hash") == candidate and p.get("revision") == revision for _, p in ticks),
           {"expected_candidate": candidate, "expected_revision": revision})
