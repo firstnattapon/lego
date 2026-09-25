@@ -167,7 +167,9 @@ def build_report(export, logs, candidate, revision):
     matched = 0
     filled = 0
     mirror_fields = ("status", "filled_quantity", "filled_price", "filled_fee",
-                     "broker_fee_status", "cashflow_finalized", "place_attempted")
+                     "broker_fee_status", "cashflow_finalized", "place_attempted",
+                     "needs_manual_check", "order_contract_anomaly",
+                     "broker_reason_missing")
     for chain, run, intent in intents:
         status = normalize_status(intent.get("status") or "UNKNOWN")
         statuses[status] += 1

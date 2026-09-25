@@ -101,6 +101,7 @@ def test_positive_fill_audit_flags_submitted_quantity_and_identity_gaps(tmp_path
     intent = root["webull_lego_order_outbox"]["chain"]["run"]
     intent.update(status="FILLED", place_attempted=True, side="BUY", symbol="TSLA",
                   quantity="0.31721", filled_quantity="0.320000",
+                  order_contract_anomaly="fill_exceeds_submitted_quantity",
                   order_payload=[{"client_order_id": "run", "side": "BUY",
                                   "symbol": "TSLA", "quantity": "0.31721"}])
     root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
@@ -108,7 +109,13 @@ def test_positive_fill_audit_flags_submitted_quantity_and_identity_gaps(tmp_path
     detail = next(c["detail"] for c in result["checks"]
                   if c["criterion"] == "snapshot_integrity")
     assert detail["issues"]["fill_exceeds_submitted_quantity"] == 1
+    assert detail["issues"]["order_contract_anomaly"] == 1
     assert "intent_payload_quantity_mismatch" not in detail["issues"]
+
+    root["webull_lego_order_audit"]["run"].pop("order_contract_anomaly")
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["mirror_missing_stale_or_mismatched"] == 1
 
     intent["order_payload"][0].update(quantity="0.3", symbol="AAPL")
     root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
