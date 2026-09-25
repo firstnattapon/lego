@@ -340,6 +340,22 @@ def build_report(export, logs, candidate, revision):
     locks = mapping(root.get("webull_lego_order_dispatch_locks", {}))
     lock_docs = [mapping(lock) for lock in locks.values()]
     halt_docs = [mapping(lock.get("operator_halt", {})) for lock in lock_docs]
+    halt_audit = mapping(root.get("webull_lego_operator_halt_audit", {}))
+    for scope, lock in locks.items():
+        halt = mapping(mapping(lock).get("operator_halt", {}))
+        if not halt:
+            continue
+        events = mapping(halt_audit.get(scope, {}))
+        halt_id = halt.get("halt_id")
+        actions = {event.get("action") for event in events.values()
+                   if isinstance(event, dict) and event.get("scope") == scope
+                   and event.get("halt_id") == halt_id}
+        expected = {"HALT"} if halt.get("halted") else {"HALT", "CLEAR"}
+        if not halt_id or not expected.issubset(actions):
+            issues["operator_halt_audit_history_missing"] += 1
+        last = halt.get("last_audit_event_id")
+        if not last or not isinstance(events.get(last), dict):
+            issues["operator_halt_last_audit_witness_missing"] += 1
     unresolved = sum(bool(lock.get("inflight_run_id")) for lock in lock_docs)
     operator_halts = sum(bool(halt.get("halted")) for halt in halt_docs)
     halt_audits_pending = sum(bool(halt.get("audit_pending_event"))

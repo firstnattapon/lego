@@ -109,6 +109,23 @@ def test_operator_halt_and_unmirrored_transition_block_release(tmp_path):
     assert money["detail"]["operator_halt_audits_pending"] == 1
 
 
+def test_cleared_operator_halt_requires_immutable_history(tmp_path):
+    root, logs = evidence(tmp_path)
+    halt = {"halted": False, "halt_id": "h1", "last_audit_event_id": "clear"}
+    root["webull_lego_order_dispatch_locks"] = {"scope": {"operator_halt": halt}}
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["operator_halt_audit_history_missing"] == 1
+
+    root["webull_lego_operator_halt_audit"] = {"scope": {
+        "set": {"scope": "scope", "halt_id": "h1", "action": "HALT"},
+        "clear": {"scope": "scope", "halt_id": "h1", "action": "CLEAR"}}}
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert "operator_halt_audit_history_missing" not in detail["issues"]
+    assert "operator_halt_last_audit_witness_missing" not in detail["issues"]
+
+
 def test_missing_or_malformed_evidence_never_passes(tmp_path):
     result = report(tmp_path, {}, [])
     assert all(x["status"] != "PASS" for x in result["checks"] if x["criterion"] != "money_fences_resolved")
