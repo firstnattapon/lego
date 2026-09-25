@@ -209,6 +209,52 @@ def test_intent_requires_committed_matching_decision_row(tmp_path):
     assert detail["issues"]["intent_decision_row_mismatch"] == 1
 
 
+def test_archived_order_and_audit_still_count_as_one_history(tmp_path):
+    root, logs = evidence(tmp_path)
+    root["webull_lego_order_outbox_archive"] = root.pop("webull_lego_order_outbox")
+    root["webull_lego_order_audit_archive"] = root.pop("webull_lego_order_audit")
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"] == {}
+    assert detail["intents"] == 1 and detail["mirrors_matched"] == 1
+
+    # A crash between copy and hot-path delete may briefly leave identical
+    # records in both locations. The audit must count one logical order.
+    root["webull_lego_order_outbox"] = copy.deepcopy(
+        root["webull_lego_order_outbox_archive"])
+    root["webull_lego_order_audit"] = copy.deepcopy(
+        root["webull_lego_order_audit_archive"])
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"] == {}
+    assert detail["intents"] == 1
+
+    root["webull_lego_order_outbox"]["chain"]["run"]["status"] = "FILLED"
+    root["webull_lego_order_audit"]["run"]["status"] = "FILLED"
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["live_archive_outbox_conflict"] == 1
+    assert detail["issues"]["live_archive_order_audit_conflict"] == 1
+
+
+def test_orphaned_money_witnesses_fail_snapshot_integrity(tmp_path):
+    root, logs = evidence(tmp_path)
+    orphan = copy.deepcopy(root["webull_lego_rows"]["run"])
+    orphan.update(run_id="orphan", cashflow_status="FINALIZED")
+    root["webull_lego_rows"]["orphan"] = orphan
+    root["webull_lego_order_audit"]["orphan"] = {"status": "FILLED"}
+    root["webull_lego_broker_cashflow"] = {"chain": {"events": {"orphan": {}}}}
+    root["webull_lego_state"] = {"chain": {"execution_cashflow": {
+        "finalized_runs": {"orphan": {}}}}}
+    root["webull_lego_realized_events"] = {"chain": {"orphan": {}}}
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    for issue in ("finalized_row_without_intent", "order_audit_without_intent",
+                  "broker_cashflow_without_intent", "model_finalization_without_intent",
+                  "realized_fill_without_intent"):
+        assert detail["issues"][issue] == 1
+
+
 def test_committed_row_requires_matching_tick_in_log_window(tmp_path):
     root, logs = evidence(tmp_path)
     logs[0]["jsonPayload"]["decision"]["run_id"] = "other"
@@ -248,12 +294,25 @@ def test_positive_fill_witness_values_must_agree_across_ledgers(tmp_path):
                   if c["criterion"] == "snapshot_integrity")
     assert detail["issues"] == {}
 
-    root["webull_lego_realized"]["chain"]["applied_fills"]["run"]["average_price"] = 10.000000001
+    root["webull_lego_realized_events"] = {"chain": {"run":
+        root["webull_lego_realized"]["chain"]["applied_fills"].pop("run")}}
     detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
                   if c["criterion"] == "snapshot_integrity")
     assert detail["issues"] == {}
 
-    root["webull_lego_realized"]["chain"]["applied_fills"]["run"]["quantity"] = "0.9"
+    root["webull_lego_realized"]["chain"]["applied_fills"]["run"] = {
+        **root["webull_lego_realized_events"]["chain"]["run"], "fee": "0.30"}
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["live_archive_realized_conflict"] == 1
+    root["webull_lego_realized"]["chain"]["applied_fills"].pop("run")
+
+    root["webull_lego_realized_events"]["chain"]["run"]["average_price"] = 10.000000001
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"] == {}
+
+    root["webull_lego_realized_events"]["chain"]["run"]["quantity"] = "0.9"
     detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
                   if c["criterion"] == "snapshot_integrity")
     assert detail["issues"]["model_or_realized_witness_mismatch"] == 1

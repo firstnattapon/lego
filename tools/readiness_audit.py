@@ -226,21 +226,40 @@ def build_report(export, logs, candidate, revision):
             return {}
         return value
 
-    intents = []
-    for chain, records in mapping(root.get("webull_lego_order_outbox")).items():
-        for run, raw in mapping(records).items():
-            intent = mapping(raw)
-            intents.append((chain, run, intent))
-    audit = mapping(root.get("webull_lego_order_audit"))
+    # The runtime moves terminal outbox/audit records to *_archive, and FIFO
+    # moves old applied-fill witnesses to webull_lego_realized_events. A full
+    # RTDB export must audit both locations or a long-running bot appears to
+    # have lost orders as soon as retention moves them out of the hot paths.
+    outbox = {}
+    for path in ("webull_lego_order_outbox_archive", "webull_lego_order_outbox"):
+        for chain, records in mapping(root.get(path, {})).items():
+            merged = outbox.setdefault(chain, {})
+            for run, raw in mapping(records).items():
+                if run in merged and merged[run] != raw:
+                    issues["live_archive_outbox_conflict"] += 1
+                merged[run] = mapping(raw)
+    intents = [(chain, run, intent) for chain, records in outbox.items()
+               for run, intent in records.items()]
+    intent_keys = {(chain, run) for chain, run, _ in intents}
+    intent_runs = {run for _, run, _ in intents}
+    audit = {}
+    for path in ("webull_lego_order_audit_archive", "webull_lego_order_audit"):
+        for run, raw in mapping(root.get(path, {})).items():
+            if run in audit and audit[run] != raw:
+                issues["live_archive_order_audit_conflict"] += 1
+            audit[run] = mapping(raw)
     rows = mapping(root.get("webull_lego_rows"))
     cash = mapping(root.get("webull_lego_broker_cashflow", {}))
     state = mapping(root.get("webull_lego_state", {}))
     realized = mapping(root.get("webull_lego_realized", {}))
-    for row in rows.values():
+    realized_archive = mapping(root.get("webull_lego_realized_events", {}))
+    for run, row in rows.items():
         if not isinstance(row, dict) or row.get("committed") is not True:
             issues["uncommitted_or_malformed_row"] += 1
             continue
         row_cashflow_status = row.get("cashflow_status")
+        if row_cashflow_status == "FINALIZED" and run not in intent_runs:
+            issues["finalized_row_without_intent"] += 1
         if row_cashflow_status not in {"NO_ACTION", "PENDING_EXECUTION", "FINALIZED"}:
             issues["row_cashflow_status_unknown"] += 1
         if row_cashflow_status in {"NO_ACTION", "PENDING_EXECUTION"}:
@@ -341,8 +360,9 @@ def build_report(export, logs, candidate, revision):
                     issues["cashflow_arithmetic_mismatch"] += 1
             flow = mapping(mapping(state.get(chain, {})).get("execution_cashflow", {}))
             applied = mapping(mapping(realized.get(chain, {})).get("applied_fills", {}))
+            archived_applied = mapping(realized_archive.get(chain, {}))
             final = mapping(flow.get("finalized_runs", {})).get(run)
-            realized_fill = applied.get(run)
+            realized_fill = applied.get(run) or archived_applied.get(run)
             if not isinstance(final, dict) or not isinstance(realized_fill, dict):
                 issues["model_or_realized_witness_missing"] += 1
             elif (not same_number(final.get("filled_quantity"), qty, "1e-9")
@@ -360,6 +380,25 @@ def build_report(export, logs, candidate, revision):
                 issues["model_or_realized_witness_mismatch"] += 1
     if any(count > 1 for count in ids.values()):
         issues["duplicate_client_order_identity"] += 1
+    for run in audit.keys() - intent_runs:
+        issues["order_audit_without_intent"] += 1
+    for chain, record in cash.items():
+        for run in mapping(mapping(record).get("events", {})):
+            if (chain, run) not in intent_keys:
+                issues["broker_cashflow_without_intent"] += 1
+    for chain, record in state.items():
+        flow = mapping(mapping(record).get("execution_cashflow", {}))
+        for run in mapping(flow.get("finalized_runs", {})):
+            if (chain, run) not in intent_keys:
+                issues["model_finalization_without_intent"] += 1
+    for chain in realized.keys() | realized_archive.keys():
+        hot = mapping(mapping(realized.get(chain, {})).get("applied_fills", {}))
+        archived = mapping(realized_archive.get(chain, {}))
+        for run in hot.keys() | archived.keys():
+            if (chain, run) not in intent_keys:
+                issues["realized_fill_without_intent"] += 1
+            if run in hot and run in archived and hot[run] != archived[run]:
+                issues["live_archive_realized_conflict"] += 1
     locks = mapping(root.get("webull_lego_order_dispatch_locks", {}))
     lock_docs = [mapping(lock) for lock in locks.values()]
     halt_docs = [mapping(lock.get("operator_halt", {})) for lock in lock_docs]
