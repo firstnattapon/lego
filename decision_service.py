@@ -331,6 +331,16 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             alerting.notify(broker_circuit.HALT, runtime_identity + cfg.symbol,
                             symbol=cfg.symbol, count=circuit.get("consecutive_broker_rejects"))
 
+        if auto:
+            import operator_halt
+            stop = operator_halt.status(runtime_identity, cfg.symbol)
+            if stop.get("halted") or stop.get("audit_pending_event"):
+                auto = False
+                outbox_blocked = "OPERATOR_HALT"
+                _record_warning("operator_halt",
+                                "operator หยุดสร้าง order ใหม่สำหรับ account/symbol นี้",
+                                {"symbol": cfg.symbol})
+
         # Evaluate a candidate before the state transaction so the exact payload
         # can be stored in that same transaction.  row_durable=True here means
         # "activate only if commit succeeds"; no broker/outbox write happens yet.

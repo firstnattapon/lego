@@ -1484,6 +1484,12 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         # Another generation owns the chain now.  Leave the intent actionable;
         # that owner will process it, and a stale worker must not make this
         # recoverable hand-off terminal.
+        import operator_halt
+        identity = str(intent.get("runtime_identity_fingerprint") or "")
+        stop = operator_halt.status(identity, cfg.symbol) if identity else {}
+        if stop.get("halted") or stop.get("audit_pending_event"):
+            return {"run_id": run_id, "status": "PENDING_DISPATCH",
+                    "operator_halt_blocked": True}
         return {"run_id": run_id, "status": "PENDING_DISPATCH",
                 "dispatch_fence_lost": True}
     # The outer worker may clear this durable run fence only after it reads a

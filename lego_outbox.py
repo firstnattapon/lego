@@ -159,6 +159,10 @@ def fence_chain_dispatch(chain_key: str, run_id: str, worker_id: str,
             return doc
         if not inflight and (doc.get("broker_reject_circuit") or {}).get("halted"):
             return doc
+        operator_stop = doc.get("operator_halt") or {}
+        if not inflight and (operator_stop.get("halted")
+                             or operator_stop.get("audit_pending_event")):
+            return doc
         doc.update({
             "lease_until": lease_text,
             "place_fence": fence,

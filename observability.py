@@ -36,6 +36,9 @@ def business_status(body: dict, http_status: int) -> str:
         return "ERROR"
     if any(item.get("fee_overdue") for item in results):
         return "FEE_OVERDUE"
+    if (decision.get("outbox_blocked") == "OPERATOR_HALT"
+            or any(item.get("operator_halt_blocked") for item in results)):
+        return "OPERATOR_HALT"
     if (decision.get("outbox_blocked") == "BROKER_REJECT_HALT"
             or any(item.get("broker_reject_halted") for item in results)
             or body.get("broker_reject_halted")):
@@ -71,7 +74,7 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
         "event": "lego_tick_completed", "timestamp": datetime.now(timezone.utc).isoformat(),
         "severity": ("ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED",
                                            "BROKER_REJECT_HALT", "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}
-                     else "WARNING" if health in {"AUTH_BACKOFF", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
+                     else "WARNING" if health in {"AUTH_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
                                                   "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW"}
                      else "INFO"),
         "revision": os.environ.get("K_REVISION"),
@@ -113,7 +116,8 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
                                              "broker_reason_missing", "broker_reject_code",
                                              "order_contract_anomaly",
                                              "broker_reject_halted", "token_preflight_blocked",
-                                             "execution_limit_blocked", "needs_manual_check",
+                                             "execution_limit_blocked", "operator_halt_blocked",
+                                             "needs_manual_check",
                                              "reconciliation_overdue", "reconciliation_age_seconds")}})
     print(json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
 

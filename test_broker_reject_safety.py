@@ -12,6 +12,7 @@ import decision_service
 import execution_service as execution
 import lego_outbox as outbox
 import main
+import operator_halt
 import webull_io
 from config import load_runtime_config
 from conftest import FAKE_DB, FakeReference
@@ -260,6 +261,18 @@ def test_halt_blocks_new_intent_but_keeps_committing_dna_slots(monkeypatch):
     assert code == 200 and body["committed"], body
     assert body["outbox_blocked"] == circuit.HALT
     assert outbox.list_actionable(main.chain_key(cfg)) == []
+
+
+def test_operator_halt_blocks_new_intent_and_reports_business_halt(monkeypatch):
+    runtime, cfg = decision_setup(monkeypatch, allow_fractional=True)
+    identity = webull_io.runtime_identity_fingerprint()
+    operator_halt.set_halt(identity, "TSLA", operator="alice",
+                           reason="incident review", apply=True)
+    body, code = decision_service.run_decision(None, runtime, cfg)
+    assert code == 200 and body["committed"], body
+    assert body["outbox_blocked"] == "OPERATOR_HALT"
+    assert outbox.list_actionable(main.chain_key(cfg)) == []
+    assert business_status({"decision": body}, 200) == "OPERATOR_HALT"
 
 
 @pytest.mark.parametrize("status", ["PLACING_UNKNOWN", "PENDING", "PARTIAL_FILLED"])

@@ -98,6 +98,17 @@ def test_stale_mirror_duplicate_tick_candidate_and_live_fence_fail(tmp_path):
         assert result[key] == "FAIL"
 
 
+def test_operator_halt_and_unmirrored_transition_block_release(tmp_path):
+    root, logs = evidence(tmp_path)
+    root["webull_lego_order_dispatch_locks"] = {"scope": {
+        "operator_halt": {"halted": True, "audit_pending_event": {"event_id": "event"}}}}
+    result = report(tmp_path, root, logs)
+    money = next(c for c in result["checks"] if c["criterion"] == "money_fences_resolved")
+    assert money["status"] == "FAIL"
+    assert money["detail"]["operator_halts"] == 1
+    assert money["detail"]["operator_halt_audits_pending"] == 1
+
+
 def test_missing_or_malformed_evidence_never_passes(tmp_path):
     result = report(tmp_path, {}, [])
     assert all(x["status"] != "PASS" for x in result["checks"] if x["criterion"] != "money_fences_resolved")

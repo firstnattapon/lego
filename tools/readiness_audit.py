@@ -338,11 +338,19 @@ def build_report(export, logs, candidate, revision):
     if any(count > 1 for count in ids.values()):
         issues["duplicate_client_order_identity"] += 1
     locks = mapping(root.get("webull_lego_order_dispatch_locks", {}))
-    unresolved = sum(bool(mapping(lock).get("inflight_run_id")) for lock in locks.values())
+    lock_docs = [mapping(lock) for lock in locks.values()]
+    halt_docs = [mapping(lock.get("operator_halt", {})) for lock in lock_docs]
+    unresolved = sum(bool(lock.get("inflight_run_id")) for lock in lock_docs)
+    operator_halts = sum(bool(halt.get("halted")) for halt in halt_docs)
+    halt_audits_pending = sum(bool(halt.get("audit_pending_event"))
+                              for halt in halt_docs)
     check("snapshot_integrity", bool(intents) and not issues,
           {"intents": len(intents), "statuses": dict(statuses), "mirrors_matched": matched,
            "positive_fills": filled, "issues": dict(issues)})
-    check("money_fences_resolved", unresolved == 0, {"unresolved_fences": unresolved})
+    check("money_fences_resolved",
+          unresolved == operator_halts == halt_audits_pending == 0,
+          {"unresolved_fences": unresolved, "operator_halts": operator_halts,
+           "operator_halt_audits_pending": halt_audits_pending})
 
     ticks, requests = [], []
     malformed = 0

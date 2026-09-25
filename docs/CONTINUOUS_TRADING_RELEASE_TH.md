@@ -47,6 +47,27 @@ python ops.py repair-audit --run-id <RUN_ID> --apply
 
 สถานะใน decision row เป็นประวัติการตัดสินใจ ต้องดูร่วมกับ execution audit/outbox; READY ที่ถูก preflight block อาจไม่มี intent โดยถูกต้องตาม guard
 
+## Operator halt สำหรับหยุดคำสั่งใหม่
+
+`halt-orders` ตั้ง flag ที่ account/symbol dispatch fence แบบ transaction; การ reconcile คำสั่งที่ส่งไปแล้วเดินต่อได้ หากมี run ที่ fenced ก่อนคำสั่ง halt สำเร็จ ผล CLI จะรายงาน `inflight=true` และ order นั้นอาจยังข้าม Place ได้ ต้องอ่าน broker ด้วย client ID เดิมก่อนสรุปว่าหยุดครบ ห้ามเปลี่ยน client ID หรือส่งซ้ำ
+
+```powershell
+python ops.py halt-orders --operator <OPERATOR> --reason <REASON>
+python ops.py halt-orders --operator <OPERATOR> --reason <REASON> --apply
+python ops.py status
+```
+
+การปลดต้อง pause `LEGO_ACTIVE=false`, ไม่มี unresolved order/active dispatch lease, ใช้ halt ID ที่อ่านล่าสุด และระบุผู้ตรวจอีกคน audit event ของ HALT/CLEAR มี marker ซ่อมซ้ำได้; เมื่อ marker ยังอยู่ fence ไม่รับ Place ใหม่ คำสั่งตรวจเป็น dry-run จนกว่าจะใส่ `--apply`
+
+```powershell
+python ops.py repair-operator-halt-audit
+python ops.py repair-operator-halt-audit --apply
+python ops.py clear-operator-halt --halt-id <HALT_ID> --operator <REVIEWER> --reason <REASON>
+python ops.py clear-operator-halt --halt-id <HALT_ID> --operator <REVIEWER> --reason <REASON> --apply
+```
+
+ชื่อ operator ใน CLI เป็นข้อมูลประกอบ audit ไม่ใช่การพิสูจน์ตัวบุคคล ต้องใช้ IAM/การอนุมัติสองคนที่ตรวจสอบได้จากระบบปฏิบัติการจริงก่อนนับเป็น production control
+
 ## Monitoring ที่ต้องเชื่อมบน deployment
 
 ใช้ Cloud Logging query โดยเปลี่ยนชื่อ service ให้ตรง environment:
@@ -57,7 +78,7 @@ resource.labels.service_name="lego-tick-uat"
 jsonPayload.event="lego_tick_completed"
 ```
 
-สร้าง alert ไปยังช่องทางของ operator สำหรับ `severity=ERROR`, `business_status=FEE_OVERDUE`, `MANUAL_RECONCILIATION_REQUIRED`, `OUTBOX_RECOVERY_PENDING`, และ repeated `WAITING_RECONCILIATION` ตรวจ absence ของ completion event เทียบ scheduler heartbeat และตรวจ state ไม่เดินระหว่าง active market session แยกจากตลาดปิด/paused
+สร้าง alert ไปยังช่องทางของ operator สำหรับ `severity=ERROR`, `business_status=FEE_OVERDUE`, `MANUAL_RECONCILIATION_REQUIRED`, `OPERATOR_HALT`, `OUTBOX_RECOVERY_PENDING`, และ repeated `WAITING_RECONCILIATION` ตรวจ absence ของ completion event เทียบ scheduler heartbeat และตรวจ state ไม่เดินระหว่าง active market session แยกจากตลาดปิด/paused
 
 อย่าใช้ HTTP 200 เป็น trading health หรือใช้ยอด warning เก่าที่สะสมเป็นเหตุเสียปัจจุบัน ใช้ structured tick result ล่าสุดร่วมกับสถานะ outbox; log มีเฉพาะ allowlisted fields ไม่รวม raw broker request/response, account ID, token หรือ signature
 
