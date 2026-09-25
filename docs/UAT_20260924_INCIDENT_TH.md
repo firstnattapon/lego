@@ -19,7 +19,7 @@
 - หลัง durable Place marker ใช้ intent จาก transaction ที่ยืนยันแล้วเพื่อตรวจ cumulative fill; fill เกินจำนวนที่ส่งหรือ payload/identity ไม่ชัดเจนจะคง manual money fence และไม่ลง ledger อัตโนมัติ
 - คำสั่ง admin dry-run/ack สำหรับ positive fill ตรวจ durable Place marker, submitted payload/intent quantity, broker cashflow event และยอดเงิน/ค่าธรรมเนียมเทียบ exact broker detail ก่อนปลด fence; หาก witness เปลี่ยนระหว่าง dry-run กับ apply จะปฏิเสธ. เคส `0.31721` กับ `0.320000` ยังไม่ผ่าน guard นี้แม้ภายหลังมี ledger entries จนครบ
 - แยก `broker_reason_missing` จากเหตุ reject จริง; ข้อความ fallback ไม่อ้างว่า broker ส่งเหตุผลมา
-- Offline audit ตรวจ committed row ต่อ intent และ log, missing terminal quantity, payload/intent mismatch, overfill, identity mismatch, ledger witness ที่ไม่ตรงกัน และ reject reason gap โดยเก็บเฉพาะยอดรวมและ hash ของ source ในรายงาน
+- Offline audit ตรวจ committed row ต่อ intent และ log, missing terminal quantity, payload/intent mismatch, overfill, identity mismatch, แถวที่ยังไม่ execute แต่ขยับ ΔA, แถว `FINALIZED` ที่ ΔA/A/E ไม่ตรง model witness, ledger witness ที่ไม่ตรงกัน และ reject reason gap โดยเก็บเฉพาะยอดรวมและ hash ของ source ในรายงาน
 
 ## ขั้นตอนปิด incident ก่อนเปิดคำสั่งใหม่
 

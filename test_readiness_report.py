@@ -17,7 +17,10 @@ def evidence(tmp_path):
         "run_id": "run", "chain_key": "chain", "committed": True,
         "สถานะ": "READY_BUY", "ฝั่ง": "BUY", "สินทรัพย์": "TSLA",
         "จำนวนสั่ง (หุ้น)": "1", "เวลา (UTC)": "2026-09-23T00:00:00Z",
-        "DNA step": 0, "market_slot_id": "slot"}}
+        "DNA step": 0, "market_slot_id": "slot",
+        "cashflow_status": "PENDING_EXECUTION",
+        "ΔAₙ ต่อสเต็ป (USD)": 0, "ΔAₙ เงินจริง (USD)": 0,
+        "Aₙ สะสม (USD)": 0, "Eₙ ส่วนเกินสะสม (USD)": 0}}
     event = {"event": "lego_tick_completed", "correlation_id": "correlation",
              "business_status": "ROW_COMMITTED", "revision": "rev", "candidate_hash": "candidate",
              "timestamp": "2026-09-23T00:00:00Z", "http_status": 200, "duration_ms": 20,
@@ -228,12 +231,17 @@ def test_positive_fill_witness_values_must_agree_across_ledgers(tmp_path):
     root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
     row = root["webull_lego_rows"]["run"]
     row.update(cashflow_status="FINALIZED", execution_quantity="1",
-               execution_price="10")
+               execution_price="10", **{
+                   "ΔAₙ ต่อสเต็ป (USD)": "1",
+                   "Aₙ สะสม (USD)": "2",
+                   "Eₙ ส่วนเกินสะสม (USD)": "3"})
     root["webull_lego_broker_cashflow"] = {"chain": {"events": {"run": {
         "cumulative_quantity": "1", "cumulative_notional": "10",
         "actual_fees": "0.25", "cash_cumulative": "-10.25", "side": "BUY"}}}}
     root["webull_lego_state"] = {"chain": {"execution_cashflow": {
-        "finalized_runs": {"run": {"filled_quantity": "1", "filled_price": "10"}}}}}
+        "finalized_runs": {"run": {"filled_quantity": "1", "filled_price": "10",
+                                   "delta_actual": "1", "actual_cumulative": "2",
+                                   "excess": "3"}}}}}
     root["webull_lego_realized"] = {"chain": {"applied_fills": {"run": {
         "quantity": "1", "average_price": "10", "fee": "0.25", "side": "BUY"}}}}
     detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
@@ -249,6 +257,62 @@ def test_positive_fill_witness_values_must_agree_across_ledgers(tmp_path):
     detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
                   if c["criterion"] == "snapshot_integrity")
     assert detail["issues"]["model_or_realized_witness_mismatch"] == 1
+
+
+def test_snapshot_flags_money_columns_even_when_fill_witnesses_exist(tmp_path):
+    root, logs = evidence(tmp_path)
+    intent = root["webull_lego_order_outbox"]["chain"]["run"]
+    intent.update(status="FILLED", place_attempted=True,
+                  filled_quantity="1", filled_price="10", filled_fee="0.25",
+                  broker_fee_status="KNOWN", cashflow_finalized=True, realized=True,
+                  order_payload=[{"client_order_id": "run", "symbol": "TSLA",
+                                  "side": "BUY", "quantity": "1"}])
+    root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
+    row = root["webull_lego_rows"]["run"]
+    row.update(cashflow_status="FINALIZED", execution_quantity="1",
+               execution_price="10", **{
+                   "ΔAₙ ต่อสเต็ป (USD)": 9,
+                   "Aₙ สะสม (USD)": 8,
+                   "Eₙ ส่วนเกินสะสม (USD)": 7,
+               })
+    root["webull_lego_broker_cashflow"] = {"chain": {"events": {"run": {
+        "cumulative_quantity": "1", "cumulative_notional": "10",
+        "actual_fees": "0.25", "cash_cumulative": "-10.25", "side": "BUY"}}}}
+    root["webull_lego_state"] = {"chain": {"execution_cashflow": {
+        "finalized_runs": {"run": {"filled_quantity": "1", "filled_price": "10",
+                                   "delta_actual": "1", "actual_cumulative": "2",
+                                   "excess": "3"}}}}}
+    root["webull_lego_realized"] = {"chain": {"applied_fills": {"run": {
+        "quantity": "1", "average_price": "10", "fee": "0.25", "side": "BUY"}}}}
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["model_or_realized_witness_mismatch"] == 1
+
+
+def test_snapshot_flags_unexecuted_row_that_moves_model_money(tmp_path):
+    root, logs = evidence(tmp_path)
+    row = root["webull_lego_rows"]["run"]
+    row.update(cashflow_status="NO_ACTION", **{
+        "ΔAₙ ต่อสเต็ป (USD)": 1.0,
+        "ΔAₙ เงินจริง (USD)": 0.0,
+        "Aₙ สะสม (USD)": 1.0,
+        "Eₙ ส่วนเกินสะสม (USD)": 1.0,
+    })
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["unexecuted_row_delta_nonzero"] == 1
+
+    row["ΔAₙ ต่อสเต็ป (USD)"] = 0
+    row["execution_quantity"] = "1"
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["unexecuted_row_has_execution_witness"] == 1
+
+    row["execution_quantity"] = None
+    row["cashflow_status"] = "UNKNOWN"
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["row_cashflow_status_unknown"] == 1
 
 
 def test_cli_redacts_invalid_raw_content_and_returns_nonzero(tmp_path, monkeypatch, capsys):

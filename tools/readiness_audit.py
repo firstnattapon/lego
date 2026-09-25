@@ -17,6 +17,8 @@ from pathlib import Path
 import re
 
 from lego_orders import normalize_status
+from lego_one_row import (ACTUAL_COLUMN, DELTA_ACTUAL_COLUMN, DELTA_COLUMN,
+                          EXCESS_COLUMN)
 from tools.migration_audit import audit_export, safe_unsent
 
 
@@ -234,6 +236,24 @@ def build_report(export, logs, candidate, revision):
     cash = mapping(root.get("webull_lego_broker_cashflow", {}))
     state = mapping(root.get("webull_lego_state", {}))
     realized = mapping(root.get("webull_lego_realized", {}))
+    for row in rows.values():
+        if not isinstance(row, dict) or row.get("committed") is not True:
+            issues["uncommitted_or_malformed_row"] += 1
+            continue
+        row_cashflow_status = row.get("cashflow_status")
+        if row_cashflow_status not in {"NO_ACTION", "PENDING_EXECUTION", "FINALIZED"}:
+            issues["row_cashflow_status_unknown"] += 1
+        if row_cashflow_status in {"NO_ACTION", "PENDING_EXECUTION"}:
+            if (number(row.get(DELTA_COLUMN)) != 0
+                    or number(row.get(DELTA_ACTUAL_COLUMN)) != 0):
+                issues["unexecuted_row_delta_nonzero"] += 1
+            if (number(row.get(ACTUAL_COLUMN)) is None
+                    or number(row.get(EXCESS_COLUMN)) is None):
+                issues["unexecuted_row_money_columns_missing"] += 1
+            if ((row.get("execution_quantity") not in (None, "")
+                 and number(row.get("execution_quantity")) != 0)
+                    or row.get("execution_price") not in (None, "")):
+                issues["unexecuted_row_has_execution_witness"] += 1
     ids = Counter()
     matched = 0
     filled = 0
@@ -333,7 +353,10 @@ def build_report(export, logs, candidate, revision):
                   or realized_fill.get("side") != intent.get("side")
                   or row.get("cashflow_status") != "FINALIZED"
                   or not same_number(row.get("execution_quantity"), qty, "1e-9")
-                  or not same_number(row.get("execution_price"), price, "1e-8")):
+                  or not same_number(row.get("execution_price"), price, "1e-8")
+                  or not same_number(row.get(DELTA_COLUMN), final.get("delta_actual"), "1e-8")
+                  or not same_number(row.get(ACTUAL_COLUMN), final.get("actual_cumulative"), "1e-8")
+                  or not same_number(row.get(EXCESS_COLUMN), final.get("excess"), "1e-8")):
                 issues["model_or_realized_witness_mismatch"] += 1
     if any(count > 1 for count in ids.values()):
         issues["duplicate_client_order_identity"] += 1
