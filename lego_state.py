@@ -376,7 +376,59 @@ def _repair_pending_row(state: dict | None) -> None:
     ref = db.reference(f"{ROWS_PATH}/{rid}")
     doc = ref.get()
     if doc is not None and doc.get("committed") is False:
-        ref.update({"committed": True})
+        observation = state.get("last_row_cashflow_observation")
+        if observation is None:
+            # Rows from older revisions had no transaction-bound cashflow
+            # snapshot. Preserve their existing recovery behavior; the offline
+            # audit must still judge their money columns independently.
+            ref.update({"committed": True})
+            return
+        if (not isinstance(observation, dict)
+                or observation.get("run_id") != rid
+                or observation.get("version") != state.get("version")
+                or doc.get("run_id") != rid
+                or doc.get("version") != state.get("version")
+                or not isinstance(observation.get("fields"), dict)):
+            raise ExecutionFinalizeError(
+                "row cashflow observation ไม่ตรง state transaction")
+        fields = observation["fields"]
+        required = {DELTA_COLUMN, DELTA_ACTUAL_COLUMN,
+                    ACTUAL_COLUMN, EXCESS_COLUMN}
+        if state.get("cashflow_semantics") == V2_CASHFLOW_SEMANTICS:
+            required.update({"R_basis", "E_mark_at_observation"})
+        if (set(fields) != required
+                or any(type(value) not in (int, float)
+                       or not math.isfinite(float(value))
+                       for value in fields.values())
+                or float(fields[DELTA_COLUMN]) != 0.0
+                or float(fields[DELTA_ACTUAL_COLUMN]) != 0.0):
+            raise ExecutionFinalizeError(
+                "row cashflow observation มีคอลัมน์หรือค่าที่ไม่ถูกต้อง")
+        ref.update({**fields, "committed": True})
+
+
+def _decision_row_cashflow_patch(cfg: Config, row: dict, cashflow: dict,
+                                 p0: float, semantics: str) -> dict:
+    """Money columns carried by the ledger seen inside the state transaction."""
+    actual = float(cashflow["actual_cumulative"])
+    acted_price = float(cashflow["last_action_price"])
+    market_reference = float(row[REFERENCE_COLUMN])
+    if (not all(math.isfinite(value) for value in
+                (actual, acted_price, p0, market_reference))
+            or acted_price <= 0 or p0 <= 0):
+        raise ExecutionFinalizeError("decision cashflow observation ไม่ถูกต้อง")
+    if semantics == V2_CASHFLOW_SEMANTICS:
+        excess = float(cashflow.get("excess", 0.0))
+    else:
+        excess = actual - cfg.fix_c * math.log(acted_price / p0)
+    if not math.isfinite(excess):
+        raise ExecutionFinalizeError("decision excess observation ไม่ถูกต้อง")
+    patch = {DELTA_COLUMN: 0.0, DELTA_ACTUAL_COLUMN: 0.0,
+             ACTUAL_COLUMN: actual, EXCESS_COLUMN: excess}
+    if semantics == V2_CASHFLOW_SEMANTICS:
+        patch.update({"R_basis": actual - excess,
+                      "E_mark_at_observation": actual - market_reference})
+    return patch
 
 
 def consumed_slot_state(cfg: Config, slot_id: str, *, runtime_identity: str,
@@ -563,6 +615,16 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
             "cashflow_semantics": target_semantics,
             "instrument_capability": capability_contract,
         }
+        # The worker may finalize an older fill after this decision read its
+        # anchor but before this state transaction. Commit the *transaction's*
+        # cashflow observation beside the decision pointer so a crash before
+        # the separate row patch can replay the exact same money columns.
+        next_state["last_row_cashflow_observation"] = {
+            "run_id": run_id,
+            "version": expected_version,
+            "fields": _decision_row_cashflow_patch(
+                cfg, row, cashflow, float(meta["p0_next"]), target_semantics),
+        }
         if target_semantics == V2_CASHFLOW_SEMANTICS:
             next_state.update({
                 "prev_excess": float(cashflow.get("excess", 0.0) or 0.0),
@@ -601,17 +663,34 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
         return next_state
 
     try:
-        state_ref.transaction(txn)
+        committed_state = state_ref.transaction(txn)
+        if committed_state is None:
+            # Some older database adapters return no transaction payload.
+            # Re-read and still require the exact run/version before patching.
+            committed_state = state_ref.get()
     except _Idempotent:
-        row_ref.update({"committed": True})
+        _repair_pending_row(state_ref.get())
         return {"committed": False, "idempotent": True,
                 "run_id": run_id, "version": expected_version}
     except (StaleAnchorError, SlotAlreadyConsumed, OrdinalRegression,
-            CashflowSemanticsDowngrade):
+            CashflowSemanticsDowngrade, ExecutionFinalizeError):
         row_ref.delete()
         raise
 
-    row_ref.update({"committed": True})
+    if (not isinstance(committed_state, dict)
+            or committed_state.get("last_run_id") != run_id
+            or committed_state.get("version") != expected_version):
+        raise ExecutionFinalizeError(
+            "state transaction ไม่ยืนยัน row cashflow observation")
+    _repair_pending_row(committed_state)
+    durable_row = row_ref.get()
+    expected_fields = committed_state["last_row_cashflow_observation"]["fields"]
+    if (not isinstance(durable_row, dict)
+            or durable_row.get("committed") is not True
+            or any(durable_row.get(key) != value
+                   for key, value in expected_fields.items())):
+        raise ExecutionFinalizeError(
+            "state commit แล้วแต่ row cashflow ยังไม่พร้อม; ต้อง replay")
     result = {"committed": True, "run_id": run_id, "version": expected_version,
               "market_slot_id": slot_id, "market_ordinal": market_ordinal}
     if migrated_from is not None:

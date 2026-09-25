@@ -16,6 +16,7 @@
 | Token | ใช้ boolean `token_check_enabled` ที่ broker ตอบจริงและผูกกับ credential/endpoint/cache TTL; ไม่มี token file อย่างเดียวไม่สรุปว่า 2FA เสีย; ลด warning ซ้ำเป็นเมื่อเปลี่ยนหรือทุก 10 นาที |
 | Production preflight | typed runtime ใช้ release binding ที่ตรง deployment; legacy gate ยังเป็น UAT เท่านั้น Production ที่ไม่มี binding ยังถูกปฏิเสธ |
 | Deployment identity | สร้าง manifest ได้เมื่อ checkout มี backend อย่างเดียว; deploy ปฏิเสธ CandidateHash ที่ไม่ตรง source; audit-cache ไม่ถูกส่งขึ้น runtime |
+| Decision row กับ fill race | ถ้า worker finalize fill หลัง decision อ่าน anchor แต่ก่อน state transaction, แถวใหม่ใช้ cashflow snapshot ที่ transaction ยอมรับ; state เก็บ marker เพื่อซ่อมแถวหลัง crash ก่อนเปิด committed flag; CI รัน probe กับ RTDB Emulator จริง |
 
 เอกสาร fee: [Webull Thailand Order Detail](https://developer.webull.co.th/apis/docs/reference/trade-api/order-detail.md), [Webull global Order Detail](https://developer.webull.com/apis/docs/reference/order-detail.md)
 
