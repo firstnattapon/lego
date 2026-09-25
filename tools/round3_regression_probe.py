@@ -22,7 +22,11 @@ def growing_fill(db, *, quantity=12, price=201, fee=0.4, terminal=True):
     ref = db.reference(f"{state.REALIZED_PATH}/{chain}")
     for index in range(25):
         state.apply_realized_fill(chain, f"buy-{index}", "BUY", 1, 100 + index, 0)
+    submitted = max(20, quantity)
     intent = {"chain_key": chain, "run_id": "sell", "side": "SELL",
+              "symbol": "AAPL", "quantity": submitted,
+              "order_payload": [{"client_order_id": "sell", "symbol": "AAPL",
+                                 "side": "SELL", "quantity": str(submitted)}],
               "status": "SUBMITTED", "place_attempted": True}
     cfg = Config("AAPL", 1500, 25, strategy_id="shannon_demon_lego_v2")
 

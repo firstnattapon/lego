@@ -198,6 +198,42 @@ def test_original_quantity_reaches_preview_and_place_once(monkeypatch, environme
     assert len(client.order_v3.place_order.calls) == 1
 
 
+def test_payload_rounding_cannot_change_committed_quantity_before_preview(monkeypatch):
+    runtime, intent, claim, client, _ = dispatch_fixture(monkeypatch)
+    original = execution.build_order_payload
+
+    def rounded(*args, **kwargs):
+        payload = original(*args, **kwargs)
+        payload[0]["quantity"] = "180.27"
+        return payload
+
+    monkeypatch.setattr(execution, "build_order_payload", rounded)
+    result = execution._dispatch_or_reconcile_one(
+        client, object(), CFG, intent, claim, runtime)
+    assert result["status"] == "NOT_PLACED"
+    assert client.order_v3.preview_order.calls == []
+    assert client.order_v3.place_order.calls == []
+    assert read_intent(intent["chain_key"], intent["run_id"]).get("place_attempted") is not True
+
+
+def test_same_invocation_overfill_uses_durable_place_payload(monkeypatch):
+    runtime, intent, claim, client, _ = dispatch_fixture(monkeypatch)
+    monkeypatch.setattr(execution, "_poll_order_status", lambda *_, **__: {
+        "status": "FILLED", "filled_quantity": "180.28",
+        "filled_price": "27.6843", "filled_fee": "1",
+    })
+    result = execution._dispatch_or_reconcile_one(
+        client, object(), CFG, intent, claim, runtime)
+    stored = read_intent(intent["chain_key"], intent["run_id"])
+    assert len(client.order_v3.place_order.calls) == 1
+    assert result["order_contract_anomaly"] == "fill_exceeds_submitted_quantity"
+    assert stored["place_attempted"] is True
+    assert stored["order_payload"][0]["quantity"] == "180.27167"
+    assert stored["needs_manual_check"] is True
+    assert stored["cashflow_finalized"] is False
+    assert FAKE_DB.reference("webull_lego_broker_cashflow").get() is None
+
+
 @pytest.mark.parametrize("options,status,preview_count,reason", [
     ({"final_price": 27.7658}, "SUPPRESSED_STATE_CHANGED", 1, "quantity_would_overshoot"),
     ({"final_holdings": 182}, "SUPPRESSED_STATE_CHANGED", 1, None),

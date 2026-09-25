@@ -82,7 +82,54 @@ FEE_FIELDS = ("transaction_fee", "filled_fee", "execution_fee", "commission", "f
 
 
 def normalize_status(raw) -> str:
-    return str(raw or "").strip().upper().replace(" ", "_")
+    status = str(raw or "").strip().upper().replace(" ", "_")
+    # Webull Thailand has returned the US spelling in Order Detail while the
+    # event stream and our terminal state machine use CANCELLED. Keep the alias
+    # at the shared boundary so recovery, outbox and admin agree on one status.
+    return "CANCELLED" if status == "CANCELED" else status
+
+
+def submitted_order_anomaly(intent: dict, summary: dict) -> str | None:
+    """Explain why a positive fill is not proven against the durable Place payload.
+
+    Older UAT intents did not persist the Preview payload; their committed
+    intent quantity is the only submitted-quantity witness available. A caller
+    that releases a manual fence must separately require the Place marker.
+    """
+    if intent.get("place_attempted") is not True:
+        return None
+    try:
+        filled = Decimal(str(summary.get("filled_quantity")))
+    except (InvalidOperation, TypeError, ValueError):
+        return None  # The fill parser handles absent or malformed quantities.
+    if not filled.is_finite() or filled <= 0:
+        return None
+    payload = intent.get("order_payload")
+    if payload is None:
+        submitted_value = intent.get("quantity")
+    else:
+        if (not isinstance(payload, list) or len(payload) != 1
+                or not isinstance(payload[0], dict)):
+            return "submitted_payload_missing_or_ambiguous"
+        order = payload[0]
+        if (order.get("client_order_id") != str(intent.get("run_id"))
+                or order.get("symbol") != intent.get("symbol")
+                or order.get("side") != intent.get("side")):
+            return "submitted_order_identity_mismatch"
+        submitted_value = order.get("quantity")
+    try:
+        submitted = Decimal(str(submitted_value))
+        intended = Decimal(str(intent.get("quantity")))
+    except (InvalidOperation, TypeError, ValueError):
+        return "submitted_quantity_unverifiable"
+    if (not submitted.is_finite() or not intended.is_finite()
+            or submitted <= 0 or intended <= 0):
+        return "submitted_quantity_unverifiable"
+    if submitted != intended:
+        return "intent_payload_quantity_mismatch"
+    if filled > submitted:
+        return "fill_exceeds_submitted_quantity"
+    return None
 
 
 def _order_fields(detail) -> dict:

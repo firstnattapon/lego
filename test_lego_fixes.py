@@ -354,10 +354,11 @@ def test_a_fill_counts_even_when_the_order_ends_somewhere_else():
     assert s["filled_quantity"] == "30" and s["filled_price"] == "12.5"
 
 
-@pytest.mark.parametrize("status", ["CANCELLED", "EXPIRED", "REJECTED"])
+@pytest.mark.parametrize("status", ["CANCELLED", "CANCELED", "EXPIRED", "REJECTED"])
 def test_an_order_that_never_filled_realizes_nothing(status):
     s = summarize_order_result({}, {"order_status": status, "filled_quantity": "0"})
     assert s["realized"] is False
+    assert s["status"] == ("CANCELLED" if status == "CANCELED" else status)
 
 
 def test_broker_expiry_leaves_the_dispatch_queue():

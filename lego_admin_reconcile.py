@@ -31,10 +31,11 @@ from firebase_admin import credentials, db
 from lego_one_row import (ACTUAL_COLUMN, COLUMN_ORDER, DELTA_COLUMN,
                           EXCESS_COLUMN, REFERENCE_COLUMN, Config)
 from lego_orders import (EXECUTION_PRICE_FIELDS, FEE_FIELDS, TERMINAL_STATUSES,
-                         normalize_status, summarize_order_result)
+                         normalize_status, submitted_order_anomaly,
+                         summarize_order_result)
 from lego_outbox import (DISPATCH_LOCK_PATH, OUTBOX_PATH, ROWS_PATH,
                          account_symbol_fence_key)
-from lego_state import (CASHFLOW_FINALIZED, CASHFLOW_PENDING,
+from lego_state import (BROKER_CASHFLOW_PATH, CASHFLOW_FINALIZED, CASHFLOW_PENDING,
                         CASHFLOW_SEMANTICS, EXECUTION_STATE_KEY,
                         REALIZED_FIFO_SCHEMA_VERSION,
                         REALIZED_EVENT_ARCHIVE_PATH, REALIZED_PATH,
@@ -362,11 +363,77 @@ def _row_reference_proof(cfg: Config, state: dict, row: dict) \
     return blockers, reference
 
 
+def _broker_cashflow_blockers(*, chain_key: str, run_id: str, intent: dict,
+                              event: dict | None, evidence: dict) -> list[str]:
+    """Prove the independent cash ledger agrees with the exact broker fill."""
+    blockers: list[str] = []
+    if intent.get("broker_cashflow_recorded") is not True:
+        blockers.append("intent_broker_cashflow_not_recorded")
+    if not isinstance(event, dict) or not event:
+        return [*blockers, "broker_cashflow_event_missing"]
+    if str(event.get("event_id") or "") != run_id:
+        blockers.append("broker_cashflow_event_id_mismatch")
+    if str(event.get("chain_key") or "") != chain_key:
+        blockers.append("broker_cashflow_chain_mismatch")
+    side = evidence.get("side")
+    if str(event.get("side") or "").upper() != side:
+        blockers.append("broker_cashflow_side_mismatch")
+    if event.get("fee_status") != "KNOWN":
+        blockers.append("broker_cashflow_fee_not_known")
+    if any(evidence.get(field) is None for field in
+           ("filled_quantity", "filled_price", "filled_fee")):
+        return [*blockers, "broker_cashflow_evidence_incomplete"]
+
+    def parse(raw: Any) -> Decimal | None:
+        try:
+            result = Decimal(str(raw))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        return result if result.is_finite() else None
+
+    qty = parse(event.get("cumulative_quantity"))
+    notional = parse(event.get("cumulative_notional"))
+    fee = parse(event.get("actual_fees"))
+    cash = parse(event.get("cash_cumulative"))
+    expected_qty = Decimal(str(evidence["filled_quantity"]))
+    expected_price = Decimal(str(evidence["filled_price"]))
+    expected_fee = Decimal(str(evidence["filled_fee"]))
+    expected_notional = expected_qty * expected_price
+    tolerance = Decimal("0.00000001")
+    for field, actual, expected in (
+            ("quantity", qty, expected_qty),
+            ("notional", notional, expected_notional),
+            ("fee", fee, expected_fee)):
+        if actual is None or abs(actual - expected) > tolerance:
+            blockers.append(f"broker_cashflow_{field}_mismatch")
+    if side in {"BUY", "SELL"}:
+        expected_cash = (Decimal("-1") if side == "BUY" else Decimal("1")) \
+            * expected_notional - expected_fee
+        if cash is None or abs(cash - expected_cash) > tolerance:
+            blockers.append("broker_cashflow_cash_mismatch")
+    intent_cash = parse(intent.get("broker_cash_cumulative"))
+    if (cash is None or intent_cash is None
+            or abs(intent_cash - cash) > tolerance):
+        blockers.append("intent_broker_cash_mismatch")
+    return blockers
+
+
 def _positive_fill_blockers(*, cfg: Config, chain_key: str, run_id: str,
                              intent: dict,
                              state: dict, row: dict, realized: dict,
+                             broker_cashflow: dict | None,
                              evidence: dict) -> list[str]:
     blockers: list[str] = []
+    if intent.get("place_attempted") is not True:
+        blockers.append("durable_place_marker_missing")
+    anomaly = submitted_order_anomaly(intent, evidence)
+    if anomaly:
+        blockers.append(f"submitted_order_anomaly:{anomaly}")
+    if intent.get("order_contract_anomaly"):
+        blockers.append("order_contract_anomaly_unresolved")
+    blockers.extend(_broker_cashflow_blockers(
+        chain_key=chain_key, run_id=run_id, intent=intent,
+        event=broker_cashflow, evidence=evidence))
     row_reference_blockers, row_reference = _row_reference_proof(cfg, state, row)
     blockers.extend(row_reference_blockers)
     qty = evidence["filled_quantity"]
@@ -661,7 +728,8 @@ def evaluate_reconciliation(*, cfg: Config, chain_key: str, run_id: str,
                             runtime_identity: str, account_id: str,
                             lock: dict | None, intent: dict | None,
                             state: dict | None, row: dict | None,
-                            realized: dict | None, broker_detail: Any,
+                            realized: dict | None,
+                            broker_cashflow: dict | None, broker_detail: Any,
                             now_utc: datetime | None = None,
                             allowed_owner: str = "",
                             dispatch_key: str | None = None) -> dict:
@@ -746,7 +814,8 @@ def evaluate_reconciliation(*, cfg: Config, chain_key: str, run_id: str,
     if qty is not None and qty > _QTY_TOLERANCE:
         blockers.extend(_positive_fill_blockers(
             cfg=cfg, chain_key=chain_key, run_id=run_id, intent=intent, state=state,
-            row=row, realized=realized, evidence=evidence))
+            row=row, realized=realized, broker_cashflow=broker_cashflow,
+            evidence=evidence))
     elif qty is not None:
         blockers.extend(_zero_fill_blockers(
             cfg=cfg, run_id=run_id, intent=intent, state=state, row=row,
@@ -792,6 +861,9 @@ def evaluate_reconciliation(*, cfg: Config, chain_key: str, run_id: str,
         "runtime_identity_fingerprint": runtime_identity,
         "lock_generation": int(lock.get("generation", 0) or 0),
         "intent_hash": _canonical_hash(intent),
+        "broker_cashflow_hash": (_canonical_hash(broker_cashflow)
+                                 if qty is not None and qty > _QTY_TOLERANCE
+                                 else None),
         "event_id": event_id,
         "confirmation_phrase": confirmation,
         "broker_evidence": {k: v for k, v in evidence.items()
@@ -837,7 +909,10 @@ def inspect_reconciliation(chain_key: str, run_id: str, trade_client, *,
         intent=db.reference(f"{OUTBOX_PATH}/{chain_key}/{run_id}").get(),
         state=db.reference(f"{STATE_PATH}/{chain_key}").get(),
         row=db.reference(f"{ROWS_PATH}/{run_id}").get(),
-        realized=realized, broker_detail=detail, now_utc=now_utc,
+        realized=realized,
+        broker_cashflow=db.reference(
+            f"{BROKER_CASHFLOW_PATH}/{chain_key}/events/{run_id}").get(),
+        broker_detail=detail, now_utc=now_utc,
         allowed_owner=allowed_owner, dispatch_key=dispatch_key)
 
 
@@ -1160,6 +1235,8 @@ def acknowledge_reconciliation(plan: dict, confirmation: str, trade_client, *,
             now_utc=now_utc, allowed_owner=owner)
         if (not refreshed.get("allowed")
                 or refreshed.get("event_id") != plan["event_id"]
+                or refreshed.get("broker_cashflow_hash")
+                   != plan.get("broker_cashflow_hash")
                 or refreshed.get("confirmation_phrase") != plan["confirmation_phrase"]):
             raise ReconcileRefusal(
                 "evidence changed after reservation: "

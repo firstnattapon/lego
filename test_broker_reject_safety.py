@@ -12,6 +12,7 @@ import decision_service
 import execution_service as execution
 import lego_outbox as outbox
 import main
+import operator_halt
 import webull_io
 from config import load_runtime_config
 from conftest import FAKE_DB, FakeReference
@@ -150,6 +151,9 @@ def test_failed_diagnostics_private_bounded_redacted_and_public_health_explicit(
     stored = outbox.read_intent("chain", "r")
     audit = FAKE_DB.reference("webull_lego_order_audit/r").get()
     assert "broker_raw_detail" in stored
+    assert stored["broker_reason_missing"] is True
+    assert stored["terminal_reason"] == (
+        "broker order failed; broker rejection reason unavailable")
     assert "broker_raw_detail" not in result and "broker_raw_detail" not in audit
     assert "private-" not in stored["broker_raw_detail"]
     assert json.loads(stored["broker_raw_detail"])["detail"]["orders"][0]["custom.debug"]
@@ -159,6 +163,23 @@ def test_failed_diagnostics_private_bounded_redacted_and_public_health_explicit(
     huge = broker_diagnostic_json({"x": ["\u0e01" * 500] * 10000})
     assert len(huge) <= 16384
     json.loads(huge)
+
+
+def test_broker_fill_above_submitted_quantity_keeps_manual_money_fence():
+    intent, _ = outcome("overfill", status="FILLED", quantity="0.32")
+    intent.update(side="BUY", quantity="0.31721", place_attempted=True,
+                  order_payload=[{"client_order_id": "overfill", "symbol": "TSLA",
+                                  "side": "BUY", "quantity": "0.31721"}])
+    outbox.put_intent("chain", "overfill", {**intent, "status": "PLACING_UNKNOWN"})
+    result = execution._finish_with_realized(None, Config("TSLA", 100), intent,
+                                             {"status": "FILLED", "filled_quantity": "0.32",
+                                              "filled_price": "380.42", "filled_fee": "1.29"})
+    stored = outbox.read_intent("chain", "overfill")
+    assert result["order_contract_anomaly"] == "fill_exceeds_submitted_quantity"
+    assert stored["status"] == "FILLED" and stored["needs_manual_check"] is True
+    assert stored["cashflow_finalized"] is False
+    assert not execution._chain_fence_can_clear(stored)
+    assert FAKE_DB.reference("webull_lego_broker_cashflow").get() is None
 
 
 @pytest.mark.parametrize("hours,blocked", [(12, True), (23.999, True), (24, False), (120, False)])
@@ -240,6 +261,18 @@ def test_halt_blocks_new_intent_but_keeps_committing_dna_slots(monkeypatch):
     assert code == 200 and body["committed"], body
     assert body["outbox_blocked"] == circuit.HALT
     assert outbox.list_actionable(main.chain_key(cfg)) == []
+
+
+def test_operator_halt_blocks_new_intent_and_reports_business_halt(monkeypatch):
+    runtime, cfg = decision_setup(monkeypatch, allow_fractional=True)
+    identity = webull_io.runtime_identity_fingerprint()
+    operator_halt.set_halt(identity, "TSLA", operator="alice",
+                           reason="incident review", apply=True)
+    body, code = decision_service.run_decision(None, runtime, cfg)
+    assert code == 200 and body["committed"], body
+    assert body["outbox_blocked"] == "OPERATOR_HALT"
+    assert outbox.list_actionable(main.chain_key(cfg)) == []
+    assert business_status({"decision": body}, 200) == "OPERATOR_HALT"
 
 
 @pytest.mark.parametrize("status", ["PLACING_UNKNOWN", "PENDING", "PARTIAL_FILLED"])

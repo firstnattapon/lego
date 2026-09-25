@@ -21,9 +21,10 @@ from datetime import datetime, timezone
 import pytest
 
 import main
+import lego_state
 import webull_io
 from conftest import FAKE_DB, FakeReference
-from lego_one_row import (COLUMN_ORDER, ACTUAL_COLUMN, DELTA_COLUMN,
+from lego_one_row import (COLUMN_ORDER, ACTUAL_COLUMN, DELTA_COLUMN, Config,
                           EXCESS_COLUMN, REFERENCE_COLUMN, ExecutionFill,
                           compute_row)
 from lego_outbox import OUTBOX_PATH, list_actionable
@@ -294,7 +295,7 @@ def test_an_interrupted_row_write_is_repaired_by_the_next_attempt(monkeypatch):
 
 # --- Case 3: no fill means no cashflow --------------------------------------
 
-@pytest.mark.parametrize("status", ["REJECTED", "CANCELLED"])
+@pytest.mark.parametrize("status", ["REJECTED", "CANCELLED", "CANCELED"])
 def test_terminal_without_a_fill_leaves_delta_zero(monkeypatch, status):
     _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
     body, _ = _run(monkeypatch, SLOT_1, 330.0, holdings=9.375)
@@ -304,7 +305,7 @@ def test_terminal_without_a_fill_leaves_delta_zero(monkeypatch, status):
     })
 
     result = [r for r in _work() if r["run_id"] == run_id][0]
-    assert result["status"] == status
+    assert result["status"] == ("CANCELLED" if status == "CANCELED" else status)
     assert "cashflow_finalized" not in result
 
     row = _row(run_id)
@@ -424,7 +425,7 @@ def test_terminal_unknown_fee_stays_pending_then_late_fee_is_delta_only(
     assert list_actionable(chain_key(_cfg())) == []
 
 
-@pytest.mark.parametrize("terminal_status", ["CANCELLED", "EXPIRED"])
+@pytest.mark.parametrize("terminal_status", ["CANCELLED", "CANCELED", "EXPIRED"])
 def test_terminal_cancel_or_expiry_books_its_final_cumulative_partial_fill(
         monkeypatch, terminal_status):
     _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
@@ -441,7 +442,8 @@ def test_terminal_cancel_or_expiry_books_its_final_cumulative_partial_fill(
     result = [r for r in _work() if r["run_id"] == run_id][0]
 
     expected = FIX_C * (331.4 / 320.0 - 1.0)
-    assert result["status"] == terminal_status
+    assert result["status"] == (
+        "CANCELLED" if terminal_status == "CANCELED" else terminal_status)
     assert result["cashflow_finalized"] is True
     assert _row(run_id)[DELTA_COLUMN] == pytest.approx(expected)
     assert _row(run_id)["execution_quantity"] == pytest.approx(cumulative)
@@ -513,8 +515,9 @@ def test_a_fill_whose_position_never_moves_defers_then_stops_asking(monkeypatch)
     _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
     body, _ = _run(monkeypatch, SLOT_1, 330.0, holdings=9.375)
     run_id = body["run_id"]
+    ordered_quantity = _intent(run_id)["quantity"]
     _stub_broker(monkeypatch, holdings_after=9.375, detail={
-        "order_status": "FILLED", "filled_quantity": 1.0,
+        "order_status": "FILLED", "filled_quantity": ordered_quantity,
         "avg_filled_price": 331.25,
     })
 
@@ -627,6 +630,87 @@ def test_a_later_commit_preserves_a_fill_finalized_in_between(monkeypatch):
     assert _cashflow()["actual_cumulative"] == pytest.approx(booked)
     assert _cashflow()["last_action_price"] == 331.25
     assert _state()["prev_actual"] == pytest.approx(booked)
+    committed = _row(_state()["last_run_id"])
+    assert committed[DELTA_COLUMN] == 0.0
+    assert committed[ACTUAL_COLUMN] == pytest.approx(booked)
+    assert committed[EXCESS_COLUMN] == pytest.approx(
+        booked - FIX_C * math.log(331.25 / _state()["p0"]))
+
+
+def test_stale_anchor_cashflow_row_patch_replays_after_crash(monkeypatch):
+    _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
+    previous, _ = _run(monkeypatch, SLOT_1, 330.0, holdings=9.375)
+    cfg = _cfg()
+    stale_anchor = read_anchor(cfg)
+    finalize_execution_fill(
+        cfg, previous["run_id"],
+        ExecutionFill(filled_price=331.25, filled_quantity=1.0,
+                      holdings_after=10.375))
+    booked = _cashflow()["actual_cumulative"]
+    snapshot = {"captured_at": "2026-07-23T19:00:05Z", "price": 332.0,
+                "holdings": 10.375}
+    row = compute_row(cfg, snapshot, stale_anchor)
+    original_repair = lego_state._repair_pending_row
+
+    def crash_after_state(state):
+        if state and state.get("version") == 3:
+            raise OSError("crash before row patch")
+        return original_repair(state)
+
+    monkeypatch.setattr(lego_state, "_repair_pending_row", crash_after_state)
+    with pytest.raises(OSError, match="crash before row patch"):
+        commit_final_row(cfg, snapshot, stale_anchor, row)
+    run_id = _state()["last_run_id"]
+    assert _row(run_id)["committed"] is False
+    assert _state()["last_row_cashflow_observation"]["fields"][
+        ACTUAL_COLUMN] == pytest.approx(booked)
+
+    monkeypatch.setattr(lego_state, "_repair_pending_row", original_repair)
+    marker_ref = FAKE_DB.reference(
+        f"{STATE_PATH}/{chain_key(cfg)}/last_row_cashflow_observation/fields/"
+        f"{ACTUAL_COLUMN}")
+    marker_ref.set("bad")
+    with pytest.raises(ExecutionFinalizeError, match="observation"):
+        original_repair(_state())
+    assert _row(run_id)["committed"] is False
+    marker_ref.set(booked)
+    replay = commit_final_row(cfg, snapshot, stale_anchor, row)
+    assert replay["idempotent"] is True
+    assert _row(run_id)["committed"] is True
+    assert _row(run_id)[ACTUAL_COLUMN] == pytest.approx(booked)
+
+
+def test_v3_decision_row_uses_frozen_excess_from_transaction_cashflow():
+    cfg = Config(symbol="AAPL", fix_c=FIX_C, diff=5.0,
+                 dna_code="bypass:100", strategy_id="shannon_demon_lego_v2",
+                 decimal_precision=2)
+    first = {"captured_at": "2026-07-23T18:00:05Z", "price": 320.0,
+             "holdings": 9.375}
+    commit_final_row(cfg, first, None, compute_row(cfg, first, None))
+    second = {"captured_at": "2026-07-23T18:30:05Z", "price": 330.0,
+              "holdings": 9.375}
+    second_anchor = read_anchor(cfg)
+    prior = commit_final_row(
+        cfg, second, second_anchor, compute_row(cfg, second, second_anchor))
+    stale_anchor = read_anchor(cfg)
+    finalize_execution_fill(
+        cfg, prior["run_id"],
+        ExecutionFill(filled_price=331.25, filled_quantity=1.0,
+                      holdings_after=8.375))
+    cashflow = FAKE_DB.reference(
+        f"{STATE_PATH}/{chain_key(cfg)}/{EXECUTION_STATE_KEY}").get()
+    third = {"captured_at": "2026-07-23T19:00:05Z", "price": 332.0,
+             "holdings": 8.375}
+    committed = commit_final_row(
+        cfg, third, stale_anchor, compute_row(cfg, third, stale_anchor))
+    row = FAKE_DB.reference(f"webull_lego_rows/{committed['run_id']}").get()
+    assert row[DELTA_COLUMN] == 0.0
+    assert row[ACTUAL_COLUMN] == pytest.approx(cashflow["actual_cumulative"])
+    assert row[EXCESS_COLUMN] == pytest.approx(cashflow["excess"])
+    assert row["R_basis"] == pytest.approx(
+        cashflow["actual_cumulative"] - cashflow["excess"])
+    assert row["E_mark_at_observation"] == pytest.approx(
+        cashflow["actual_cumulative"] - row[REFERENCE_COLUMN])
 
 
 def test_finalize_refuses_an_uncommitted_row(monkeypatch):

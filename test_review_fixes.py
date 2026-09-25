@@ -169,9 +169,9 @@ def test_a_healthy_chain_keeps_its_usual_response(monkeypatch):
 def _seed_realized(ck: str, run_id: str) -> None:
     """A prior cumulative fill that makes the next tail fill price impossible."""
     FAKE_DB.reference(f"{REALIZED_PATH}/{ck}").set({
-        "applied_fills": {run_id: {"quantity": 10.0, "fee": 0.0,
-                                   "average_price": 100.0, "side": "BUY"}},
-        "open_legs": {"buys": [[10.0, 100.0, 0.0]], "sells": []},
+        "applied_fills": {run_id: {"quantity": 1.0, "fee": 0.0,
+                                   "average_price": 1000.0, "side": "BUY"}},
+        "open_legs": {"buys": [[1.0, 1000.0, 0.0]], "sells": []},
         "cumulative_realized": 0.0,
     })
 
@@ -180,7 +180,9 @@ def test_impossible_realized_math_does_not_read_as_a_lost_order(monkeypatch, aut
     cfg = main.load_config()
     ck = chain_key(cfg)
     _stub_broker(monkeypatch, detail=lambda tc, r: {
-        "order_status": "FILLED", "filled_quantity": 11.0, "avg_filled_price": 50.0})
+        "order_status": "FILLED",
+        "filled_quantity": FAKE_DB.reference(f"{OUTBOX_PATH}/{ck}/{r}").get()["quantity"],
+        "avg_filled_price": 50.0})
     body, _ = _run(monkeypatch, SESSION_OPEN_SLOT, 320.0)
     _seed_realized(ck, body["run_id"])
 
@@ -191,7 +193,7 @@ def test_impossible_realized_math_does_not_read_as_a_lost_order(monkeypatch, aut
     assert intent["needs_manual_check"] is True
     assert "reconcile_attempts" not in intent          # retrying cannot fix arithmetic
     assert intent["broker_status"] == "FILLED"         # the fill is not in doubt
-    assert intent["filled_quantity"] == "11.0"
+    assert float(intent["filled_quantity"]) == intent["quantity"]
     assert intent["filled_price"] == "50.0"
 
     audit = FAKE_DB.reference(f"{AUDIT_PATH}/{body['run_id']}").get()
@@ -206,7 +208,9 @@ def test_a_ledger_gap_leaves_the_dispatch_queue(monkeypatch, auto_submit):
     cfg = main.load_config()
     ck = chain_key(cfg)
     _stub_broker(monkeypatch, detail=lambda tc, r: {
-        "order_status": "FILLED", "filled_quantity": 11.0, "avg_filled_price": 50.0})
+        "order_status": "FILLED",
+        "filled_quantity": FAKE_DB.reference(f"{OUTBOX_PATH}/{ck}/{r}").get()["quantity"],
+        "avg_filled_price": 50.0})
     body, _ = _run(monkeypatch, SESSION_OPEN_SLOT, 320.0)
     _seed_realized(ck, body["run_id"])
     main._run_order_worker(cfg, limit=1)

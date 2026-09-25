@@ -14,7 +14,7 @@ from conftest import FAKE_DB, FakeReference, fake_trade_client
 from lego_one_row import (ACTUAL_COLUMN, COLUMN_ORDER, DELTA_COLUMN,
                           EXCESS_COLUMN, REFERENCE_COLUMN, Config)
 from lego_outbox import DISPATCH_LOCK_PATH, OUTBOX_PATH, ROWS_PATH
-from lego_state import (CASHFLOW_FINALIZED, CASHFLOW_SEMANTICS,
+from lego_state import (BROKER_CASHFLOW_PATH, CASHFLOW_FINALIZED, CASHFLOW_SEMANTICS,
                         EXECUTION_STATE_KEY, REALIZED_PATH, STATE_PATH,
                         chain_key as strategy_chain_key, config_hash,
                         realized_open_legs_hash)
@@ -283,12 +283,16 @@ def _seed_positive_fill(*, break_witness: str | None = None):
         intent_overrides={
             "status": "CASHFLOW_FINALIZE_ERROR",
             "cashflow_abandoned": True,
+            "place_attempted": True,
+            "quantity": qty,
             "cashflow_finalized": True,
             "realized": True,
             "filled_quantity": qty,
             "filled_price": price,
             "filled_fee": 0.1,
             "broker_fee_status": "KNOWN",
+            "broker_cashflow_recorded": True,
+            "broker_cash_cumulative": "-50.725",
         },
         row_overrides={
             "cashflow_status": CASHFLOW_FINALIZED,
@@ -341,6 +345,12 @@ def _seed_positive_fill(*, break_witness: str | None = None):
             "seq": 1,
         }},
     })
+    FAKE_DB.reference(f"{BROKER_CASHFLOW_PATH}/{CHAIN}/events/{RUN}").set({
+        "event_id": RUN, "chain_key": CHAIN, "side": "BUY",
+        "cumulative_quantity": "0.5", "cumulative_notional": "50.625",
+        "actual_fees": "0.1", "fee_status": "KNOWN",
+        "cash_cumulative": "-50.725",
+    })
     if break_witness == "row":
         FAKE_DB.reference(f"{ROWS_PATH}/{RUN}").update({
             "execution_quantity": 0.4})
@@ -369,6 +379,72 @@ def test_terminal_positive_fill_requires_both_ledgers_and_matching_row():
             CHAIN, RUN, _client(detail), now_utc=NOW)
         assert plan["allowed"] is False
         assert blocker in plan["blockers"]
+
+
+@pytest.mark.parametrize(("path", "value", "blocker"), [
+    (f"{OUTBOX_PATH}/{CHAIN}/{RUN}/quantity", 0.31721,
+     "submitted_order_anomaly:fill_exceeds_submitted_quantity"),
+    (f"{OUTBOX_PATH}/{CHAIN}/{RUN}/place_attempted", None,
+     "durable_place_marker_missing"),
+    (f"{OUTBOX_PATH}/{CHAIN}/{RUN}/order_payload", [{
+        "client_order_id": RUN, "symbol": "AAPL", "side": "BUY",
+        "quantity": "0.31721"}],
+     "submitted_order_anomaly:intent_payload_quantity_mismatch"),
+    (f"{OUTBOX_PATH}/{CHAIN}/{RUN}/order_contract_anomaly",
+     "fill_exceeds_submitted_quantity", "order_contract_anomaly_unresolved"),
+    (f"{BROKER_CASHFLOW_PATH}/{CHAIN}/events/{RUN}", None,
+     "broker_cashflow_event_missing"),
+    (f"{BROKER_CASHFLOW_PATH}/{CHAIN}/events/{RUN}/cumulative_quantity",
+     "0.4", "broker_cashflow_quantity_mismatch"),
+    (f"{BROKER_CASHFLOW_PATH}/{CHAIN}/events/{RUN}/actual_fees",
+     "0.2", "broker_cashflow_fee_mismatch"),
+    (f"{BROKER_CASHFLOW_PATH}/{CHAIN}/events/{RUN}/cash_cumulative",
+     "-50.625", "broker_cashflow_cash_mismatch"),
+    (f"{OUTBOX_PATH}/{CHAIN}/{RUN}/broker_cashflow_recorded", False,
+     "intent_broker_cashflow_not_recorded"),
+    (f"{OUTBOX_PATH}/{CHAIN}/{RUN}/broker_cash_cumulative", "-50.7249",
+     "intent_broker_cash_mismatch"),
+])
+def test_admin_positive_fill_refuses_unproven_submitted_or_cash_witness(
+        path, value, blocker):
+    _seed_positive_fill()
+    ref = FAKE_DB.reference(path)
+    if value is None:
+        ref.delete()
+    else:
+        ref.set(value)
+    plan = admin.inspect_reconciliation(
+        CHAIN, RUN,
+        _client(_detail(status="CANCELLED", qty=0.5, price=101.25, fee=0.1)),
+        now_utc=NOW)
+    assert plan["allowed"] is False
+    assert blocker in plan["blockers"]
+
+
+def test_positive_fill_cash_witness_change_after_dry_run_refuses_apply(monkeypatch):
+    _seed_positive_fill()
+    client = _client(_detail(status="CANCELLED", qty=0.5,
+                             price=101.25, fee=0.1))
+    plan = admin.inspect_reconciliation(CHAIN, RUN, client, now_utc=NOW)
+    assert plan["allowed"] is True
+    original_reserve = admin._reserve
+
+    def reserve_then_change(*args, **kwargs):
+        result = original_reserve(*args, **kwargs)
+        FAKE_DB.reference(
+            f"{BROKER_CASHFLOW_PATH}/{CHAIN}/events/{RUN}/updated_at").set(
+                "2026-08-02T09:00:01Z")
+        return result
+
+    monkeypatch.setattr(admin, "_reserve", reserve_then_change)
+    with pytest.raises(admin.ReconcileRefusal, match="evidence changed"):
+        admin.acknowledge_reconciliation(
+            plan, plan["confirmation_phrase"], client,
+            operator="alice", now_utc=NOW)
+    assert FAKE_DB.reference(f"{DISPATCH_LOCK_PATH}/{CHAIN}").get()[
+        "inflight_run_id"] == RUN
+    assert FAKE_DB.reference(f"{OUTBOX_PATH}/{CHAIN}/{RUN}").get().get(
+        "admin_reconciled") is not True
 
 
 def test_admin_accepts_bounded_fifo_v3_head_and_rejects_bad_or_pending_cursor():

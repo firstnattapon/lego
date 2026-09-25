@@ -16,6 +16,7 @@
 | Token | ใช้ boolean `token_check_enabled` ที่ broker ตอบจริงและผูกกับ credential/endpoint/cache TTL; ไม่มี token file อย่างเดียวไม่สรุปว่า 2FA เสีย; ลด warning ซ้ำเป็นเมื่อเปลี่ยนหรือทุก 10 นาที |
 | Production preflight | typed runtime ใช้ release binding ที่ตรง deployment; legacy gate ยังเป็น UAT เท่านั้น Production ที่ไม่มี binding ยังถูกปฏิเสธ |
 | Deployment identity | สร้าง manifest ได้เมื่อ checkout มี backend อย่างเดียว; deploy ปฏิเสธ CandidateHash ที่ไม่ตรง source; audit-cache ไม่ถูกส่งขึ้น runtime |
+| Decision row กับ fill race | ถ้า worker finalize fill หลัง decision อ่าน anchor แต่ก่อน state transaction, แถวใหม่ใช้ cashflow snapshot ที่ transaction ยอมรับ; state เก็บ marker เพื่อซ่อมแถวหลัง crash ก่อนเปิด committed flag; CI รัน probe กับ RTDB Emulator จริง |
 
 เอกสาร fee: [Webull Thailand Order Detail](https://developer.webull.co.th/apis/docs/reference/trade-api/order-detail.md), [Webull global Order Detail](https://developer.webull.com/apis/docs/reference/order-detail.md)
 
@@ -47,6 +48,27 @@ python ops.py repair-audit --run-id <RUN_ID> --apply
 
 สถานะใน decision row เป็นประวัติการตัดสินใจ ต้องดูร่วมกับ execution audit/outbox; READY ที่ถูก preflight block อาจไม่มี intent โดยถูกต้องตาม guard
 
+## Operator halt สำหรับหยุดคำสั่งใหม่
+
+`halt-orders` ตั้ง flag ที่ account/symbol dispatch fence แบบ transaction; การ reconcile คำสั่งที่ส่งไปแล้วเดินต่อได้ หากมี run ที่ fenced ก่อนคำสั่ง halt สำเร็จ ผล CLI จะรายงาน `inflight=true` และ order นั้นอาจยังข้าม Place ได้ ต้องอ่าน broker ด้วย client ID เดิมก่อนสรุปว่าหยุดครบ ห้ามเปลี่ยน client ID หรือส่งซ้ำ
+
+```powershell
+python ops.py halt-orders --operator <OPERATOR> --reason <REASON>
+python ops.py halt-orders --operator <OPERATOR> --reason <REASON> --apply
+python ops.py status
+```
+
+การปลดต้อง pause `LEGO_ACTIVE=false`, ไม่มี unresolved order/active dispatch lease, ใช้ halt ID ที่อ่านล่าสุด และระบุผู้ตรวจอีกคน audit event ของ HALT/CLEAR มี marker ซ่อมซ้ำได้; เมื่อ marker ยังอยู่ fence ไม่รับ Place ใหม่ คำสั่งตรวจเป็น dry-run จนกว่าจะใส่ `--apply`
+
+```powershell
+python ops.py repair-operator-halt-audit
+python ops.py repair-operator-halt-audit --apply
+python ops.py clear-operator-halt --halt-id <HALT_ID> --operator <REVIEWER> --reason <REASON>
+python ops.py clear-operator-halt --halt-id <HALT_ID> --operator <REVIEWER> --reason <REASON> --apply
+```
+
+ชื่อ operator ใน CLI เป็นข้อมูลประกอบ audit ไม่ใช่การพิสูจน์ตัวบุคคล ต้องใช้ IAM/การอนุมัติสองคนที่ตรวจสอบได้จากระบบปฏิบัติการจริงก่อนนับเป็น production control
+
 ## Monitoring ที่ต้องเชื่อมบน deployment
 
 ใช้ Cloud Logging query โดยเปลี่ยนชื่อ service ให้ตรง environment:
@@ -57,7 +79,7 @@ resource.labels.service_name="lego-tick-uat"
 jsonPayload.event="lego_tick_completed"
 ```
 
-สร้าง alert ไปยังช่องทางของ operator สำหรับ `severity=ERROR`, `business_status=FEE_OVERDUE`, `MANUAL_RECONCILIATION_REQUIRED`, `OUTBOX_RECOVERY_PENDING`, และ repeated `WAITING_RECONCILIATION` ตรวจ absence ของ completion event เทียบ scheduler heartbeat และตรวจ state ไม่เดินระหว่าง active market session แยกจากตลาดปิด/paused
+สร้าง alert ไปยังช่องทางของ operator สำหรับ `severity=ERROR`, `business_status=FEE_OVERDUE`, `MANUAL_RECONCILIATION_REQUIRED`, `OPERATOR_HALT`, `OUTBOX_RECOVERY_PENDING`, และ repeated `WAITING_RECONCILIATION` ตรวจ absence ของ completion event เทียบ scheduler heartbeat และตรวจ state ไม่เดินระหว่าง active market session แยกจากตลาดปิด/paused
 
 อย่าใช้ HTTP 200 เป็น trading health หรือใช้ยอด warning เก่าที่สะสมเป็นเหตุเสียปัจจุบัน ใช้ structured tick result ล่าสุดร่วมกับสถานะ outbox; log มีเฉพาะ allowlisted fields ไม่รวม raw broker request/response, account ID, token หรือ signature
 
@@ -69,6 +91,6 @@ PR/code และ green tests เป็นหลักฐานเฉพาะ�
 - Webull UAT ของ account/SDK/endpoint ที่จะใช้: preview → Place ที่อนุมัติ → terminal quantity/price/actual fees → holdings/cash reconciliation → repeat reconciliation โดยไม่มี duplicate order
 - Timeout/crash/rollback ระหว่าง unresolved intent และการคืนระบบหลัง cold start/token rotation; ทดสอบ late fee/partial fill/cancel/reject ตาม contract จริง
 - Soak ตาม workload ที่ตั้งใจใช้: ไม่มี backlog/fee pending ที่ไม่แจ้งเตือน; latency, API quota และ RTDB cost อยู่ในเกณฑ์ที่ operator กำหนด; alert ถูกส่งถึงผู้รับและทดลอง recovery/restore สำเร็จ
-- ตรวจ pagination ของ endpoint จริงก่อนอัปเกรด SDK: adapter ที่ pin อยู่ยังใช้ legacy `page_size/last_client_order_id`; global API รุ่นใหม่ใช้ `pagination_key` ต้องพิสูจน์ multi-page scan ของ endpoint ที่เลือก ไม่สลับ schema โดยคาดเดา
+- ตรวจ pagination ของ endpoint จริงก่อนอัปเกรด SDK: adapter ปัจจุบันเรียก `order_v3.list_order_open(..., pagination_key=...)` และเดินหน้าต่อจาก cursor ที่ response คืนมา แต่ยังต้องพิสูจน์ multi-page scan กับบัญชีและ endpoint TH UAT ที่จะ deploy จริง
 
 ยังไม่มี live deployment/broker validation ของ candidate ใน PR นี้ จึงไม่ควรเปลี่ยนข้อความ release เป็น Production certified จนหลักฐานข้างต้นครบ การแก้ F2 หรือการเพิ่มอายุ DNA ไม่อยู่ใน PR นี้

@@ -16,6 +16,9 @@ import json
 from pathlib import Path
 import re
 
+from lego_orders import normalize_status
+from lego_one_row import (ACTUAL_COLUMN, DELTA_ACTUAL_COLUMN, DELTA_COLUMN,
+                          EXCESS_COLUMN)
 from tools.migration_audit import audit_export, safe_unsent
 
 
@@ -25,6 +28,11 @@ def number(value):
         return result if result.is_finite() else None
     except (InvalidOperation, ValueError):
         return None
+
+
+def same_number(left, right, tolerance):
+    a, b = number(left), number(right)
+    return a is not None and b is not None and abs(a - b) <= Decimal(tolerance)
 
 
 def read_json(path):
@@ -135,6 +143,71 @@ def pair_request_ticks(ticks, requests):
                                "matched": matched, "issues": problems}
 
 
+def link_committed_rows(rows, ticks, requests):
+    """Match committed decision rows to tick logs inside the supplied window.
+
+    Rows outside the request window are historical context, not proof that the
+    provided log export is incomplete. A missing row for a commit event inside
+    the export is always a failure.
+    """
+    problems = Counter()
+    committed = Counter()
+    matching = set()
+    for _entry, payload in ticks:
+        decision = payload.get("decision")
+        if not isinstance(decision, dict) or decision.get("committed") is not True:
+            continue
+        run = str(decision.get("run_id") or "")
+        committed[run] += 1
+        row = rows.get(run)
+        if (not run or not isinstance(row, dict) or row.get("committed") is not True
+                or str(row.get("run_id")) != run
+                or row.get("สถานะ") != decision.get("status")
+                or row.get("DNA step") != decision.get("step")
+                or row.get("market_slot_id") != decision.get("market_slot_id")):
+            problems["commit_event_row_missing_or_mismatched"] += 1
+        else:
+            matching.add(run)
+    problems["duplicate_commit_event"] = sum(
+        count - 1 for count in committed.values() if count > 1)
+
+    starts, ends = [], []
+    for entry in requests:
+        start = _utc_timestamp(entry.get("timestamp"))
+        http = entry.get("httpRequest")
+        latency = http.get("latency") if isinstance(http, dict) else None
+        if start is None or not isinstance(latency, str) or not _HTTP_LATENCY.fullmatch(latency):
+            continue
+        try:
+            end = start + timedelta(seconds=float(Decimal(latency[:-1])))
+        except (ValueError, OverflowError):
+            continue
+        starts.append(start)
+        ends.append(end)
+    scoped = 0
+    if starts:
+        first, last = min(starts), max(ends)
+        for run, row in rows.items():
+            if not isinstance(row, dict) or row.get("committed") is not True:
+                continue
+            observed = _utc_timestamp(row.get("เวลา (UTC)"))
+            if observed is None:
+                problems["committed_row_time_missing"] += 1
+            elif first <= observed <= last:
+                scoped += 1
+                if run not in matching:
+                    problems["scoped_row_commit_event_missing"] += 1
+    else:
+        problems["request_window_missing"] += 1
+    problems = {name: count for name, count in problems.items() if count}
+    return not problems and bool(starts), {
+        "commit_events": sum(committed.values()),
+        "rows_in_request_window": scoped,
+        "matched_rows": len(matching),
+        "issues": problems,
+    }
+
+
 def build_report(export, logs, candidate, revision):
     root, export_hash = read_json(export)
     entries, logs_hash = read_json(logs)
@@ -153,24 +226,74 @@ def build_report(export, logs, candidate, revision):
             return {}
         return value
 
-    intents = []
-    for chain, records in mapping(root.get("webull_lego_order_outbox")).items():
-        for run, raw in mapping(records).items():
-            intent = mapping(raw)
-            intents.append((chain, run, intent))
-    audit = mapping(root.get("webull_lego_order_audit"))
+    # The runtime moves terminal outbox/audit records to *_archive, and FIFO
+    # moves old applied-fill witnesses to webull_lego_realized_events. A full
+    # RTDB export must audit both locations or a long-running bot appears to
+    # have lost orders as soon as retention moves them out of the hot paths.
+    outbox = {}
+    for path in ("webull_lego_order_outbox_archive", "webull_lego_order_outbox"):
+        for chain, records in mapping(root.get(path, {})).items():
+            merged = outbox.setdefault(chain, {})
+            for run, raw in mapping(records).items():
+                if run in merged and merged[run] != raw:
+                    issues["live_archive_outbox_conflict"] += 1
+                merged[run] = mapping(raw)
+    intents = [(chain, run, intent) for chain, records in outbox.items()
+               for run, intent in records.items()]
+    intent_keys = {(chain, run) for chain, run, _ in intents}
+    intent_runs = {run for _, run, _ in intents}
+    audit = {}
+    for path in ("webull_lego_order_audit_archive", "webull_lego_order_audit"):
+        for run, raw in mapping(root.get(path, {})).items():
+            if run in audit and audit[run] != raw:
+                issues["live_archive_order_audit_conflict"] += 1
+            audit[run] = mapping(raw)
+    rows = mapping(root.get("webull_lego_rows"))
     cash = mapping(root.get("webull_lego_broker_cashflow", {}))
     state = mapping(root.get("webull_lego_state", {}))
     realized = mapping(root.get("webull_lego_realized", {}))
+    realized_archive = mapping(root.get("webull_lego_realized_events", {}))
+    for run, row in rows.items():
+        if not isinstance(row, dict) or row.get("committed") is not True:
+            issues["uncommitted_or_malformed_row"] += 1
+            continue
+        row_cashflow_status = row.get("cashflow_status")
+        if row_cashflow_status == "FINALIZED" and run not in intent_runs:
+            issues["finalized_row_without_intent"] += 1
+        if row_cashflow_status not in {"NO_ACTION", "PENDING_EXECUTION", "FINALIZED"}:
+            issues["row_cashflow_status_unknown"] += 1
+        if row_cashflow_status in {"NO_ACTION", "PENDING_EXECUTION"}:
+            if (number(row.get(DELTA_COLUMN)) != 0
+                    or number(row.get(DELTA_ACTUAL_COLUMN)) != 0):
+                issues["unexecuted_row_delta_nonzero"] += 1
+            if (number(row.get(ACTUAL_COLUMN)) is None
+                    or number(row.get(EXCESS_COLUMN)) is None):
+                issues["unexecuted_row_money_columns_missing"] += 1
+            if ((row.get("execution_quantity") not in (None, "")
+                 and number(row.get("execution_quantity")) != 0)
+                    or row.get("execution_price") not in (None, "")):
+                issues["unexecuted_row_has_execution_witness"] += 1
     ids = Counter()
     matched = 0
     filled = 0
     mirror_fields = ("status", "filled_quantity", "filled_price", "filled_fee",
-                     "broker_fee_status", "cashflow_finalized", "place_attempted")
+                     "broker_fee_status", "cashflow_finalized", "place_attempted",
+                     "needs_manual_check", "order_contract_anomaly",
+                     "broker_reason_missing")
     for chain, run, intent in intents:
-        status = str(intent.get("status") or "UNKNOWN").upper()
+        status = normalize_status(intent.get("status") or "UNKNOWN")
         statuses[status] += 1
         ids[str(intent.get("client_order_id") or run)] += 1
+        row = rows.get(run)
+        if not isinstance(row, dict) or row.get("committed") is not True:
+            issues["committed_decision_row_missing"] += 1
+            row = {}
+        elif (str(row.get("run_id")) != run or row.get("chain_key") != chain
+              or row.get("สถานะ") != intent.get("row_status")
+              or row.get("ฝั่ง") != intent.get("side")
+              or row.get("สินทรัพย์") != intent.get("symbol")
+              or number(row.get("จำนวนสั่ง (หุ้น)")) != number(intent.get("quantity"))):
+            issues["intent_decision_row_mismatch"] += 1
         mirror = audit.get(run)
         version = intent.get("audit_revision")
         if (isinstance(mirror, dict) and type(version) is int and version >= 1
@@ -184,16 +307,40 @@ def build_report(export, logs, candidate, revision):
         if intent.get("needs_manual_check") or status in {
                 "RECONCILE_ABANDONED", "CASHFLOW_FINALIZE_ERROR", "REALIZED_MATH_ERROR"}:
             issues["manual_reconciliation_required"] += 1
-        qty = number(intent.get("filled_quantity", 0))
+        if intent.get("order_contract_anomaly"):
+            issues["order_contract_anomaly"] += 1
+        if status in {"FAILED", "REJECTED"} and intent.get("broker_reason_missing") is True:
+            issues["broker_rejection_reason_missing"] += 1
+        # A broker-terminal order with no quantity is unresolved evidence, not
+        # proof of a zero fill. Only an intent never sent may omit that field.
+        unsent = safe_unsent(intent, status)
+        qty = number(intent.get("filled_quantity", 0 if unsent else None))
         if qty is None or qty < 0:
             issues["invalid_fill_quantity"] += 1
             continue
-        if not safe_unsent(intent, status) and status not in {"FILLED", "CANCELLED", "FAILED", "REJECTED", "EXPIRED"}:
+        if not unsent and status not in {"FILLED", "CANCELLED", "FAILED", "REJECTED", "EXPIRED"}:
             issues["unresolved_execution"] += 1
         if status == "FILLED" and qty == 0:
             issues["filled_without_quantity"] += 1
         if qty > 0:
             filled += 1
+            payload = intent.get("order_payload")
+            order = payload[0] if isinstance(payload, list) and len(payload) == 1 \
+                and isinstance(payload[0], dict) else None
+            submitted = number(order.get("quantity")) if order else None
+            intended = number(intent.get("quantity"))
+            if submitted is None or submitted <= 0 or intended is None or intended <= 0:
+                issues["submitted_quantity_unverifiable"] += 1
+            else:
+                if submitted != intended:
+                    issues["intent_payload_quantity_mismatch"] += 1
+                if qty > submitted:
+                    issues["fill_exceeds_submitted_quantity"] += 1
+            if (order is None or order.get("client_order_id") !=
+                    str(intent.get("client_order_id") or run)
+                    or order.get("side") != intent.get("side")
+                    or order.get("symbol") != intent.get("symbol")):
+                issues["submitted_order_identity_mismatch"] += 1
             fee, price = number(intent.get("filled_fee")), number(intent.get("filled_price"))
             if (fee is None or fee < 0 or price is None or price <= 0
                     or intent.get("broker_fee_status") != "KNOWN"
@@ -213,16 +360,75 @@ def build_report(export, logs, candidate, revision):
                     issues["cashflow_arithmetic_mismatch"] += 1
             flow = mapping(mapping(state.get(chain, {})).get("execution_cashflow", {}))
             applied = mapping(mapping(realized.get(chain, {})).get("applied_fills", {}))
-            if run not in mapping(flow.get("finalized_runs", {})) or run not in applied:
+            archived_applied = mapping(realized_archive.get(chain, {}))
+            final = mapping(flow.get("finalized_runs", {})).get(run)
+            realized_fill = applied.get(run) or archived_applied.get(run)
+            if not isinstance(final, dict) or not isinstance(realized_fill, dict):
                 issues["model_or_realized_witness_missing"] += 1
+            elif (not same_number(final.get("filled_quantity"), qty, "1e-9")
+                  or not same_number(final.get("filled_price"), price, "1e-8")
+                  or not same_number(realized_fill.get("quantity"), qty, "1e-9")
+                  or not same_number(realized_fill.get("average_price"), price, "1e-8")
+                  or not same_number(realized_fill.get("fee"), fee, "1e-8")
+                  or realized_fill.get("side") != intent.get("side")
+                  or row.get("cashflow_status") != "FINALIZED"
+                  or not same_number(row.get("execution_quantity"), qty, "1e-9")
+                  or not same_number(row.get("execution_price"), price, "1e-8")
+                  or not same_number(row.get(DELTA_COLUMN), final.get("delta_actual"), "1e-8")
+                  or not same_number(row.get(ACTUAL_COLUMN), final.get("actual_cumulative"), "1e-8")
+                  or not same_number(row.get(EXCESS_COLUMN), final.get("excess"), "1e-8")):
+                issues["model_or_realized_witness_mismatch"] += 1
     if any(count > 1 for count in ids.values()):
         issues["duplicate_client_order_identity"] += 1
+    for run in audit.keys() - intent_runs:
+        issues["order_audit_without_intent"] += 1
+    for chain, record in cash.items():
+        for run in mapping(mapping(record).get("events", {})):
+            if (chain, run) not in intent_keys:
+                issues["broker_cashflow_without_intent"] += 1
+    for chain, record in state.items():
+        flow = mapping(mapping(record).get("execution_cashflow", {}))
+        for run in mapping(flow.get("finalized_runs", {})):
+            if (chain, run) not in intent_keys:
+                issues["model_finalization_without_intent"] += 1
+    for chain in realized.keys() | realized_archive.keys():
+        hot = mapping(mapping(realized.get(chain, {})).get("applied_fills", {}))
+        archived = mapping(realized_archive.get(chain, {}))
+        for run in hot.keys() | archived.keys():
+            if (chain, run) not in intent_keys:
+                issues["realized_fill_without_intent"] += 1
+            if run in hot and run in archived and hot[run] != archived[run]:
+                issues["live_archive_realized_conflict"] += 1
     locks = mapping(root.get("webull_lego_order_dispatch_locks", {}))
-    unresolved = sum(bool(mapping(lock).get("inflight_run_id")) for lock in locks.values())
+    lock_docs = [mapping(lock) for lock in locks.values()]
+    halt_docs = [mapping(lock.get("operator_halt", {})) for lock in lock_docs]
+    halt_audit = mapping(root.get("webull_lego_operator_halt_audit", {}))
+    for scope, lock in locks.items():
+        halt = mapping(mapping(lock).get("operator_halt", {}))
+        if not halt:
+            continue
+        events = mapping(halt_audit.get(scope, {}))
+        halt_id = halt.get("halt_id")
+        actions = {event.get("action") for event in events.values()
+                   if isinstance(event, dict) and event.get("scope") == scope
+                   and event.get("halt_id") == halt_id}
+        expected = {"HALT"} if halt.get("halted") else {"HALT", "CLEAR"}
+        if not halt_id or not expected.issubset(actions):
+            issues["operator_halt_audit_history_missing"] += 1
+        last = halt.get("last_audit_event_id")
+        if not last or not isinstance(events.get(last), dict):
+            issues["operator_halt_last_audit_witness_missing"] += 1
+    unresolved = sum(bool(lock.get("inflight_run_id")) for lock in lock_docs)
+    operator_halts = sum(bool(halt.get("halted")) for halt in halt_docs)
+    halt_audits_pending = sum(bool(halt.get("audit_pending_event"))
+                              for halt in halt_docs)
     check("snapshot_integrity", bool(intents) and not issues,
           {"intents": len(intents), "statuses": dict(statuses), "mirrors_matched": matched,
            "positive_fills": filled, "issues": dict(issues)})
-    check("money_fences_resolved", unresolved == 0, {"unresolved_fences": unresolved})
+    check("money_fences_resolved",
+          unresolved == operator_halts == halt_audits_pending == 0,
+          {"unresolved_fences": unresolved, "operator_halts": operator_halts,
+           "operator_halt_audits_pending": halt_audits_pending})
 
     ticks, requests = [], []
     malformed = 0
@@ -249,6 +455,8 @@ def build_report(export, logs, candidate, revision):
           and len(set(correlations)) == len(correlations), {"ticks": len(ticks)})
     pairing_ok, pairing_detail = pair_request_ticks(ticks, requests)
     check("request_tick_pairing", pairing_ok, pairing_detail)
+    lineage_ok, lineage_detail = link_committed_rows(rows, ticks, requests)
+    check("committed_row_log_lineage", lineage_ok, lineage_detail)
     check("candidate_revision_binding", bool(candidate) and bool(revision) and bool(ticks)
           and all(p.get("candidate_hash") == candidate and p.get("revision") == revision for _, p in ticks),
           {"expected_candidate": candidate, "expected_revision": revision})

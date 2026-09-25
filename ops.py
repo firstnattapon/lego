@@ -94,6 +94,7 @@ def status_command(_args) -> dict:
         "execution_status": intent.get("status"),
         "broker_status": intent.get("broker_status"),
         "broker_reject_circuit": fence.get("broker_reject_circuit") or {},
+        "operator_halt": fence.get("operator_halt") or {},
         "allow_fractional": runtime.deployment.allow_fractional,
         "broker_fee_status": intent.get("broker_fee_status"),
         "fee_pending_since": intent.get("fee_pending_since"),
@@ -143,10 +144,50 @@ def reset_reject_halt_command(args) -> dict:
                                 apply=args.apply)
 
 
+def halt_orders_command(args) -> dict:
+    import main
+    import operator_halt
+    runtime = load_runtime_config()
+    main._init_firebase()
+    return operator_halt.set_halt(
+        main.runtime_identity_fingerprint(), runtime.operator.symbol,
+        operator=args.operator, reason=args.reason, apply=args.apply)
+
+
+def clear_operator_halt_command(args) -> dict:
+    import main
+    import operator_halt
+    runtime = load_runtime_config()
+    if runtime.operator.allows_new_intents:
+        raise ValueError("pause trading (LEGO_ACTIVE=false) before clearing operator halt")
+    main._init_firebase()
+    return operator_halt.clear_halt(
+        main.runtime_identity_fingerprint(), runtime.operator.symbol,
+        expected_halt_id=args.halt_id, operator=args.operator,
+        reason=args.reason, apply=args.apply)
+
+
+def repair_operator_halt_audit_command(args) -> dict:
+    import main
+    import operator_halt
+    runtime = load_runtime_config()
+    main._init_firebase()
+    identity = main.runtime_identity_fingerprint()
+    pending = bool(operator_halt.status(identity, runtime.operator.symbol).get(
+        "audit_pending_event"))
+    repaired = (operator_halt.repair_audit(identity, runtime.operator.symbol)
+                if args.apply else False)
+    return {"dry_run": not args.apply, "audit_pending": pending,
+            "repaired": repaired}
+
+
 COMMANDS = {"check": check_command, "release-binding": binding_command,
             "bootstrap-auth": bootstrap_command, "status": status_command,
             "repair-audit": repair_audit_command,
-            "reset-reject-halt": reset_reject_halt_command}
+            "reset-reject-halt": reset_reject_halt_command,
+            "halt-orders": halt_orders_command,
+            "clear-operator-halt": clear_operator_halt_command,
+            "repair-operator-halt-audit": repair_operator_halt_audit_command}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -167,6 +208,17 @@ def parser() -> argparse.ArgumentParser:
     reset.add_argument("--halt-id", required=True)
     reset.add_argument("--reason", required=True)
     reset.add_argument("--apply", action="store_true")
+    halt = sub.add_parser("halt-orders")
+    halt.add_argument("--operator", required=True)
+    halt.add_argument("--reason", required=True)
+    halt.add_argument("--apply", action="store_true")
+    clear = sub.add_parser("clear-operator-halt")
+    clear.add_argument("--halt-id", required=True)
+    clear.add_argument("--operator", required=True)
+    clear.add_argument("--reason", required=True)
+    clear.add_argument("--apply", action="store_true")
+    repair_halt = sub.add_parser("repair-operator-halt-audit")
+    repair_halt.add_argument("--apply", action="store_true")
     return cli
 
 

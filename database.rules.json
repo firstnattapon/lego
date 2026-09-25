@@ -42,6 +42,10 @@
       ".read": false,
       ".write": false
     },
+    "webull_lego_operator_halt_audit": {
+      ".read": false,
+      ".write": false
+    },
     "webull_lego_realized": {
       ".read": false,
       ".write": false
