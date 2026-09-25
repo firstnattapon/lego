@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import re
 
+from lego_orders import normalize_status
 from tools.migration_audit import audit_export, safe_unsent
 
 
@@ -168,7 +169,7 @@ def build_report(export, logs, candidate, revision):
     mirror_fields = ("status", "filled_quantity", "filled_price", "filled_fee",
                      "broker_fee_status", "cashflow_finalized", "place_attempted")
     for chain, run, intent in intents:
-        status = str(intent.get("status") or "UNKNOWN").upper()
+        status = normalize_status(intent.get("status") or "UNKNOWN")
         statuses[status] += 1
         ids[str(intent.get("client_order_id") or run)] += 1
         mirror = audit.get(run)
@@ -184,16 +185,40 @@ def build_report(export, logs, candidate, revision):
         if intent.get("needs_manual_check") or status in {
                 "RECONCILE_ABANDONED", "CASHFLOW_FINALIZE_ERROR", "REALIZED_MATH_ERROR"}:
             issues["manual_reconciliation_required"] += 1
-        qty = number(intent.get("filled_quantity", 0))
+        if intent.get("order_contract_anomaly"):
+            issues["order_contract_anomaly"] += 1
+        if status in {"FAILED", "REJECTED"} and intent.get("broker_reason_missing") is True:
+            issues["broker_rejection_reason_missing"] += 1
+        # A broker-terminal order with no quantity is unresolved evidence, not
+        # proof of a zero fill. Only an intent never sent may omit that field.
+        unsent = safe_unsent(intent, status)
+        qty = number(intent.get("filled_quantity", 0 if unsent else None))
         if qty is None or qty < 0:
             issues["invalid_fill_quantity"] += 1
             continue
-        if not safe_unsent(intent, status) and status not in {"FILLED", "CANCELLED", "FAILED", "REJECTED", "EXPIRED"}:
+        if not unsent and status not in {"FILLED", "CANCELLED", "FAILED", "REJECTED", "EXPIRED"}:
             issues["unresolved_execution"] += 1
         if status == "FILLED" and qty == 0:
             issues["filled_without_quantity"] += 1
         if qty > 0:
             filled += 1
+            payload = intent.get("order_payload")
+            order = payload[0] if isinstance(payload, list) and len(payload) == 1 \
+                and isinstance(payload[0], dict) else None
+            submitted = number(order.get("quantity")) if order else None
+            intended = number(intent.get("quantity"))
+            if submitted is None or submitted <= 0 or intended is None or intended <= 0:
+                issues["submitted_quantity_unverifiable"] += 1
+            else:
+                if submitted != intended:
+                    issues["intent_payload_quantity_mismatch"] += 1
+                if qty > submitted:
+                    issues["fill_exceeds_submitted_quantity"] += 1
+            if (order is None or order.get("client_order_id") !=
+                    str(intent.get("client_order_id") or run)
+                    or order.get("side") != intent.get("side")
+                    or order.get("symbol") != intent.get("symbol")):
+                issues["submitted_order_identity_mismatch"] += 1
             fee, price = number(intent.get("filled_fee")), number(intent.get("filled_price"))
             if (fee is None or fee < 0 or price is None or price <= 0
                     or intent.get("broker_fee_status") != "KNOWN"

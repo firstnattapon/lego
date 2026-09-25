@@ -96,6 +96,57 @@ def test_missing_or_malformed_evidence_never_passes(tmp_path):
     assert checks(report(tmp_path, root, logs))["snapshot_integrity"] == "FAIL"
 
 
+def test_positive_fill_audit_flags_submitted_quantity_and_identity_gaps(tmp_path):
+    root, logs = evidence(tmp_path)
+    intent = root["webull_lego_order_outbox"]["chain"]["run"]
+    intent.update(status="FILLED", place_attempted=True, side="BUY", symbol="TSLA",
+                  quantity="0.31721", filled_quantity="0.320000",
+                  order_payload=[{"client_order_id": "run", "side": "BUY",
+                                  "symbol": "TSLA", "quantity": "0.31721"}])
+    root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
+    result = report(tmp_path, root, logs)
+    detail = next(c["detail"] for c in result["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["fill_exceeds_submitted_quantity"] == 1
+    assert "intent_payload_quantity_mismatch" not in detail["issues"]
+
+    intent["order_payload"][0].update(quantity="0.3", symbol="AAPL")
+    root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["intent_payload_quantity_mismatch"] == 1
+    assert detail["issues"]["submitted_order_identity_mismatch"] == 1
+
+
+def test_attempted_terminal_missing_quantity_and_reject_reason_fail_audit(tmp_path):
+    root, logs = evidence(tmp_path)
+    intent = root["webull_lego_order_outbox"]["chain"]["run"]
+    intent.update(status="FAILED", place_attempted=True,
+                  broker_reason_missing=True)
+    root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["invalid_fill_quantity"] == 1
+    assert detail["issues"]["broker_rejection_reason_missing"] == 1
+
+    intent["filled_quantity"] = "0"
+    root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["issues"]["broker_rejection_reason_missing"] == 1
+
+
+def test_canceled_alias_is_terminal_in_snapshot_audit(tmp_path):
+    root, logs = evidence(tmp_path)
+    intent = root["webull_lego_order_outbox"]["chain"]["run"]
+    intent.update(status="CANCELED", place_attempted=True, filled_quantity="0")
+    root["webull_lego_order_audit"]["run"] = copy.deepcopy(intent)
+    detail = next(c["detail"] for c in report(tmp_path, root, logs)["checks"]
+                  if c["criterion"] == "snapshot_integrity")
+    assert detail["statuses"] == {"CANCELLED": 1}
+    assert "unresolved_execution" not in detail["issues"]
+
+
 def test_cli_redacts_invalid_raw_content_and_returns_nonzero(tmp_path, monkeypatch, capsys):
     path = tmp_path / "bad.json"
     path.write_text("secret-account-do-not-print", encoding="utf-8")

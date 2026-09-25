@@ -294,7 +294,7 @@ def test_an_interrupted_row_write_is_repaired_by_the_next_attempt(monkeypatch):
 
 # --- Case 3: no fill means no cashflow --------------------------------------
 
-@pytest.mark.parametrize("status", ["REJECTED", "CANCELLED"])
+@pytest.mark.parametrize("status", ["REJECTED", "CANCELLED", "CANCELED"])
 def test_terminal_without_a_fill_leaves_delta_zero(monkeypatch, status):
     _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
     body, _ = _run(monkeypatch, SLOT_1, 330.0, holdings=9.375)
@@ -304,7 +304,7 @@ def test_terminal_without_a_fill_leaves_delta_zero(monkeypatch, status):
     })
 
     result = [r for r in _work() if r["run_id"] == run_id][0]
-    assert result["status"] == status
+    assert result["status"] == ("CANCELLED" if status == "CANCELED" else status)
     assert "cashflow_finalized" not in result
 
     row = _row(run_id)
@@ -424,7 +424,7 @@ def test_terminal_unknown_fee_stays_pending_then_late_fee_is_delta_only(
     assert list_actionable(chain_key(_cfg())) == []
 
 
-@pytest.mark.parametrize("terminal_status", ["CANCELLED", "EXPIRED"])
+@pytest.mark.parametrize("terminal_status", ["CANCELLED", "CANCELED", "EXPIRED"])
 def test_terminal_cancel_or_expiry_books_its_final_cumulative_partial_fill(
         monkeypatch, terminal_status):
     _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
@@ -441,7 +441,8 @@ def test_terminal_cancel_or_expiry_books_its_final_cumulative_partial_fill(
     result = [r for r in _work() if r["run_id"] == run_id][0]
 
     expected = FIX_C * (331.4 / 320.0 - 1.0)
-    assert result["status"] == terminal_status
+    assert result["status"] == (
+        "CANCELLED" if terminal_status == "CANCELED" else terminal_status)
     assert result["cashflow_finalized"] is True
     assert _row(run_id)[DELTA_COLUMN] == pytest.approx(expected)
     assert _row(run_id)["execution_quantity"] == pytest.approx(cumulative)
@@ -513,8 +514,9 @@ def test_a_fill_whose_position_never_moves_defers_then_stops_asking(monkeypatch)
     _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
     body, _ = _run(monkeypatch, SLOT_1, 330.0, holdings=9.375)
     run_id = body["run_id"]
+    ordered_quantity = _intent(run_id)["quantity"]
     _stub_broker(monkeypatch, holdings_after=9.375, detail={
-        "order_status": "FILLED", "filled_quantity": 1.0,
+        "order_status": "FILLED", "filled_quantity": ordered_quantity,
         "avg_filled_price": 331.25,
     })
 

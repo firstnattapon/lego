@@ -69,6 +69,6 @@ PR/code และ green tests เป็นหลักฐานเฉพาะ�
 - Webull UAT ของ account/SDK/endpoint ที่จะใช้: preview → Place ที่อนุมัติ → terminal quantity/price/actual fees → holdings/cash reconciliation → repeat reconciliation โดยไม่มี duplicate order
 - Timeout/crash/rollback ระหว่าง unresolved intent และการคืนระบบหลัง cold start/token rotation; ทดสอบ late fee/partial fill/cancel/reject ตาม contract จริง
 - Soak ตาม workload ที่ตั้งใจใช้: ไม่มี backlog/fee pending ที่ไม่แจ้งเตือน; latency, API quota และ RTDB cost อยู่ในเกณฑ์ที่ operator กำหนด; alert ถูกส่งถึงผู้รับและทดลอง recovery/restore สำเร็จ
-- ตรวจ pagination ของ endpoint จริงก่อนอัปเกรด SDK: adapter ที่ pin อยู่ยังใช้ legacy `page_size/last_client_order_id`; global API รุ่นใหม่ใช้ `pagination_key` ต้องพิสูจน์ multi-page scan ของ endpoint ที่เลือก ไม่สลับ schema โดยคาดเดา
+- ตรวจ pagination ของ endpoint จริงก่อนอัปเกรด SDK: adapter ปัจจุบันเรียก `order_v3.list_order_open(..., pagination_key=...)` และเดินหน้าต่อจาก cursor ที่ response คืนมา แต่ยังต้องพิสูจน์ multi-page scan กับบัญชีและ endpoint TH UAT ที่จะ deploy จริง
 
 ยังไม่มี live deployment/broker validation ของ candidate ใน PR นี้ จึงไม่ควรเปลี่ยนข้อความ release เป็น Production certified จนหลักฐานข้างต้นครบ การแก้ F2 หรือการเพิ่มอายุ DNA ไม่อยู่ใน PR นี้

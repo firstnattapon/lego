@@ -82,7 +82,11 @@ FEE_FIELDS = ("transaction_fee", "filled_fee", "execution_fee", "commission", "f
 
 
 def normalize_status(raw) -> str:
-    return str(raw or "").strip().upper().replace(" ", "_")
+    status = str(raw or "").strip().upper().replace(" ", "_")
+    # Webull Thailand has returned the US spelling in Order Detail while the
+    # event stream and our terminal state machine use CANCELLED. Keep the alias
+    # at the shared boundary so recovery, outbox and admin agree on one status.
+    return "CANCELLED" if status == "CANCELED" else status
 
 
 def _order_fields(detail) -> dict:

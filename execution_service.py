@@ -60,7 +60,7 @@ from webull_io import (IncompleteOpenOrdersError, build_clients,
                         preview_market_order, preview_market_order_result,
                         redact_sensitive_text,
                         runtime_identity_fingerprint, token_health)
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from webull_io import (validate_order_detail_identity, validate_place_response,
                        validate_preview_funding, FractionalGateError,
                        InstrumentCapability, evaluate_fractional_order_gate,
@@ -398,12 +398,65 @@ def _recover_pending_order_intents(cfg, runtime_identity: str,
 
 def _persist_summary(intent: dict, summary: dict) -> None:
     summary = dict(summary)
-    if normalize_status(summary.get("status")) in {"FAILED", "REJECTED"}:
-        summary["terminal_reason"] = "broker order failed: " + str(
-            summary.get("reject_reason") or "reason not supplied by broker")
+    if (normalize_status(summary.get("status")) in {"FAILED", "REJECTED"}
+            and not summary.get("order_contract_anomaly")):
+        reason = summary.get("reject_reason")
+        if reason:
+            summary["terminal_reason"] = "broker order failed: " + str(reason)
+        else:
+            # This is an evidence gap, not a reason supplied by the broker.
+            summary["broker_reason_missing"] = True
+            summary["terminal_reason"] = (
+                "broker order failed; broker rejection reason unavailable")
     _persist(intent["chain_key"], intent["run_id"],
              {**summary, "status": normalize_status(summary.get("status"))},
              claim=intent)
+
+
+def _submitted_order_anomaly(intent: dict, summary: dict) -> str | None:
+    """Detect a positive fill that cannot be tied to the exact submitted qty.
+
+    Intents without a Place marker use the old recovery path. Typed dispatch
+    stores an exact Preview payload; legacy UAT intents use their committed
+    intent quantity when that payload was not persisted.
+    """
+    if intent.get("place_attempted") is not True:
+        return None
+    try:
+        filled = Decimal(str(summary.get("filled_quantity")))
+    except (InvalidOperation, TypeError, ValueError):
+        return None  # Existing fill parser handles malformed/missing quantities.
+    if not filled.is_finite() or filled <= 0:
+        return None
+    payload = intent.get("order_payload")
+    # Legacy UAT intents did not persist the Preview payload. Their committed
+    # intent quantity is the only durable submitted-quantity witness. Typed v3
+    # dispatch stores the full payload and verifies it before Preview.
+    if payload is None:
+        submitted_value = intent.get("quantity")
+    else:
+        if (not isinstance(payload, list) or len(payload) != 1
+                or not isinstance(payload[0], dict)):
+            return "submitted_payload_missing_or_ambiguous"
+        order = payload[0]
+        if (order.get("client_order_id") != str(intent.get("run_id"))
+                or order.get("symbol") != intent.get("symbol")
+                or order.get("side") != intent.get("side")):
+            return "submitted_order_identity_mismatch"
+        submitted_value = order.get("quantity")
+    try:
+        submitted = Decimal(str(submitted_value))
+        intended = Decimal(str(intent.get("quantity")))
+    except (InvalidOperation, TypeError, ValueError):
+        return "submitted_quantity_unverifiable"
+    if (not submitted.is_finite() or not intended.is_finite()
+            or submitted <= 0 or intended <= 0):
+        return "submitted_quantity_unverifiable"
+    if submitted != intended:
+        return "intent_payload_quantity_mismatch"
+    if filled > submitted:
+        return "fill_exceeds_submitted_quantity"
+    return None
 
 
 def _persist_error(chain_key_: str, run_id: str, status: str, exc: Exception,
@@ -756,6 +809,26 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
     if raw is not None:
         update_intent(intent["chain_key"], intent["run_id"],
                       {"broker_raw_detail": raw}, **_claim_update_kwargs(intent))
+    anomaly = _submitted_order_anomaly(intent, summary)
+    if anomaly:
+        # The broker's cumulative fill is real evidence, but an overfill or
+        # unverifiable submitted payload must not move either model ledger.
+        # Keep nonterminal orders actionable for later reads, while a terminal
+        # result leaves the queue behind a durable manual money fence.
+        summary.update({
+            "broker_status": normalize_status(summary.get("status")),
+            "cashflow_finalized": False,
+            "cashflow_abandoned": True,
+            "needs_manual_check": True,
+            "order_contract_anomaly": anomaly,
+            "terminal_reason": "broker fill requires order quantity/identity review",
+        })
+        _persist_summary(intent, summary)
+        _record_warning("broker_order_contract_anomaly",
+                        "broker fill ไม่ตรงกับ submitted order — คง money fence",
+                        {"run_id": intent["run_id"], "chain_key": intent["chain_key"],
+                         "reason": anomaly})
+        return {"run_id": intent["run_id"], **summary}
     circuit = broker_circuit.record_outcome(intent, summary)
     if circuit.get("halted"):
         summary["broker_reject_halted"] = True
@@ -1277,6 +1350,13 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 raise FractionalGateError("fractional capability unknown: fail closed")
 
         order = build_order_payload(cfg, intent["side"], float(intent["quantity"]), run_id)
+        if (len(order) != 1 or not isinstance(order[0], dict)
+                or order[0].get("client_order_id") != run_id
+                or order[0].get("symbol") != cfg.symbol.upper()
+                or order[0].get("side") != intent["side"]
+                or Decimal(str(order[0].get("quantity"))) !=
+                   Decimal(str(intent["quantity"]))):
+            raise ValueError("order payload identity/quantity differs from committed intent")
         if runtime is not None:
             preview_result = preview_market_order_result(
                 trade_client, order, strict=True)
@@ -1470,6 +1550,11 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         # The lease expired and another generation won before this worker reached
         # the irreversible call.  Do not place; that winner owns reconciliation.
         return {"run_id": run_id, "status": normalize_status(intent.get("status"))}
+    # This transaction is the authoritative Place witness. The earlier local
+    # intent predates both the durable marker and the stored Preview payload.
+    # Carry the committed document into result handling so fill/quantity checks
+    # cannot silently skip an order placed in this same invocation.
+    intent = started
     _mirror_order_audit(ck, run_id, started)
     if runtime is not None:
         try:

@@ -150,6 +150,9 @@ def test_failed_diagnostics_private_bounded_redacted_and_public_health_explicit(
     stored = outbox.read_intent("chain", "r")
     audit = FAKE_DB.reference("webull_lego_order_audit/r").get()
     assert "broker_raw_detail" in stored
+    assert stored["broker_reason_missing"] is True
+    assert stored["terminal_reason"] == (
+        "broker order failed; broker rejection reason unavailable")
     assert "broker_raw_detail" not in result and "broker_raw_detail" not in audit
     assert "private-" not in stored["broker_raw_detail"]
     assert json.loads(stored["broker_raw_detail"])["detail"]["orders"][0]["custom.debug"]
@@ -159,6 +162,23 @@ def test_failed_diagnostics_private_bounded_redacted_and_public_health_explicit(
     huge = broker_diagnostic_json({"x": ["\u0e01" * 500] * 10000})
     assert len(huge) <= 16384
     json.loads(huge)
+
+
+def test_broker_fill_above_submitted_quantity_keeps_manual_money_fence():
+    intent, _ = outcome("overfill", status="FILLED", quantity="0.32")
+    intent.update(side="BUY", quantity="0.31721", place_attempted=True,
+                  order_payload=[{"client_order_id": "overfill", "symbol": "TSLA",
+                                  "side": "BUY", "quantity": "0.31721"}])
+    outbox.put_intent("chain", "overfill", {**intent, "status": "PLACING_UNKNOWN"})
+    result = execution._finish_with_realized(None, Config("TSLA", 100), intent,
+                                             {"status": "FILLED", "filled_quantity": "0.32",
+                                              "filled_price": "380.42", "filled_fee": "1.29"})
+    stored = outbox.read_intent("chain", "overfill")
+    assert result["order_contract_anomaly"] == "fill_exceeds_submitted_quantity"
+    assert stored["status"] == "FILLED" and stored["needs_manual_check"] is True
+    assert stored["cashflow_finalized"] is False
+    assert not execution._chain_fence_can_clear(stored)
+    assert FAKE_DB.reference("webull_lego_broker_cashflow").get() is None
 
 
 @pytest.mark.parametrize("hours,blocked", [(12, True), (23.999, True), (24, False), (120, False)])
