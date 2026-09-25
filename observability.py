@@ -111,6 +111,7 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
                 key: item.get(key) for key in ("run_id", "status", "broker_status", "broker_fee_status",
                                              "cashflow_finalized", "fee_overdue", "fee_pending_age_seconds",
                                              "broker_reason_missing", "broker_reject_code",
+                                             "order_contract_anomaly",
                                              "broker_reject_halted", "token_preflight_blocked",
                                              "execution_limit_blocked", "needs_manual_check",
                                              "reconciliation_overdue", "reconciliation_age_seconds")}})
