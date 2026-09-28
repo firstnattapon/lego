@@ -7,3 +7,9 @@ ee7ee1918cc1d69574c6f6ce87ec6a77376e5344:release_evidence/WEBULL_CONTRACT_HASHES
 ee7ee1918cc1d69574c6f6ce87ec6a77376e5344:release_evidence/CANDIDATE.json:generic-api-key:26
 ee7ee1918cc1d69574c6f6ce87ec6a77376e5344:release_evidence/CANDIDATE.json:generic-api-key:38
 ee7ee1918cc1d69574c6f6ce87ec6a77376e5344:release_evidence/CANDIDATE.json:generic-api-key:117
+
+# v4 candidate source checksums, verified including Windows checkout line endings.
+# Exact historical findings only; no path, rule, or general hash exclusion.
+a47b79c4ef83ac10b8b706b52fff449533833a48:release_evidence/continuous-v4-candidate.json:generic-api-key:26
+a47b79c4ef83ac10b8b706b52fff449533833a48:release_evidence/continuous-v4-candidate.json:generic-api-key:40
+a47b79c4ef83ac10b8b706b52fff449533833a48:release_evidence/continuous-v4-candidate.json:generic-api-key:132

@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-28T03:48:44.515460+00:00",
+  "generated_at": "2026-09-28T08:41:25.061866+00:00",
   "base_commit": "c4ea9007634c97c5ce72d97fc732b12e07281e9a",
-  "candidate_hash": "e1449e248bab436f884d9511641db0b01a75c3b2c690e1f808ee69a7caf14ded",
+  "candidate_hash": "63da9d4977ca695aebe893cfecb5610399b87abdb51f9348ad6b2a2657251866",
   "candidate_scope": "backend-only",
   "overall_readiness": "NO-GO",
   "real_money_ready": false,
@@ -13,14 +13,14 @@
       "failures": 0,
       "errors": 0,
       "skipped": 0,
-      "duration_seconds": 39.467,
+      "duration_seconds": 40.917,
       "python": "3.12.10",
       "platform": "Windows",
       "command": "python tools/run_emulator_suite.py --jar PATH_TO_FIREBASE_DATABASE_EMULATOR.jar",
       "emulator": "firebase-database-emulator-v4.11.2",
       "broker": "test doubles; no live broker mutation",
       "evidence": "continuous-v4-pytest.xml",
-      "sha256": "cb8e5e3a52cce8c53005520fa7fa304c414d2568fb2bb68d6958c80fb5930d2f"
+      "sha256": "472d0648c6a010c0d9f225a3d80712d8f3582ddd410eb55d1ba24ef5889c2b16"
     },
     "python_compile": {
       "status": "PASS",
@@ -40,6 +40,11 @@
       "status": "PASS",
       "command": "pip-audit -r requirements.txt --progress-spinner off",
       "result": "No known vulnerabilities found"
+    },
+    "candidate_source_integrity": {
+      "status": "PASS",
+      "files": 153,
+      "method": "Every manifest digest matched the exact committed Git object bytes; checkout line-ending conversion removed before final validation."
     }
   },
   "historical_export_check": {
