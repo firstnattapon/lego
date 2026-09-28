@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Mapping
 
 from dna_engine import decode_dna, dna_fingerprint
+from recovery_policy import RecoveryPolicy
 
 
 ENVIRONMENT_HOSTS = {
@@ -173,8 +174,13 @@ class DeploymentProfile:
     allow_fractional: bool = True
     execution_limits: tuple[str, ...] = ("", "", "", "")
     trading_symbol: str = ""
+    strategy_binding: str = ""
+    session_key_mode: str = "release_window"
+    recovery_policy: RecoveryPolicy = RecoveryPolicy()
 
     def __post_init__(self) -> None:
+        if self.session_key_mode not in {"market_day", "release_window"}:
+            raise ConfigurationError("LEGO_SESSION_KEY_MODE must be market_day or release_window")
         if type(self.allow_fractional) is not bool:
             raise ConfigurationError("LEGO_ALLOW_FRACTIONAL must be boolean")
         environment = self.environment.strip().upper()
@@ -201,9 +207,11 @@ class DeploymentProfile:
     def expected_release_binding(self) -> str:
         from execution_limits import policy_hash
         raw = (
-            f"lego-release-v3\0{self.environment}\0"
+            f"lego-release-v4\0{self.environment}\0"
             f"{self.account_fingerprint}\0{self.candidate_hash}\0"
-            f"{self.trading_symbol}\0{policy_hash(self.execution_limits)}"
+            f"{self.trading_symbol}\0{policy_hash(self.execution_limits)}\0"
+            f"{self.strategy_binding}\0{self.allow_fractional}\0"
+            f"{self.session_key_mode}\0{self.recovery_policy.fingerprint}"
         )
         return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -250,6 +258,10 @@ def _load_bundle(env: Mapping[str, str]) -> DNABundle:
 def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
     from execution_limits import ENV_KEYS
     env = os.environ if env is None else env
+    try:
+        recovery_policy = RecoveryPolicy.from_env(env)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(str(exc)) from exc
     # AUTO_SUBMIT belongs to the legacy facade only. Letting it influence v2
     # made an obsolete environment variable silently opt a deployment into
     # trading, bypassing the six-field operator contract.
@@ -278,6 +290,12 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
                                name="LEGO_ALLOW_FRACTIONAL"),
         execution_limits=tuple(env.get(key, "").strip() for key in ENV_KEYS),
         trading_symbol=operator.symbol,
+        strategy_binding=hashlib.sha256(json.dumps({
+            "operator": operator.canonical(),
+            "bundle": operator.dna_bundle.__dict__,
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        session_key_mode=env.get("LEGO_SESSION_KEY_MODE", "release_window"),
+        recovery_policy=recovery_policy,
     )
     return RuntimeConfig(operator=operator, deployment=deployment)
 

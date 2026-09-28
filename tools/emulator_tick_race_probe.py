@@ -52,6 +52,7 @@ def main() -> None:
     from lego_state import ROWS_PATH, STATE_PATH, chain_key
     from market_clock import resolve_market_slot
     from webull_io import InstrumentCapability
+    from transition_audit import PATH as TRANSITIONS_PATH
 
     nonce = uuid.uuid4().hex[:10]
     env = {
@@ -85,6 +86,9 @@ def main() -> None:
         symbol="AAPL", fix_c=1500.0, diff=25.0,
         dna_code="bypass:100000", strategy_id="shannon_demon_lego_v2")
     ck = chain_key(cfg)
+    # This isolated emulator probe reuses its deterministic strategy/slot ID.
+    # Remove only its historical transition stream from earlier probe runs.
+    db.reference(f"{TRANSITIONS_PATH}/{ck}").delete()
     scope = account_symbol_fence_key(identity, "AAPL")
     slot = resolve_market_slot(FixedDateTime.moment)
     assert slot is not None
@@ -175,6 +179,7 @@ def main() -> None:
         db.reference(ROWS_PATH).delete()
         db.reference(f"{STATE_PATH}/{ck}").delete()
         db.reference(f"{OUTBOX_PATH}/{ck}").delete()
+        db.reference(f"{TRANSITIONS_PATH}/{ck}").delete()
         db.reference(f"{DISPATCH_LOCK_PATH}/{scope}").delete()
 
 

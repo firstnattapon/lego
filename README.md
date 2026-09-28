@@ -1,7 +1,15 @@
 # LEGO PRINCIPAL v2
 
+Continuous execution v4: [final implementation review](docs/implementation_plan_review.md),
+[cutover/operator runbook](docs/CONTINUOUS_RELEASE_V4_TH.md) and
+[study guide](docs/LEARNING_CONTINUOUS_V4_TH.md).
+This candidate adds one-shot durable cancellation, market-day quotas, release
+binding v4 and immutable transition audit. Production remains **NO-GO** pending
+live UAT fill/endurance, deployment and alert evidence. Deploy Production only in
+observe/inactive mode. The older review below is historical.
+
 23 September readiness hardening: [implementation plan and incident evidence](docs/IMPLEMENTATION_PLAN_20260923_TH.md).
-New submissions now require deployment-bound execution limits and a v3 release
+That release required deployment-bound execution limits and a v3 release
 binding. Recovery remains enabled with missing/expired limits. The supplied
 incident evidence is still **NO-GO for real money** until broker reconciliation
 and the operational acceptance gates are closed.

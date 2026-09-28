@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 import uuid
+from transition_audit import enqueue as enqueue_transition
 from datetime import datetime, timedelta, timezone
 from firebase_admin import db
 
@@ -261,7 +262,7 @@ def put_intent(chain_key: str, run_id: str, payload: dict) -> dict:
     def txn(current):
         if current:
             return current
-        return doc
+        return enqueue_transition(dict(doc))
 
     return ref.transaction(txn) or doc
 
@@ -275,6 +276,7 @@ def update_intent(chain_key: str, run_id: str, fields: dict, *,
 
     def txn(current):
         current = dict(current or {})
+        before = dict(current)
         if expected_claim_owner is not None:
             active_until = _parse_utc(current.get("claim_until"))
             if (current.get("claim_owner") != expected_claim_owner
@@ -318,7 +320,7 @@ def update_intent(chain_key: str, run_id: str, fields: dict, *,
                      or current.get("created_at") or run_id))
         if set(fields) != {"audit_pending"}:
             current["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return current
+        return enqueue_transition(current, before)
 
     return ref.transaction(txn) or {}
 
@@ -453,7 +455,7 @@ def recover_fenced_intent(chain_key: str, run_id: str) -> dict | None:
             "audit_revision": int(doc.get("audit_revision", 0)) + 1,
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
-        return doc
+        return enqueue_transition(doc, current)
 
     return ref.transaction(txn)
 
@@ -477,6 +479,9 @@ def begin_place_attempt(chain_key: str, run_id: str, worker_id: str,
             return doc
         if int(doc.get("claim_generation", 0) or 0) != int(claim_generation):
             return doc
+        until = _parse_utc(doc.get("claim_until"))
+        if until is None or until <= datetime.now(timezone.utc):
+            return doc
         doc.update({
             "status": "PLACING_UNKNOWN",
             "place_attempted": True,
@@ -487,7 +492,7 @@ def begin_place_attempt(chain_key: str, run_id: str, worker_id: str,
             "updated_at": datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"),
         })
-        return doc
+        return enqueue_transition(doc, current)
 
     result = ref.transaction(txn)
     if not isinstance(result, dict) or result.get("place_fence") != fence:
@@ -607,7 +612,7 @@ def expire_unsent_before(chain_key: str, now_utc: datetime) -> int:
                 "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "expired_token": expired_token,
             })
-            return doc
+            return enqueue_transition(doc, current)
 
         written = ref.transaction(txn)
         if isinstance(written, dict) and written.get("expired_token") == expired_token:

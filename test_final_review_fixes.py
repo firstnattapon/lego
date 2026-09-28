@@ -509,7 +509,12 @@ def test_claim_lease_is_atomic_under_real_threads(monkeypatch):
     assert "claim_owner" not in ref.value
 
 
-def test_expired_claim_generation_cannot_cross_the_irreversible_place_fence():
+def test_expired_claim_generation_cannot_cross_the_irreversible_place_fence(monkeypatch):
+    import lego_outbox
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None): return SLOT + timedelta(seconds=2)
+    monkeypatch.setattr(lego_outbox, "datetime", Clock)
     put_intent("ck", "r1", {"status": "PENDING_DISPATCH"})
     first = claim_intent(
         "ck", "r1", "w1", now_utc=SLOT, lease_seconds=1)

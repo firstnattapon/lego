@@ -23,8 +23,8 @@ set -Eeuo pipefail
 
 readonly PROJECT_ID="lego-firebase"
 readonly REGION="asia-southeast1"
-readonly ENVIRONMENT="UAT"
-readonly SUFFIX="uat"
+readonly ENVIRONMENT="${WEBULL_ENV_OVERRIDE:-UAT}"
+readonly SUFFIX="${ENVIRONMENT,,}"
 readonly FUNCTION_NAME="lego-tick-${SUFFIX}"
 readonly SCHEDULER_JOB="lego-tick-${SUFFIX}"
 readonly RUNTIME_SA_NAME="lego-runtime-${SUFFIX}"
@@ -51,6 +51,16 @@ readonly MAX_ORDER_QUANTITY="${LEGO_MAX_ORDER_QUANTITY_OVERRIDE:-}"
 readonly MAX_ORDER_NOTIONAL="${LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE:-}"
 readonly MAX_SESSION_ORDERS="${LEGO_MAX_SESSION_ORDERS_OVERRIDE:-}"
 readonly TRADING_WINDOW_END="${LEGO_TRADING_WINDOW_END_OVERRIDE:-}"
+readonly STALE_ACTION="${LEGO_STALE_ORDER_ACTION_OVERRIDE:-hold}"
+readonly STALE_SECONDS="${LEGO_STALE_ORDER_SECONDS_OVERRIDE:-300}"
+readonly CANCEL_GRACE="${LEGO_CANCEL_CONFIRM_GRACE_SECONDS_OVERRIDE:-120}"
+readonly SESSION_MODE="${LEGO_SESSION_KEY_MODE_OVERRIDE:-release_window}"
+[[ "${ENVIRONMENT}" == UAT || "${ENVIRONMENT}" == PROD ]] || exit 1
+# Live activation is a separately reviewed release, never the default deploy path.
+if [[ "${ENVIRONMENT}" == PROD && ( "${MODE}" != observe || "${ACTIVE}" != false ) ]]; then
+    echo "Production rollout requires observe/inactive; live activation is a separate release." >&2
+    exit 1
+fi
 
 step() {
     echo
@@ -589,23 +599,17 @@ EXPECTED_RELEASE_BINDING="$(
         --secret="${ACCOUNT_ID_SECRET}" \
         --project="${PROJECT_ID}" | \
     python3 -c '
-import hashlib
 import sys
-
-environment, candidate = sys.argv[1:3]
-from execution_limits import policy_hash
-symbol = sys.argv[3].strip().upper()
-limits_hash = policy_hash([value.strip() for value in sys.argv[4:8]])
-account_id = sys.stdin.read().strip()
-if not account_id:
-    raise SystemExit("WEBULL account secret is empty")
-account_fingerprint = hashlib.sha256(
-    f"webull-runtime-v2\0{environment}\0{account_id}".encode()
-).hexdigest()
-print(hashlib.sha256(
-    f"lego-release-v3\0{environment}\0{account_fingerprint}\0{candidate}\0{symbol}\0{limits_hash}".encode()
-).hexdigest())
-' "${ENVIRONMENT}" "${CANDIDATE_HASH}" "${SYMBOL}" "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}"
+from config import release_binding_for
+names = ("WEBULL_ENV", "LEGO_CANDIDATE_HASH", "LEGO_SYMBOL", "LEGO_MAX_ORDER_QUANTITY",
+         "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS", "LEGO_TRADING_WINDOW_END",
+         "LEGO_FIX_C", "LEGO_DIFF", "LEGO_DNA_BUNDLE", "LEGO_MODE", "LEGO_ACTIVE",
+         "LEGO_ALLOW_FRACTIONAL", "LEGO_STALE_ORDER_ACTION", "LEGO_STALE_ORDER_SECONDS",
+         "LEGO_CANCEL_CONFIRM_GRACE_SECONDS", "LEGO_SESSION_KEY_MODE")
+env = dict(zip(names, sys.argv[1:], strict=True))
+env["WEBULL_ACCOUNT_ID"] = sys.stdin.read().strip()
+print(release_binding_for(env))
+' "${ENVIRONMENT}" "${CANDIDATE_HASH}" "${SYMBOL}" "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}" "${FIX_C}" "${DIFF}" "${DNA_BUNDLE}" "${MODE}" "${ACTIVE}" "${ALLOW_FRACTIONAL}" "${STALE_ACTION}" "${STALE_SECONDS}" "${CANCEL_GRACE}" "${SESSION_MODE}"
 )"
 require_sha256 "computed release binding" "${EXPECTED_RELEASE_BINDING}"
 
@@ -623,6 +627,9 @@ elif [[ -n "${RELEASE_AUTHORIZATION_OVERRIDE}" \
     fail "release authorization ไม่ตรงกับ environment/account/candidate นี้"
 fi
 
+if [[ "${ENVIRONMENT}" == PROD && -z "${TOKEN_SECRET_RESOURCE_OVERRIDE}" ]]; then
+    fail "PROD requires WEBULL_TOKEN_SECRET_OVERRIDE before SDK initialization"
+fi
 TOKEN_SECRET_RESOURCE=""
 if [[ -n "${TOKEN_SECRET_RESOURCE_OVERRIDE}" ]]; then
     if [[ "${TOKEN_SECRET_RESOURCE_OVERRIDE}" =~ ^projects/([^/]+)/secrets/([^/]+)(/versions/[^/]+)?$ ]]; then
@@ -682,6 +689,7 @@ step "8/10 DEPLOY DATABASE RULES + CLOUD FUNCTION GEN2"
 ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=${SYMBOL},LEGO_FIX_C=${FIX_C},LEGO_ALLOW_FRACTIONAL=${ALLOW_FRACTIONAL},LEGO_DIFF=${DIFF},LEGO_DNA_BUNDLE=${DNA_BUNDLE},LEGO_MODE=${MODE},LEGO_ACTIVE=${ACTIVE},LEGO_CANDIDATE_HASH=${CANDIDATE_HASH},LEGO_RELEASE_AUTHORIZATION=${RELEASE_AUTHORIZATION_OVERRIDE},WEBULL_TOKEN_DIR=/tmp/webull_token,LEGO_DNA_CLOCK_MODE=market"
 ENV_VARS+=",LEGO_TRACE_PROJECT_ID=${PROJECT_ID},LEGO_MAX_ORDER_QUANTITY=${MAX_ORDER_QUANTITY},LEGO_MAX_ORDER_NOTIONAL_USD=${MAX_ORDER_NOTIONAL},LEGO_MAX_SESSION_ORDERS=${MAX_SESSION_ORDERS},LEGO_TRADING_WINDOW_END=${TRADING_WINDOW_END}"
 
+ENV_VARS+=",LEGO_STALE_ORDER_ACTION=${STALE_ACTION},LEGO_STALE_ORDER_SECONDS=${STALE_SECONDS},LEGO_CANCEL_CONFIRM_GRACE_SECONDS=${CANCEL_GRACE},LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER=1,LEGO_SESSION_KEY_MODE=${SESSION_MODE}"
 if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
     ENV_VARS="${ENV_VARS},WEBULL_TOKEN_SECRET=${TOKEN_SECRET_RESOURCE}"
 fi
@@ -759,6 +767,7 @@ gcloud scheduler jobs "${SCHEDULER_VERB}" http "${SCHEDULER_JOB}" \
     --oidc-service-account-email="${SCHEDULER_SA}" \
     --oidc-token-audience="${FUNCTION_URI}" \
     --max-retry-attempts=0 \
+    --max-retry-duration=0s \
     --quiet
 
 SCHEDULER_STATE="$(gcloud scheduler jobs describe "${SCHEDULER_JOB}" \

@@ -1,0 +1,78 @@
+{
+  "generated_at": "2026-09-28T03:48:44.515460+00:00",
+  "base_commit": "c4ea9007634c97c5ce72d97fc732b12e07281e9a",
+  "candidate_hash": "e1449e248bab436f884d9511641db0b01a75c3b2c690e1f808ee69a7caf14ded",
+  "candidate_scope": "backend-only",
+  "overall_readiness": "NO-GO",
+  "real_money_ready": false,
+  "local_implementation": "PASS",
+  "local_checks": {
+    "full_pytest": {
+      "status": "PASS",
+      "tests": 1178,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 39.467,
+      "python": "3.12.10",
+      "platform": "Windows",
+      "command": "python tools/run_emulator_suite.py --jar PATH_TO_FIREBASE_DATABASE_EMULATOR.jar",
+      "emulator": "firebase-database-emulator-v4.11.2",
+      "broker": "test doubles; no live broker mutation",
+      "evidence": "continuous-v4-pytest.xml",
+      "sha256": "cb8e5e3a52cce8c53005520fa7fa304c414d2568fb2bb68d6958c80fb5930d2f"
+    },
+    "python_compile": {
+      "status": "PASS",
+      "files": 106
+    },
+    "bash_syntax": {
+      "status": "PASS",
+      "files": [
+        "deploy/cloudshell-all-in-one.sh",
+        "deploy/continuous-uat.sh"
+      ]
+    },
+    "git_diff_check": {
+      "status": "PASS"
+    },
+    "dependency_audit": {
+      "status": "PASS",
+      "command": "pip-audit -r requirements.txt --progress-spinner off",
+      "result": "No known vulnerabilities found"
+    }
+  },
+  "historical_export_check": {
+    "status": "BLOCKED",
+    "evidence": "continuous-v4-historical-snapshot.json",
+    "sha256": "81969fed11bc1af025ea7c2fed2c4d24ce9b1592a52d729b58f20516d3b73fe8",
+    "reason": "Historical export has no fresh broker opening/closing evidence; absence of a historical fence cannot certify current broker state."
+  },
+  "external_gates": {
+    "cutover_backup_current_broker_migration": {
+      "status": "BLOCKED",
+      "reason": "Requires current private state, cloud/broker access, idle fence and a new approval window."
+    },
+    "uat_two_regular_sessions": {
+      "status": "BLOCKED",
+      "reason": "Requires target fractional profile, cold restart, market-day rollover and confirmed BUY/SELL positive fills with closed ledgers."
+    },
+    "whole_share_control": {
+      "status": "NOT RUN"
+    },
+    "deployed_image_revision_config_traffic_retry": {
+      "status": "NOT RUN"
+    },
+    "alert_delivery_halt_resume_token_drills": {
+      "status": "NOT RUN"
+    },
+    "prod_observe_inactive_two_regular_sessions": {
+      "status": "NOT RUN"
+    },
+    "live_activation": {
+      "status": "BLOCKED",
+      "reason": "Requires separate production release authorization, monetary caps, daily order limit and approval window."
+    }
+  },
+  "publication": "Source candidate and sanitized local evidence only. No deployment, live Place/Cancel, or real-money activation performed."
+}

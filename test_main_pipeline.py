@@ -270,6 +270,7 @@ def test_unresolvable_order_stops_being_retried(monkeypatch, auto_submit):
     """PLACING_UNKNOWN must be bounded: the broker answers UNKNOWN forever when
     it never accepted the order, and nothing else expires that state."""
     monkeypatch.setenv("LEGO_RECONCILE_MAX_ATTEMPTS", "3")
+    monkeypatch.setattr("webull_io.find_recent_order_by_client_id", lambda *a, **kw: None)
     _stub_broker(monkeypatch, place=_reject)
     body, _ = _run(monkeypatch, SESSION_OPEN_SLOT, 320.0)
     ck = chain_key(main.load_config())

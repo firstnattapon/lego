@@ -76,6 +76,7 @@ DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS = 360.0
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
 RECONCILE_STATUSES = {
+    "CANCEL_REQUESTED", "CANCEL_UNKNOWN",
     "PLACING_UNKNOWN", "PLACING", "PENDING", "SUBMITTED", "UNKNOWN",
     "PARTIAL_FILLED", "PARTIALLY_FILLED", AWAITING_FILL_CONFIRMATION,
     AWAITING_BROKER_FEE,
@@ -302,7 +303,7 @@ def lego_tick(request):
             body, code = _run_tick(request)
             # A lower layer may have preserved an uncertain order while opening
             # the circuit. Scheduler acknowledges the pause; health remains explicit.
-            if body.get("pipeline_status") not in {"CONFIG_ERROR", "UNTRUSTED_REQUEST_OVERRIDE"} and firebase_admin._apps:
+            if code < 400 and body.get("pipeline_status") not in {"CONFIG_ERROR", "UNTRUSTED_REQUEST_OVERRIDE"} and firebase_admin._apps:
                 from webull_io import auth_circuit_key
                 circuit = auth_circuit.status(auth_circuit_key())
                 if circuit.get("active"):
@@ -313,8 +314,7 @@ def lego_tick(request):
             body, code = {"pipeline_status": "AUTH_BACKOFF",
                           "retry_after": exc.state.get("retry_after")}, 200
         except tick_runtime.TickDeadlineExceeded as exc:
-            body, code = {"pipeline_status": "TICK_DEFERRED", "error": _error_text(exc),
-                          "error_type": type(exc).__name__}, 503
+            body, code = {"pipeline_status": "TICK_DEFERRED", "deferred_reason": "tick_deadline"}, 200
         except Exception as exc:
             body, code = {"pipeline_status": "TICK_ERROR", "error": _error_text(exc),
                           "error_type": type(exc).__name__,
@@ -376,6 +376,8 @@ def _run_tick(request):
     try:
         recovery = execution_service._run_order_worker(
             cfg, limit=3, runtime_identity=runtime_identity, runtime=runtime)
+    except tick_runtime.TickDeadlineExceeded:
+        return {"pipeline_status": "TICK_DEFERRED", "deferred_reason": "tick_deadline"}, 200
     except Exception as exc:
         return {
             "pipeline_status": "RECOVERY_ERROR",
@@ -389,7 +391,7 @@ def _run_tick(request):
         tick_runtime.require_budget(8.0)
     except tick_runtime.TickDeadlineExceeded as exc:
         return {"pipeline_status": "TICK_DEFERRED", "recovery": recovery,
-                "error": _error_text(exc), "error_type": type(exc).__name__}, 503
+                "deferred_reason": "tick_deadline"}, 200
     decision, decision_code = decision_service.run_decision(
         request, runtime=runtime, cfg_override=cfg)
     dispatch = None
@@ -406,6 +408,8 @@ def _run_tick(request):
                 tick_runtime.require_budget(8.0)
                 dispatch = execution_service._run_order_worker(
                     cfg, limit=1, runtime_identity=runtime_identity, runtime=runtime)
+        except tick_runtime.TickDeadlineExceeded:
+            dispatch = {"pipeline_status": "TICK_DEFERRED", "deferred_reason": "tick_deadline"}
         except Exception as exc:
             dispatch = {"pipeline_status": "ORDER_WORKER_ERROR", "error": _error_text(exc),
                         "error_type": type(exc).__name__,
@@ -423,18 +427,25 @@ def _run_tick(request):
         except Exception as exc:
             archive = {"status": "ARCHIVE_DEFERRED", "error": _error_text(exc)}
 
+    dispatch_deferred = (bool(dispatch and dispatch.get("deferred_reason"))
+                         or any(item.get("deferred_reason") == "tick_deadline"
+                                for phase in (recovery, dispatch or {}) for item in phase.get("results", []))
+                         or decision.get("pipeline_status") == "TICK_DEFERRED")
     dispatch_error = bool(dispatch and dispatch.get("error"))
     import broker_circuit
+    from operational_health import report as health_report
     circuit = broker_circuit.status(runtime_identity, cfg.symbol)
+    health = health_report(runtime, decision, token_health())
     return {
         "pipeline_status": ("TICK_DISPATCH_ERROR" if dispatch_error else
-                            "TICK_OK" if decision_code < 400 else "TICK_DECISION_ERROR"),
+                            "TICK_DEFERRED" if dispatch_deferred else "TICK_OK" if decision_code < 400 else "TICK_DECISION_ERROR"),
         "correlation_id": correlation_id,
         "environment": runtime.deployment.environment,
         "mode": runtime.operator.mode,
         "active": runtime.operator.active,
         "new_mutations_authorized": runtime.allows_new_broker_mutation,
         "broker_reject_halted": bool(circuit.get("halted")),
+        "operational_health": health,
         "recovery": recovery,
         "decision": decision,
         "dispatch": dispatch,

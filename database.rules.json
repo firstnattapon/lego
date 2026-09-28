@@ -11,7 +11,9 @@
       ".write": false
     },
     "webull_lego_order_audit": {
-      ".indexOn": ["placed_at"],
+      ".indexOn": [
+        "placed_at"
+      ],
       ".read": true,
       ".write": false
     },
@@ -27,7 +29,11 @@
       ".read": false,
       ".write": false,
       "$chain": {
-        ".indexOn": ["created_at", "actionable_sort", "audit_pending"]
+        ".indexOn": [
+          "created_at",
+          "actionable_sort",
+          "audit_pending"
+        ]
       }
     },
     "webull_lego_order_outbox_archive": {
@@ -67,6 +73,10 @@
       ".write": false
     },
     "webull_lego_alert_delivery": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_execution_transitions": {
       ".read": false,
       ".write": false
     }

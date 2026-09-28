@@ -131,7 +131,10 @@ def test_broker_metadata_survives_sdk_boundary_and_tick_event(action_path, expec
     assert details["code"] == "OPENAPI_SYSTEM_ERROR"
     body = {"decision": {"error": str(error), "type": "ServerException", "broker_error": details}}
     observability.emit_tick(body, 503)
-    event = json.loads(capsys.readouterr().out)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events[0]["event"] == "lego_operation" and events[0]["operation"] == "sdk_" + expected_op
+    assert "private account message" not in json.dumps(events)
+    event = next(e for e in events if e["event"] == "lego_tick_completed")
     assert event["errors"][0]["broker_error"] == details
     assert "private account message" not in json.dumps(event)
 

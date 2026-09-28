@@ -95,3 +95,14 @@ python tools/migrate_realized_fifo_v3.py CHAIN_KEY --rollback --confirm
 After schema v3 finalizes, rollback is refused. Use code that understands v3;
 never restore an old RTDB snapshot over broker executions.
 
+# Continuous execution v4 cutover
+
+See [the current cutover runbook](docs/CONTINUOUS_RELEASE_V4_TH.md). New order
+authorization uses release binding v4, including strategy/fractional/session and
+cancel policy. Legacy intents without a policy remain hold-only. Never downgrade
+to a worker unaware of CANCEL_REQUESTED/CANCEL_UNKNOWN or pending audit events.
+Use `ops.py migrate-market-day` for dry-run and `--apply` only after stopping new
+orders, verifying current broker state, backing up RTDB and resolving all fences.
+The obsolete `LEGO_ORDER_TIMEOUT_SECONDS` is rejected; use
+`LEGO_STALE_ORDER_SECONDS` with an explicit `LEGO_STALE_ORDER_ACTION` instead.
+

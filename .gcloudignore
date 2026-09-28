@@ -42,3 +42,7 @@ webull_token/**
 .firebase/**
 firebase-debug.log
 database-debug.log
+
+# Local verification outputs
+.cache-v4/
+.runtime-artifacts/
