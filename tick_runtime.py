@@ -2,9 +2,12 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 import time
+import json
+import os
 
 _deadline = ContextVar("lego_tick_deadline", default=None)
 _correlation = ContextVar("lego_tick_correlation", default=None)
+_witness = ContextVar("lego_tick_witness", default="none")
 
 
 class TickDeadlineExceeded(TimeoutError):
@@ -24,6 +27,31 @@ def require_budget(minimum: float = 2.0) -> None:
 
 def correlation_id() -> str | None:
     return _correlation.get()
+
+
+@contextmanager
+def phase(operation: str, *, witness: str | None = None):
+    """No payloads or error messages: only timing and durable-boundary state."""
+    start = time.monotonic()
+    witness_token = _witness.set(witness if witness is not None else _witness.get())
+    outcome = "ok"
+    try:
+        yield
+    except Exception:
+        outcome = "error"
+        raise
+    finally:
+        left = remaining()
+        print(json.dumps({
+            "event": "lego_operation", "phase": operation, "operation": operation,
+            "witness": _witness.get(), "outcome": outcome, "severity": "INFO",
+            "candidate_hash": os.environ.get("LEGO_CANDIDATE_HASH"),
+            "revision": os.environ.get("K_REVISION"),
+            "correlation_id": correlation_id(),
+            "duration_ms": round((time.monotonic() - start) * 1000, 3),
+            "remaining_budget_ms": None if left is None else round(left * 1000, 3),
+        }), flush=True)
+        _witness.reset(witness_token)
 
 
 @contextmanager

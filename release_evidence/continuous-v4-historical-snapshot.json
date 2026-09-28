@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-09-28T03:48:03.957653+00:00",
+  "status": "BLOCKED",
+  "scope": "supplied daily snapshots only",
+  "real_money_ready": false,
+  "statuses": {
+    "EXPIRED_UNSENT": 24,
+    "SUPPRESSED_STATE_CHANGED": 1,
+    "CANCELLED": 1
+  },
+  "attempts": 1,
+  "broker_orders_matched": 0,
+  "unresolved_fences": 0,
+  "audit_pending": 0,
+  "issues": {},
+  "pending": {},
+  "checks": {
+    "orders_fills_fees": "BLOCKED",
+    "broker_cashflow_ledger": "BLOCKED",
+    "model_realized_witnesses": "BLOCKED",
+    "positions_and_cash": "BLOCKED",
+    "fences_and_audit": "PASS"
+  },
+  "source_sha256": "c3d6f425d32d33e5da259d2e7d4d708c82b09b27809c0fe7b5802f1981347506"
+}

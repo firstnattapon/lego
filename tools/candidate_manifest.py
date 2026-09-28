@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STREAMLIT = ROOT.parent / "lego-firebase-streamlit"
 EXCLUDED_PARTS = {
-    ".git", ".pytest_cache", ".pytest_tmp", ".tools", ".venv", ".venv-release",
+    ".git", ".pytest_cache", ".cache-v4", ".runtime-artifacts", ".pytest_tmp", ".tools", ".venv", ".venv-release",
     "__pycache__", "release_evidence", "release_evidence_v2",
     ".audit-cache", ".review-runtime", ".firebase",
 }
@@ -26,7 +26,7 @@ def source_files(root):
         excluded = (bool(EXCLUDED_PARTS.intersection(parts))
                     or any(part.startswith(".venv") for part in parts)
                     or ".review-envs" in parts)
-        if (path.is_file() and (path.suffix.lower() in INCLUDED_SUFFIXES
+        if (path.is_file() and (path.suffix.lower() in INCLUDED_SUFFIXES or path.name.endswith(".env.example")
                 or path.name in INCLUDED_NAMES) and not excluded):
             yield path
 

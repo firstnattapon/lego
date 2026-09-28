@@ -313,7 +313,7 @@ def broker_error_details(exc: Exception) -> dict:
     operation = getattr(exc, "_lego_operation", None)
     if isinstance(operation, str) and operation in {
             "accounts", "positions", "balance", "snapshot", "preview", "place",
-            "order_detail", "open_orders", "instrument"}:
+            "order_detail", "open_orders", "instrument", "cancel", "order_history"}:
         out["operation"] = operation
     if out:
         out["retryable_read"] = is_transient_exception(exc)
@@ -725,8 +725,11 @@ def new_order_token_block(health: dict, environment: str,
     The existing token readiness policy can be stricter (default three days).
     Compare exact expiry, not the rounded days_left display value.
     """
-    if environment != "PROD" or health.get("token_check_enabled") is False:
+    if environment != "PROD":
         return None
+    if (not health.get("secret_configured") or health.get("token_storage") != "SECRET_MANAGER"
+            or not health.get("ready")):
+        return "production requires hydrated durable token secret"
     try:
         expiry = datetime.fromisoformat(str(health.get("expires_at")).replace("Z", "+00:00"))
         if expiry.tzinfo is None:
@@ -851,21 +854,24 @@ def _bounded_api_class(base):
             if tick_runtime.correlation_id():
                 auth_circuit.guard(auth_circuit_key())
             action = request.get_action_name()
+            operation = {
+                "/trading/accounts/list": "accounts",
+                "/trading/assets/positions/list": "positions",
+                "/trading/assets/balances/get": "balance",
+                "/market-data/stocks/snapshots/list": "snapshot",
+                "/trading/orders/preview": "preview",
+                "/trading/orders/place": "place",
+                "/trading/orders/cancel": "cancel",
+                "/trading/orders/get": "order_detail",
+                "/trading/orders/history/list": "order_history",
+                "/trading/orders/open-orders/list": "open_orders",
+                "/trading/instruments/stocks/profiles/list": "instrument",
+            }.get(action, "sdk_request")
             try:
-                response = super().get_response(request)
+                with tick_runtime.phase("sdk_" + operation):
+                    response = super().get_response(request)
             except Exception as exc:
-                operation = {
-                    "/trading/accounts/list": "accounts",
-                    "/trading/assets/positions/list": "positions",
-                    "/trading/assets/balances/get": "balance",
-                    "/market-data/stocks/snapshots/list": "snapshot",
-                    "/trading/orders/preview": "preview",
-                    "/trading/orders/place": "place",
-                    "/trading/orders/get": "order_detail",
-                    "/trading/orders/open-orders/list": "open_orders",
-                    "/trading/instruments/stocks/profiles/list": "instrument",
-                }.get(action)
-                if operation:
+                if operation != "sdk_request":
                     exc._lego_operation = operation
                 _record_auth_failure(exc)
                 raise
@@ -1008,6 +1014,12 @@ def build_clients():
 
     try:
         hydrate_token_from_secret()
+        if environment_label() == PROD:
+            health = token_health()
+            if (not health.get("secret_configured")
+                    or health.get("token_storage") != "SECRET_MANAGER"
+                    or not health.get("ready")):
+                raise WebullConfigError("PROD requires hydrated token; interactive initialization disabled")
     except Exception as exc:
         reset_clients()
         _record_auth_failure(exc)
@@ -1374,6 +1386,57 @@ def fetch_order_detail(trade_client, client_order_id: str) -> dict:
     account_id = os.environ["WEBULL_ACCOUNT_ID"]
     return _retry_transient(
         lambda: trade_client.order_v3.get_order_detail(account_id, client_order_id).json())
+
+
+def cancel_order(trade_client, client_order_id: str) -> dict:
+    """One mutation, never retried. The acknowledgement is NOT terminal proof."""
+    if not isinstance(client_order_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", client_order_id):
+        raise WebullConfigError("invalid cancel client_order_id")
+    tick_runtime.require_budget(4.0)
+    try:
+        with tick_runtime.phase("cancel", witness="CANCEL_REQUESTED"):
+            response = trade_client.order_v3.cancel_order(
+                os.environ["WEBULL_ACCOUNT_ID"], client_order_id)
+            if response.status_code != 200:
+                error = WebullConfigError("cancel response non-success; reconcile required")
+                error.http_status = response.status_code
+                raise error
+            return validate_place_response(response.json(), client_order_id)
+    except Exception as exc:
+        exc._lego_operation = "cancel"
+        _record_auth_failure(exc)
+        raise
+
+
+def find_recent_order_by_client_id(trade_client, client_order_id: str, *, placed_at) -> dict | None:
+    """Complete bounded v3 scan. None never proves that Place did not happen."""
+    start = datetime.fromisoformat(str(placed_at).replace("Z", "+00:00"))
+    now = datetime.now(timezone.utc)
+    if start.tzinfo is None or not 0 <= (now - start).total_seconds() <= 7 * 86400:
+        raise WebullConfigError("history recovery outside seven-day window")
+    cursor, seen, matches = None, set(), []
+    for _ in range(_open_order_max_pages()):
+        tick_runtime.require_budget(5.0)
+        with tick_runtime.phase("order_history", witness="place_attempted"):
+            page = _retry_transient(lambda after=cursor: trade_client.order_v3.list_order_history(
+                os.environ["WEBULL_ACCOUNT_ID"],
+                start_time=start.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                end_time=now.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                pagination_key=after).json())
+        items, next_cursor = _open_order_page(page)
+        for group in items:
+            for leg in _open_order_legs(group):
+                if leg["client_order_id"] == client_order_id:
+                    matches.append(leg)
+        if next_cursor is None:
+            if len(matches) > 1:
+                raise WebullConfigError("history has conflicting/duplicate order identity")
+            return dict(matches[0]) if matches else None
+        if next_cursor in seen:
+            raise WebullConfigError("history cursor repeated")
+        seen.add(next_cursor)
+        cursor = next_cursor
+    raise WebullConfigError("history scan incomplete")
 
 
 def _open_order_page(res) -> tuple[list, str | None]:

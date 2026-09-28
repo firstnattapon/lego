@@ -181,7 +181,20 @@ def repair_operator_halt_audit_command(args) -> dict:
             "repaired": repaired}
 
 
+def migrate_session_command(args) -> dict:
+    import main
+    from datetime import datetime, timezone
+    from execution_limits import migrate_market_day
+    runtime = load_runtime_config()
+    if runtime.operator.allows_new_intents:
+        raise ValueError("pause new orders before session migration")
+    main._init_firebase()
+    scope = main.account_symbol_fence_key(main.runtime_identity_fingerprint(), runtime.operator.symbol)
+    return migrate_market_day(scope, now=datetime.now(timezone.utc), apply=args.apply)
+
+
 COMMANDS = {"check": check_command, "release-binding": binding_command,
+            "migrate-market-day": migrate_session_command,
             "bootstrap-auth": bootstrap_command, "status": status_command,
             "repair-audit": repair_audit_command,
             "reset-reject-halt": reset_reject_halt_command,
@@ -201,6 +214,8 @@ def parser() -> argparse.ArgumentParser:
                       help="projects/PROJECT/secrets/NAME")
     boot.add_argument("--apply", action="store_true")
     sub.add_parser("status")
+    migrate = sub.add_parser("migrate-market-day")
+    migrate.add_argument("--apply", action="store_true")
     repair = sub.add_parser("repair-audit")
     repair.add_argument("--run-id", required=True)
     repair.add_argument("--apply", action="store_true")

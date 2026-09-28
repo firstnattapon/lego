@@ -91,6 +91,7 @@ UAT_QUOTE_DELAY_SECONDS = 900.0
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
 RECONCILE_STATUSES = {
+    "CANCEL_REQUESTED", "CANCEL_UNKNOWN",
     "PLACING_UNKNOWN", "PLACING", "PENDING", "SUBMITTED", "UNKNOWN",
     "PARTIAL_FILLED", "PARTIALLY_FILLED", AWAITING_FILL_CONFIRMATION,
     AWAITING_BROKER_FEE, REALIZED_MATCHING_PENDING,
@@ -167,20 +168,20 @@ def _execution_summary(place_response, detail):
 
 
 def _poll_order_status(trade_client, client_order_id: str, place_res: dict,
-                       expected_symbol: str | None = None) -> dict:
-    detail = None
-    for i in range(ORDER_POLL_ATTEMPTS):
-        if i:
-            tick_runtime.require_budget(ORDER_POLL_DELAY_S + 2.0)
-            time.sleep(ORDER_POLL_DELAY_S)
+                       expected_symbol: str | None = None, *, intent=None) -> dict:
+    # Durable place witness makes a later scheduled detail read sufficient.
+    if tick_runtime.remaining() is not None and tick_runtime.remaining() < 7.0:
+        return _execution_summary(place_res, None)
+    with tick_runtime.phase("order_detail", witness="place_attempted"):
         detail = fetch_order_detail(trade_client, client_order_id)
-        if expected_symbol is not None:
-            validate_order_detail_identity(detail, client_order_id=client_order_id,
-                                           symbol=expected_symbol)
-        summary = _execution_summary(place_res, detail)
-        if normalize_status(summary.get("status")) in TERMINAL_STATUSES:
-            return summary
-    return _execution_summary(place_res, detail)
+    if expected_symbol is not None:
+        validate_order_detail_identity(detail, client_order_id=client_order_id,
+                                       symbol=expected_symbol)
+    summary = _execution_summary(place_res, detail)
+    if intent and intent.get("cancel_policy") is not None:
+        from order_recovery import validate_evidence
+        validate_evidence(intent, detail, summary)
+    return summary
 
 
 def _record_warning(kind: str, message: str, extra: dict | None = None) -> None:
@@ -300,6 +301,8 @@ def _persist(chain_key_: str, run_id: str, fields: dict, *,
 def _mirror_order_audit(chain_key_: str, run_id: str, fields: dict) -> None:
     """Best-effort audit mirror; the outbox marker makes failure recoverable."""
     try:
+        import transition_audit
+        transition_audit.replay(chain_key_, run_id)
         update_order_audit(run_id, _audit_fields(fields))
     except Exception as exc:
         _record_warning(
@@ -324,7 +327,7 @@ def _mirror_order_audit(chain_key_: str, run_id: str, fields: dict) -> None:
 _AUDIT_INTERNAL_FIELDS = {
     "audit_pending", "claim_owner", "claim_until", "claim_generation",
     "place_fence",
-    "broker_raw_detail",
+    "broker_raw_detail", "transition_pending", "transition_revision", "cancel_token",
 }
 
 
@@ -343,6 +346,8 @@ def _repair_pending_audits(chain_key_: str) -> int:
         tick_runtime.require_budget(5.0)
         run_id = str(intent["run_id"])
         fields = _audit_fields(intent)
+        import transition_audit
+        transition_audit.replay(chain_key_, run_id)
         try:
             update_order_audit(run_id, fields)
             if acknowledge_audit(chain_key_, run_id, int(intent.get("audit_revision", 0))):
@@ -353,6 +358,7 @@ def _repair_pending_audits(chain_key_: str) -> int:
                 "audit repair ยังไม่สำเร็จ — เก็บ marker ไว้ลองรอบถัดไป",
                 {"run_id": run_id, "error_type": type(exc).__name__},
             )
+            raise
     return repaired
 
 
@@ -474,8 +480,14 @@ def _persist_reconcile_failure(intent: dict, exc: Exception) -> dict:
         # and reconcile budget (particularly FILLED awaiting its late fee).
         current = read_intent(ck, run_id) or intent
         return {"run_id": run_id, "status": current.get("status", "PLACING_UNKNOWN"),
-                "deferred_reason": "auth_backoff" if is_auth_blocked(exc) else "tick_deadline",
-                "error": _error_text(exc)}
+                "deferred_reason": "auth_backoff" if is_auth_blocked(exc) else "tick_deadline"}
+    if intent.get("cancel_attempt_count"):
+        current = update_intent(ck, run_id, {
+            "status": "CANCEL_UNKNOWN", "audit_pending": True,
+            "cancel_last_error_code": "CANCEL_DETAIL_UNAVAILABLE",
+        }, **_claim_update_kwargs(intent))
+        return {"run_id": run_id, "status": "CANCEL_UNKNOWN",
+                "needs_manual_check": current.get("needs_manual_check", False)}
     attempts = int(intent.get("reconcile_attempts", 0) or 0) + 1
     # last_error is overwritten every tick, and by the time a human reads it the
     # useful message ("insufficient buying power") has been buried under the
@@ -567,7 +579,8 @@ def _chain_fence_can_clear(intent: dict | None) -> bool:
     if status not in OUTBOX_TERMINAL or status in MANUAL_CHAIN_TERMINAL:
         return False
     if (intent.get("needs_manual_check") or intent.get("cashflow_abandoned")
-            or intent.get("admin_reconciliation_pending")):
+            or intent.get("admin_reconciliation_pending")
+            or intent.get("transition_pending") or intent.get("audit_pending")):
         return False
     if status in UNSENT_CHAIN_TERMINAL:
         return (intent.get("place_attempted") is not True
@@ -721,6 +734,7 @@ def _persist_cashflow_error(intent: dict, summary: dict, exc: Exception) -> dict
     return {"run_id": intent["run_id"], **fields}
 
 
+@tick_runtime.phase("ledger_persistence", witness="intent_persisted")
 def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dict:
     """The broker has answered; the only failure left belongs to us.
 
@@ -728,6 +742,7 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
     matched broker legs, and the 17-column model ledger this function finalizes
     from the same confirmed fill. A decision never reaches either one.
     """
+    tick_runtime.require_budget(5.0)
     # A broker read can outlive the intent lease.  Refuse known stale workers
     # before any circuit, broker-cashflow, FIFO, or model-ledger side effect.
     # Ledger paths are separate RTDB transactions, so this renewal is a bounded
@@ -748,6 +763,8 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
     # Diagnostics stay private. Record the breaker while this run still owns
     # the money fence, BEFORE any terminal outbox write can remove recovery.
     summary = dict(summary)
+    if intent.get("needs_manual_check"):
+        summary["needs_manual_check"] = True
     # A successful SUBMITTED read must not hide a stuck order indefinitely.
     # This is an operator alert threshold, never permission to cancel/re-submit.
     summary["reconciliation_overdue"] = False
@@ -875,6 +892,13 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
                             "terminal fill รอ actual fee เกิน 15 นาที — ตรวจ broker detail; fence ยังคงอยู่",
                             {"run_id": intent["run_id"], "chain_key": intent["chain_key"],
                              "fee_pending_since": since})
+    if intent.get("cancel_attempt_count") and not broker_terminal:
+        summary["broker_status"] = summary["status"]
+        summary["status"] = ("CANCEL_UNKNOWN" if intent.get("status") == "CANCEL_UNKNOWN"
+                             else "CANCEL_REQUESTED")
+    for key in ("cancel_attempt_count", "cancel_requested_at", "cancel_confirmation_deadline", "cancel_confirmed_at"):
+        if key in intent:
+            summary[key] = intent[key]
     _persist_summary(intent, summary)
     return {"run_id": intent["run_id"], **summary}
 
@@ -1104,20 +1128,60 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
     status = normalize_status(intent.get("status"))
 
     if status in RECONCILE_STATUSES:
+        import order_recovery
+        from webull_io import cancel_order, find_recent_order_by_client_id
+        evidence_conflict = False
         try:
-            detail = fetch_order_detail(trade_client, run_id)
-            if runtime is not None:
-                validate_order_detail_identity(
-                    detail, client_order_id=run_id, symbol=cfg.symbol)
+            tick_runtime.require_budget(5.0)
+            try:
+                detail = fetch_order_detail(trade_client, run_id)
+            except Exception as detail_error:
+                from webull_io import is_auth_blocked
+                if (isinstance(detail_error, tick_runtime.TickDeadlineExceeded)
+                        or is_auth_blocked(detail_error) or not intent.get("placed_at")):
+                    raise
+                detail = find_recent_order_by_client_id(
+                    trade_client, run_id, placed_at=intent["placed_at"])
+                if detail is None:
+                    raise detail_error
             summary = _execution_summary({}, detail)
-            if normalize_status(summary.get("status")) == "UNKNOWN":
-                raise RuntimeError("broker order detail still UNKNOWN")
+            incomplete = False
+            if intent.get("cancel_policy") is not None:
+                try:
+                    order_recovery.validate_evidence(intent, detail, summary)
+                except order_recovery.IncompleteOrderEvidence:
+                    incomplete = True
+                except (ValueError, ArithmeticError):
+                    evidence_conflict = True
+            if not evidence_conflict and (normalize_status(summary.get("status")) == "UNKNOWN" or incomplete):
+                fallback = find_recent_order_by_client_id(
+                    trade_client, run_id, placed_at=intent.get("placed_at"))
+                if fallback is None:
+                    raise RuntimeError("broker order detail still UNKNOWN")
+                validate_order_detail_identity(fallback, client_order_id=run_id, symbol=cfg.symbol)
+                detail = fallback
+                summary = _execution_summary({}, detail)
+                if normalize_status(summary.get("status")) == "UNKNOWN":
+                    raise RuntimeError("broker order history still UNKNOWN")
+            if runtime is not None and not evidence_conflict:
+                validate_order_detail_identity(detail, client_order_id=run_id, symbol=cfg.symbol)
         except Exception as exc:
             # Everything inside this try is 'can we reach and read the broker?'.
             # The realized and model ledgers are applied outside it so their
             # failures are not reported as an unresolved order.
+            intent = order_recovery.read_failed(intent)
             return _persist_reconcile_failure(intent, exc)
-        return _finish_with_realized(trade_client, cfg, intent, summary)
+        if evidence_conflict:
+            flagged = order_recovery.mark_manual(intent, "CANCEL_EVIDENCE_INVALID")
+            return {"run_id": run_id, "status": flagged["status"], "needs_manual_check": True}
+        intent = order_recovery.handle(intent, detail, summary, dispatch_claim,
+                                       lambda rid: cancel_order(trade_client, rid))
+        if intent.get("cancel_last_error_code") in {"CANCEL_EVIDENCE_INVALID", "CANCEL_POLICY_MISMATCH"}:
+            return {"run_id": run_id, "status": intent["status"], "needs_manual_check": True}
+        result = _finish_with_realized(trade_client, cfg, intent, summary)
+        if intent.get("needs_manual_check"):
+            result["needs_manual_check"] = True
+        return result
 
     if status != "PENDING_DISPATCH":
         return {"run_id": run_id, "status": status}
@@ -1482,10 +1546,14 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 claim=intent, token_preflight_blocked=True)
         try:
             evidence = limits.check(intent["quantity"], final_fresh["price"], now=datetime.now(UTC))
-            session_key = str(limits.end.timestamp())
-            evidence.update(reserve_attempt(
-                dispatch_scope, dispatch_claim, run_id, limits, session_key,
-                now=datetime.now(UTC)))
+            from execution_limits import session_key_for
+            session_key = session_key_for(runtime.deployment.session_key_mode, limits,
+                                          now=datetime.now(UTC))
+            tick_runtime.require_budget(10.0)
+            with tick_runtime.phase("reserve_attempt", witness="fenced_unsent"):
+                evidence.update(reserve_attempt(
+                    dispatch_scope, dispatch_claim, run_id, limits, session_key,
+                    now=datetime.now(UTC)))
             _persist(ck, run_id, {"execution_limit_check": evidence},
                      claim=intent)
             # Reservation and audit persistence are network operations too.
@@ -1503,9 +1571,13 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             return _stop(ck, run_id, "NOT_PLACED", {
                 "terminal_reason": str(exc), "execution_limit_blocked": True},
                 claim=intent, execution_limit_blocked=True)
-    started = begin_place_attempt(
-        ck, run_id, str(intent.get("claim_owner") or ""),
-        int(intent.get("claim_generation", 0) or 0))
+    import transition_audit
+    tick_runtime.require_budget(8.0)
+    transition_audit.replay(ck, run_id)
+    with tick_runtime.phase("place_witness", witness="fenced_unsent"):
+        started = begin_place_attempt(
+            ck, run_id, str(intent.get("claim_owner") or ""),
+            int(intent.get("claim_generation", 0) or 0))
     if started is None:
         # The lease expired and another generation won before this worker reached
         # the irreversible call.  Do not place; that winner owns reconciliation.
@@ -1516,6 +1588,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
     # cannot silently skip an order placed in this same invocation.
     intent = started
     _mirror_order_audit(ck, run_id, started)
+    transition_audit.replay(ck, run_id)
     if runtime is not None:
         try:
             # Both durable marker and mirror can block on network I/O. A
@@ -1536,11 +1609,14 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 "terminal_reason": "pre-Place evidence expired after durable marker"},
                 claim=intent)
     try:
-        place_res = place_market_order(trade_client, order)
+        tick_runtime.require_budget(5.0)
+        with tick_runtime.phase("place", witness="PLACING_UNKNOWN"):
+            place_res = place_market_order(trade_client, order)
         if runtime is not None:
             validate_place_response(place_res, run_id)
         summary = _poll_order_status(trade_client, run_id, place_res,
-                                     expected_symbol=cfg.symbol if runtime is not None else None)
+                                     expected_symbol=cfg.symbol if runtime is not None else None,
+                                     intent=intent)
     except Exception as exc:
         # Same open question as a failed reconcile — "does this order exist?" —
         # so it draws on the same bounded budget.
@@ -1550,6 +1626,9 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
 
 def _config_for_intent(cfg, intent: dict):
     """Recover using the immutable strategy contract that created the intent."""
+    schema = intent.get("worker_schema_version", 1)
+    if type(schema) is not int or not 1 <= schema <= 4:
+        raise RuntimeIdentityError("unsupported execution worker schema; keep fence")
     snapshot = intent.get("strategy_config")
     intent_chain = str(intent.get("chain_key") or "")
     if isinstance(snapshot, dict):
@@ -1639,6 +1718,9 @@ def _run_order_worker(cfg, limit: int = 3,
                     "results": [],
                 }
             inflight_status = normalize_status(inflight.get("status"))
+            if inflight.get("transition_pending") or inflight.get("audit_pending"):
+                _repair_pending_audits(inflight_chain)
+                inflight = read_intent(inflight_chain, inflight_run_id) or inflight
             if _chain_fence_can_clear(inflight):
                 # Repair an older terminal record before releasing its fence.
                 broker_circuit.record_outcome(inflight, inflight)
@@ -1782,6 +1864,8 @@ def run_http(request, deps) -> tuple[dict, int]:
             **deps._run_order_worker(
                 cfg, limit, runtime_identity=runtime_identity),
         }, 200
+    except tick_runtime.TickDeadlineExceeded:
+        return {"pipeline_status": "TICK_DEFERRED", "deferred_reason": "tick_deadline"}, 200
     except deps.RuntimeIdentityError as exc:
         return {
             "pipeline_status": "CONFIG_ERROR",

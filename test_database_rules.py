@@ -21,6 +21,7 @@ PUBLIC_READ_PATHS = frozenset({
     "webull_lego_warnings",
 })
 PRIVATE_PATHS = frozenset({
+    "webull_lego_execution_transitions",
     "webull_lego_order_outbox",
     "webull_lego_order_outbox_archive",
     "webull_lego_order_dispatch_locks",
@@ -183,7 +184,7 @@ def test_emulator_enforces_anonymous_read_write_matrix():
                                     "emulator_funding_probe.py", "emulator_broker_circuit_probe.py",
                                     "emulator_execution_limits_probe.py",
                                     "emulator_operator_halt_probe.py",
-                                    "emulator_row_cashflow_probe.py"])
+                                    "emulator_row_cashflow_probe.py", "emulator_cancel_probe.py"])
 def test_emulator_concurrent_dispatch_and_tick(script):
     host = os.environ["FIREBASE_DATABASE_EMULATOR_HOST"]
     assert host.startswith(("127.0.0.1:", "localhost:")), "local emulator only"

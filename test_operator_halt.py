@@ -15,7 +15,12 @@ NOW = datetime(2026, 9, 25, 15, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture(autouse=True)
-def empty_database():
+def empty_database(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW if tz else NOW.replace(tzinfo=None)
+    monkeypatch.setattr(operator_halt, "datetime", Clock)
     FAKE_DB.store.clear()
     yield
     FAKE_DB.store.clear()

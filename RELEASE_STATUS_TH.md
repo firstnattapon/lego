@@ -1,4 +1,8 @@
-# สถานะล่าสุดหลัง audit วันที่ 24 กันยายน 2026
+# สถานะ candidate continuous execution v4
+
+**NO-GO สำหรับเงินจริง; UAT endurance ยัง BLOCKED**. ผล local candidate และ external gates อยู่ใน [final review](docs/implementation_plan_review.md) และ [acceptance JSON](release_evidence/continuous-v4-acceptance.json). Candidate นี้ยังไม่ได้ deploy หรือส่ง broker mutation จริง. Production rollout ต้อง observe/inactive.
+
+## หลักฐานย้อนหลังวันที่ 24 กันยายน 2026
 
 **ยังไม่ผ่านเกณฑ์เปิดเงินจริง (NO-GO)** เพราะยังไม่มีหลักฐาน broker และ deployed-candidate proof ครบตาม release gates. โค้ดแก้ v3 open-orders cursor, grouped legs, audit pairing และ fence/accounting safeguards แล้ว แต่ต้องยืนยันกับ Webull และ environment จริงก่อนเปิด Place ใน Production
 

@@ -184,14 +184,14 @@ def test_broker_fill_above_submitted_quantity_keeps_manual_money_fence():
 
 @pytest.mark.parametrize("hours,blocked", [(12, True), (23.999, True), (24, False), (120, False)])
 def test_exact_production_token_expiry_floor(hours, blocked):
-    health = {"status": "NORMAL", "expires_at": (NOW + timedelta(hours=hours)).isoformat()}
+    health = {"status": "NORMAL", "expires_at": (NOW + timedelta(hours=hours)).isoformat(), "ready": True, "secret_configured": True, "token_storage": "SECRET_MANAGER"}
     assert bool(webull_io.new_order_token_block(health, "PROD", NOW)) == blocked
     assert webull_io.new_order_token_block(health, "UAT", NOW) is None
 
 
-def test_unknown_expiry_fails_closed_but_verified_tokenless_auth_is_allowed():
+def test_unknown_expiry_and_production_tokenless_auth_fail_closed():
     assert webull_io.new_order_token_block({}, "PROD", NOW)
-    assert webull_io.new_order_token_block({"token_check_enabled": False}, "PROD", NOW) is None
+    assert webull_io.new_order_token_block({"token_check_enabled": False}, "PROD", NOW)
 
 
 def test_seven_day_token_warning_does_not_block_five_day_valid_token(monkeypatch, tmp_path):
@@ -342,7 +342,8 @@ def test_three_real_worker_rejects_prevent_fourth_preview_and_place(monkeypatch)
     monkeypatch.setattr(main, "place_market_order", lambda tc, order:
                         places.append(order) or {"client_order_id": order[0]["client_order_id"], "order_id": "broker-id"})
     monkeypatch.setattr(main, "fetch_order_detail", lambda tc, rid:
-                        {"client_order_id": rid, "symbol": "TSLA", "status": "FAILED", "filled_quantity": "0"})
+                        {"client_order_id": rid, "symbol": "TSLA", "status": "FAILED", "filled_quantity": "0",
+                         "side": places[-1][0]["side"], "total_quantity": places[-1][0]["quantity"]})
     monkeypatch.setattr(execution, "fetch_buying_power", lambda *a: Decimal("10000"))
     for i in range(4):
         clock[0] = NOW + timedelta(minutes=15 * i)
@@ -393,7 +394,7 @@ def test_production_token_floor_is_enforced_at_dispatch_boundaries(monkeypatch, 
         def now(cls, tz=None): return DISPATCH_NOW
     monkeypatch.setattr(execution, "datetime", Clock)
     monkeypatch.setattr(outbox, "datetime", Clock)
-    valid = {"status": "NORMAL", "expires_at": (datetime.now(UTC) + timedelta(days=14)).isoformat()}
+    valid = {"status": "NORMAL", "expires_at": (datetime.now(UTC) + timedelta(days=14)).isoformat(), "ready": True, "secret_configured": True, "token_storage": "SECRET_MANAGER"}
     short = {"status": "NORMAL", "expires_at": (datetime.now(UTC) + timedelta(hours=12)).isoformat()}
     health = iter([short] if phase == "before_preview" else [valid, short])
     monkeypatch.setattr(execution, "token_health", lambda: next(health))

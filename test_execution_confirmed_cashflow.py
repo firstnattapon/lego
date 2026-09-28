@@ -357,6 +357,39 @@ def test_a_pass_row_carries_the_ledger_and_creates_no_intent(monkeypatch):
 
 # --- Case 4: partial fills use the cumulative quantity, counted once ---------
 
+
+def test_cancel_witness_survives_partial_fill_and_terminal_replay(monkeypatch):
+    from datetime import timedelta
+    from recovery_policy import RecoveryPolicy
+    _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
+    body, _ = _run(monkeypatch, SLOT_1, 330.0, holdings=8.0)
+    run_id = body["run_id"]
+    _stub_broker(monkeypatch, holdings_after=8.0, detail={"order_status": "SUBMITTED", "filled_quantity": 0})
+    _work()
+    intent = _intent(run_id)
+    ordered = float(intent["quantity"])
+    qty = round(ordered / 2, 2)
+    policy = RecoveryPolicy("cancel")
+    FAKE_DB.reference(f"{OUTBOX_PATH}/{chain_key(_cfg())}/{run_id}").update({
+        "cancel_policy": policy.snapshot(), "cancel_policy_hash": policy.fingerprint,
+        "cancel_attempt_count": 1, "status": "CANCEL_REQUESTED",
+        "cancel_confirmation_deadline": (datetime.now(UTC) + timedelta(days=1)).isoformat()})
+    evidence = {"client_order_id": run_id, "symbol": "AAPL", "side": intent["side"],
+                "total_quantity": ordered, "filled_quantity": qty, "avg_filled_price": 331.4}
+    _stub_broker(monkeypatch, holdings_after=8.0 + qty, detail={**evidence, "order_status": "PARTIAL_FILLED"})
+    result = _work()[0]
+    assert result["status"] == "CANCEL_REQUESTED" and result["cancel_attempt_count"] == 1
+    assert _cashflow()["finalized_seq"] == 0
+    _stub_broker(monkeypatch, holdings_after=8.0 + qty, detail={**evidence, "order_status": "CANCELLED"})
+    result = _work()[0]
+    assert result["status"] == "CANCELLED" and result["cashflow_finalized"]
+    cash = FAKE_DB.reference(f"{BROKER_CASHFLOW_PATH}/{chain_key(_cfg())}/events/{run_id}").get()
+    saved = _intent(run_id)
+    main._finish_with_realized(None, _cfg(), saved, {**result})
+    assert _cashflow()["finalized_seq"] == 1
+    assert _intent(run_id)["cancel_attempt_count"] == 1
+    assert FAKE_DB.reference(f"{BROKER_CASHFLOW_PATH}/{chain_key(_cfg())}/events/{run_id}").get()["cash_cumulative"] == cash["cash_cumulative"]
+
 def test_partial_fill_waits_then_finalizes_once_on_terminal_cumulative_values(
         monkeypatch):
     _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)

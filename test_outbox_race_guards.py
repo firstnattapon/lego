@@ -88,7 +88,9 @@ def test_expire_rechecks_place_marker_inside_transaction(monkeypatch):
 
     def raced_list(*args, **kwargs):
         candidates = original(*args, **kwargs)
-        assert outbox.begin_place_attempt("chain", "run", "worker", 1)
+        # A new lease wins after the stale expiry scan, before its transaction.
+        newer = outbox.claim_intent("chain", "run", "worker", lease_seconds=120)
+        assert outbox.begin_place_attempt("chain", "run", "worker", newer["claim_generation"])
         return candidates
 
     monkeypatch.setattr(outbox, "list_actionable", raced_list)

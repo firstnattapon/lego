@@ -360,6 +360,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 pending_intent["runtime_identity_fingerprint"] = runtime_identity
                 if runtime is not None:
                     pending_intent["allow_fractional"] = runtime.deployment.allow_fractional
+                    pending_intent["cancel_policy"] = runtime.deployment.recovery_policy.snapshot()
+                    pending_intent["cancel_policy_hash"] = runtime.deployment.recovery_policy.fingerprint
+                    pending_intent["candidate_hash"] = runtime.deployment.candidate_hash
+                    pending_intent["release_binding"] = runtime.deployment.expected_release_binding
+                    pending_intent["worker_schema_version"] = 4
                 if capability is not None:
                     pending_intent["instrument_capability"] = {
                         "symbol": str(capability.symbol),
@@ -515,6 +520,10 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 "pipeline_status": "DNA_EXHAUSTED", "note": str(exc),
                 "hint": "ต่ออายุด้วย LEGO_DNA_CODE ที่ยาวขึ้น (chain ใหม่) "
                         "หรือหยุด scheduler ของ chain นี้"}, 200
+    except tick_runtime.TickDeadlineExceeded:
+        # Decision persistence is idempotent; broker mutations have a separate
+        # durable witness in the worker. Resume from the committed state.
+        return {"pipeline_status": "TICK_DEFERRED", "deferred_reason": "tick_deadline"}, 200
     except Exception as exc:
         from webull_io import is_auth_blocked
         if is_auth_blocked(exc):

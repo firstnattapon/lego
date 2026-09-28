@@ -52,6 +52,11 @@ def business_status(body: dict, http_status: int) -> str:
         return "EXECUTION_LIMIT_BLOCKED"
     if any(item.get("reconciliation_overdue") for item in results):
         return "RECONCILIATION_OVERDUE"
+    if body.get("pipeline_status") == "TICK_DEFERRED" and (
+            body.get("deferred_reason") == "tick_deadline"
+            or any(item.get("deferred_reason") == "tick_deadline" for item in results)
+            or any(p.get("deferred_reason") == "tick_deadline" for p in phases)):
+        return "TICK_DEFERRED"
     if any(item.get("status") == "AWAITING_BROKER_FEE" for item in results):
         return "WAITING_BROKER_FEE"
     if any(normalize_status(item.get("status")) not in TERMINAL for item in results):
@@ -60,6 +65,13 @@ def business_status(body: dict, http_status: int) -> str:
         return "OUTBOX_RECOVERY_PENDING"
     if decision.get("outbox_blocked") or decision.get("outbox_skipped"):
         return "INTENT_BLOCKED"
+    health = body.get("operational_health") or {}
+    if health.get("release_expiring"):
+        return "RELEASE_EXPIRING"
+    if health.get("token_warning"):
+        return "TOKEN_EXPIRY_WARNING"
+    if health.get("dna_low"):
+        return "DNA_LOW"
     remaining = decision.get("dna_steps_remaining")
     if type(remaining) is int and 0 <= remaining <= 10:
         return "DNA_LOW"
@@ -75,7 +87,7 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
         "severity": ("ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED",
                                            "BROKER_REJECT_HALT", "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}
                      else "WARNING" if health in {"AUTH_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
-                                                  "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW"}
+                                                  "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW", "TOKEN_EXPIRY_WARNING", "RELEASE_EXPIRING", "TICK_DEFERRED"}
                      else "INFO"),
         "revision": os.environ.get("K_REVISION"),
         "candidate_hash": os.environ.get("LEGO_CANDIDATE_HASH"),
@@ -86,6 +98,7 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
         "decision": {key: decision.get(key) for key in
                      ("run_id", "market_slot_id", "step", "status", "pipeline_status", "committed",
                       "dna_steps_remaining")},
+        "operational_health": body.get("operational_health") or {},
         "execution": [],
         "errors": [],
         **request_trace(request),
@@ -118,7 +131,8 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
                                              "broker_reject_halted", "token_preflight_blocked",
                                              "execution_limit_blocked", "operator_halt_blocked",
                                              "needs_manual_check",
-                                             "reconciliation_overdue", "reconciliation_age_seconds")}})
+                                             "reconciliation_overdue", "reconciliation_age_seconds",
+                                             "cancel_requested_at", "cancel_confirmed_at", "cancel_attempt_count")}})
     print(json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
 
 

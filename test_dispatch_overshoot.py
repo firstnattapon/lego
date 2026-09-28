@@ -166,7 +166,8 @@ def dispatch_fixture(monkeypatch, *, environment="UAT", final_price=27.6843,
     monkeypatch.setattr(execution, "_poll_order_status",
                         lambda *_, **__: {"status": "SUBMITTED", "filled_quantity": 0})
     monkeypatch.setattr(execution, "token_health", lambda: {
-        "status": "NORMAL", "expires_at": (NOW + timedelta(days=14)).isoformat()})
+        "status": "NORMAL", "expires_at": (NOW + timedelta(days=14)).isoformat(),
+        "secret_configured": True, "token_storage": "SECRET_MANAGER", "ready": True})
     return runtime, intent, claim, client, committed
 
 

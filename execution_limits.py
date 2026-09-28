@@ -19,6 +19,74 @@ class ExecutionLimitError(ValueError):
     pass
 
 
+def validate_counter(counter):
+    if not isinstance(counter, dict):
+        raise ExecutionLimitError("malformed migration counter")
+    if not counter:
+        return
+    if (not isinstance(counter.get("key"), str) or not counter["key"].strip()
+            or type(counter.get("count")) is not int or counter["count"] < 0):
+        raise ExecutionLimitError("malformed execution counter")
+    if counter["key"].startswith("XNYS:"):
+        from datetime import date
+        try:
+            canonical = "XNYS:" + date.fromisoformat(counter["key"][5:]).isoformat()
+        except ValueError:
+            raise ExecutionLimitError("malformed market-day key") from None
+        if counter["key"] != canonical:
+            raise ExecutionLimitError("noncanonical market-day key")
+    else:
+        positive(counter["key"])
+
+
+def session_key_for(mode, limits, *, now):
+    if mode == "release_window":
+        return str(limits.end.timestamp())
+    if mode != "market_day":
+        raise ExecutionLimitError("unknown session key mode")
+    from market_clock import NY, session_bounds
+    day = now.astimezone(NY).date()
+    bounds = session_bounds(day)
+    if not bounds or not bounds[0] <= now < bounds[1]:
+        raise ExecutionLimitError("new reservation outside regular market session")
+    return f"XNYS:{day.isoformat()}"
+
+
+def migrate_market_day(scope, *, now, apply=False):
+    """Conservative idle cutover. Caller must stop new-order deployments first."""
+    from firebase_admin import db
+    from lego_outbox import DISPATCH_LOCK_PATH
+    from market_clock import NY
+    ref = db.reference(f"{DISPATCH_LOCK_PATH}/{scope}")
+    key = f"XNYS:{now.astimezone(NY).date().isoformat()}"
+    def plan(old):
+        if old is not None and not isinstance(old, dict):
+            raise ExecutionLimitError("malformed dispatch state")
+        doc = dict(old or {})
+        if doc.get("inflight_run_id") or doc.get("owner"):
+            raise ExecutionLimitError("migration requires idle dispatch fence")
+        session = doc.get("execution_session", {})
+        daily = doc.get("market_day_migration", {})
+        for counter in (session, daily):
+            validate_counter(counter)
+            if counter and counter["key"].startswith("XNYS:") and counter["key"] > key:
+                raise ExecutionLimitError("market day regression")
+        counts = [session.get("count", 0), daily.get("count", 0)]
+        if any(type(n) is not int or n < 0 for n in counts):
+            raise ExecutionLimitError("invalid migration count")
+        if str(session.get("key", "")).startswith("XNYS:") and session["key"] > key:
+            raise ExecutionLimitError("market day regression")
+        count = max(counts)
+        doc["execution_session"] = {"key": key, "count": count,
+                                    "last_run_id": session.get("last_run_id", "")}
+        doc["market_day_migration"] = {"key": key, "count": count,
+                                       "at": now.isoformat()}
+        doc["worker_schema_version"] = 4
+        return doc
+    result = ref.transaction(plan) if apply else plan(ref.get())
+    return {"dry_run": not apply, "execution_session": result["execution_session"]}
+
+
 def policy_hash(values) -> str:
     return hashlib.sha256(json.dumps(list(values), separators=(",", ":")).encode()).hexdigest()
 
@@ -71,9 +139,9 @@ class ExecutionLimits:
 def reserve_attempt(scope, claim, run_id, limits, session_key, *, now=None):
     """Reserve under the *same* account-symbol lease as Place, transactionally.
 
-    A session key is derived from the immutable window end, so changing code,
-    limits, or the spelling of the same timestamp cannot reset consumed slots.
-    One bounded counter per account-symbol; an older window cannot replace it.
+    Market-day keys are independent of release expiry and chain identity.
+    Legacy window counters require an explicit idle migration to market-day.
+    One bounded counter per account-symbol; keys cannot move backwards.
     """
     from firebase_admin import db
     from lego_outbox import DISPATCH_LOCK_PATH
@@ -95,9 +163,18 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, now=None):
                 or doc.get("inflight_run_id") != run_id
                 or lease.tzinfo is None or lease <= now):
             return old
-        session = doc.get("execution_session") or {}
+        session = doc.get("execution_session", {})
+        validate_counter(session)
+        schema = doc.get("worker_schema_version", 1)
+        if type(schema) is not int or not 1 <= schema <= 4:
+            raise ExecutionLimitError("unsupported worker schema")
         if session.get("key") != session_key:
-            if session and float(session.get("end_epoch", float("inf"))) >= limits.end.timestamp():
+            if session_key.startswith("XNYS:"):
+                if session and (not str(session.get("key", "")).startswith("XNYS:")
+                                or session["key"] >= session_key):
+                    return old  # explicit legacy migration; never roll backwards
+            elif session and (str(session.get("key", "")).startswith("XNYS:")
+                              or float(session.get("end_epoch", float("inf"))) >= limits.end.timestamp()):
                 return old
             session = {"key": session_key, "end_epoch": limits.end.timestamp(), "count": 0}
         count = session.get("count")
@@ -109,6 +186,7 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, now=None):
             return old
         doc["execution_session"] = {**session, "count": count + 1,
                                     "last_run_id": run_id, "reserved_at": now.isoformat()}
+        doc["worker_schema_version"] = 4
         return doc
 
     result = ref.transaction(txn) or {}
