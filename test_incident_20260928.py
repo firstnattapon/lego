@@ -153,3 +153,14 @@ def test_first_post_place_anomaly_retains_detail_and_stops_retries(monkeypatch):
     result = execution._persist_reconcile_failure(intent, caught.value)
     assert result["status"] == "MANUAL_RECONCILIATION_REQUIRED"
     assert "147.13" in outbox.read_intent("chain", intent["run_id"])["reconcile_evidence"]
+
+
+@pytest.mark.parametrize("broker_id,error", [(None, orders.IncompleteOrderEvidence),
+                                           ("another-order", orders.ConflictingOrderEvidence)])
+def test_detail_must_prove_the_persisted_place_ack_broker_id(broker_id, error):
+    intent, _, detail = fractional()
+    intent["broker_order_id"] = "ack-order"
+    if broker_id is not None:
+        detail["order_id"] = broker_id
+    with pytest.raises(error):
+        recovery.validate_evidence(intent, detail, orders.summarize_order_result({}, detail))

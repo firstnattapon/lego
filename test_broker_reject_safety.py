@@ -342,7 +342,7 @@ def test_three_real_worker_rejects_prevent_fourth_preview_and_place(monkeypatch)
     monkeypatch.setattr(main, "place_market_order", lambda tc, order:
                         places.append(order) or {"client_order_id": order[0]["client_order_id"], "order_id": "broker-id"})
     monkeypatch.setattr(main, "fetch_order_detail", lambda tc, rid:
-                        {"client_order_id": rid, "symbol": "TSLA", "status": "FAILED", "filled_quantity": "0",
+                        {"client_order_id": rid, "order_id": "broker-id", "symbol": "TSLA", "status": "FAILED", "filled_quantity": "0",
                          "side": places[-1][0]["side"], "total_quantity": places[-1][0]["quantity"]})
     monkeypatch.setattr(execution, "fetch_buying_power", lambda *a: Decimal("10000"))
     for i in range(4):
