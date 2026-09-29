@@ -87,6 +87,8 @@ DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS = 360.0
 # Webull sandbox market data can be delayed by 15 minutes. This allowance is
 # selected only by the v2 UAT deployment; it never extends decision lifetime.
 UAT_QUOTE_DELAY_SECONDS = 900.0
+PROD_MAX_DISPATCH_QUOTE_AGE_SECONDS = 60.0
+PROD_MAX_DISPATCH_DECISION_AGE_SECONDS = 120.0
 # A broker timestamp a fraction ahead of the worker can be ordinary clock skew.
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
@@ -177,10 +179,14 @@ def _poll_order_status(trade_client, client_order_id: str, place_res: dict,
     if expected_symbol is not None:
         validate_order_detail_identity(detail, client_order_id=client_order_id,
                                        symbol=expected_symbol)
-    summary = _execution_summary(place_res, detail)
-    if intent and intent.get("cancel_policy") is not None:
-        from order_recovery import validate_evidence
-        validate_evidence(intent, detail, summary)
+    try:
+        summary = _execution_summary(place_res, detail)
+        if intent and intent.get("cancel_policy") is not None:
+            from order_recovery import validate_evidence
+            validate_evidence(intent, detail, summary)
+    except ValueError as exc:
+        exc.broker_evidence = detail
+        raise
     return summary
 
 
@@ -474,6 +480,14 @@ def _persist_reconcile_failure(intent: dict, exc: Exception) -> dict:
     and the dashboard already renders that table.
     """
     ck, run_id = intent["chain_key"], intent["run_id"]
+    if intent.get("needs_manual_check"):
+        return {"run_id": run_id, "status": intent["status"], "needs_manual_check": True}
+    import order_recovery
+    if isinstance(exc, (order_recovery.ConflictingOrderEvidence,
+                        order_recovery.BrokerContractAnomaly)):
+        flagged = order_recovery.mark_manual(
+            intent, type(exc).__name__, detail=getattr(exc, "broker_evidence", None))
+        return {"run_id": run_id, "status": flagged["status"], "needs_manual_check": True}
     from webull_io import is_auth_blocked
     if isinstance(exc, tick_runtime.TickDeadlineExceeded) or is_auth_blocked(exc):
         # No unsuccessful broker query occurred. Preserve the durable status
@@ -1127,10 +1141,15 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
     ck = intent["chain_key"]
     status = normalize_status(intent.get("status"))
 
+    if intent.get("needs_manual_check"):
+        return {"run_id": run_id, "status": status, "needs_manual_check": True,
+                "reconciliation_paused": True}
+
     if status in RECONCILE_STATUSES:
         import order_recovery
         from webull_io import cancel_order, find_recent_order_by_client_id
         evidence_conflict = False
+        detail = None
         try:
             tick_runtime.require_budget(5.0)
             try:
@@ -1165,6 +1184,10 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                     raise RuntimeError("broker order history still UNKNOWN")
             if runtime is not None and not evidence_conflict:
                 validate_order_detail_identity(detail, client_order_id=run_id, symbol=cfg.symbol)
+        except (order_recovery.ConflictingOrderEvidence, order_recovery.BrokerContractAnomaly) as exc:
+            flagged = order_recovery.mark_manual(
+                intent, type(exc).__name__, detail=detail)
+            return {"run_id": run_id, "status": flagged["status"], "needs_manual_check": True}
         except Exception as exc:
             # Everything inside this try is 'can we reach and read the broker?'.
             # The realized and model ledgers are applied outside it so their
@@ -1172,11 +1195,11 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             intent = order_recovery.read_failed(intent)
             return _persist_reconcile_failure(intent, exc)
         if evidence_conflict:
-            flagged = order_recovery.mark_manual(intent, "CANCEL_EVIDENCE_INVALID")
+            flagged = order_recovery.mark_manual(intent, "CANCEL_EVIDENCE_INVALID", detail=detail)
             return {"run_id": run_id, "status": flagged["status"], "needs_manual_check": True}
         intent = order_recovery.handle(intent, detail, summary, dispatch_claim,
                                        lambda rid: cancel_order(trade_client, rid))
-        if intent.get("cancel_last_error_code") in {"CANCEL_EVIDENCE_INVALID", "CANCEL_POLICY_MISMATCH"}:
+        if intent.get("needs_manual_check"):
             return {"run_id": run_id, "status": intent["status"], "needs_manual_check": True}
         result = _finish_with_realized(trade_client, cfg, intent, summary)
         if intent.get("needs_manual_check"):
@@ -1247,6 +1270,9 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             max_decision_age_seconds = DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS
             if runtime.deployment.environment == "UAT":
                 max_quote_age_seconds += UAT_QUOTE_DELAY_SECONDS
+            else:
+                max_quote_age_seconds = PROD_MAX_DISPATCH_QUOTE_AGE_SECONDS
+                max_decision_age_seconds = PROD_MAX_DISPATCH_DECISION_AGE_SECONDS
         else:
             tolerance = _nonnegative_finite_env(
                 "LEGO_HOLDINGS_DRIFT_TOLERANCE", 0.000001)
@@ -1613,7 +1639,13 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         with tick_runtime.phase("place", witness="PLACING_UNKNOWN"):
             place_res = place_market_order(trade_client, order)
         if runtime is not None:
-            validate_place_response(place_res, run_id)
+            acknowledgement = validate_place_response(place_res, run_id)
+            # Keep the broker ID even when the immediately following detail read
+            # times out; later reconciliation must prove the same broker order.
+            intent = update_intent(ck, run_id, {
+                "broker_order_id": acknowledgement["order_id"], "audit_pending": True,
+            }, **_claim_update_kwargs(intent))
+            _mirror_order_audit(ck, run_id, intent)
         summary = _poll_order_status(trade_client, run_id, place_res,
                                      expected_symbol=cfg.symbol if runtime is not None else None,
                                      intent=intent)
@@ -1737,7 +1769,7 @@ def _run_order_worker(cfg, limit: int = 3,
                 for key in ("inflight_run_id", "place_fence",
                             "inflight_chain_key", "fenced_run_id", "fenced_at"):
                     dispatch_claim.pop(key, None)
-            elif inflight_status in OUTBOX_TERMINAL:
+            elif inflight_status in OUTBOX_TERMINAL or inflight.get("needs_manual_check"):
                 # Queue-terminal can still mean broker ambiguity or a broken
                 # strategy ledger. Keep the fence until a human reconciles it.
                 return {
@@ -1747,6 +1779,8 @@ def _run_order_worker(cfg, limit: int = 3,
                     "dispatch_blocked": True,
                     "dispatch_inflight_run_id": inflight_run_id,
                     "dispatch_block_reason": "execution or ledger needs manual reconciliation",
+                    "reconciliation_paused": True,
+                    "halt_since": inflight.get("manual_since") or inflight.get("updated_at"),
                     "results": [],
                 }
             else:

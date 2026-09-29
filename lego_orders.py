@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
 
 from lego_one_row import READY_BUY, READY_SELL
 
@@ -79,6 +80,70 @@ EXECUTION_PRICE_FIELDS = (
     "execution_price",
 )
 FEE_FIELDS = ("transaction_fee", "filled_fee", "execution_fee", "commission", "fee")
+TOTAL_QUANTITY_FIELDS = ("total_quantity", "quantity", "qty", "order_quantity")
+FILLED_QUANTITY_FIELDS = ("filled_quantity", "filled_qty")
+
+
+class IncompleteOrderEvidence(ValueError):
+    pass
+
+
+class ConflictingOrderEvidence(ValueError):
+    pass
+
+
+class BrokerContractAnomaly(ValueError):
+    pass
+
+
+def _quantity_evidence(fields, aliases):
+    values = []
+    for name in aliases:
+        raw = fields.get(name)
+        if raw is None or raw == "":
+            continue
+        try:
+            value = Decimal(str(raw))
+        except (InvalidOperation, ValueError):
+            raise BrokerContractAnomaly("invalid quantity field: " + name) from None
+        if not value.is_finite() or value < 0:
+            raise BrokerContractAnomaly("invalid quantity field: " + name)
+        values.append(value)
+    if len(set(values)) > 1:
+        raise ConflictingOrderEvidence("conflicting quantity aliases")
+    return values[0] if values else None
+
+
+@dataclass(frozen=True)
+class CanonicalOrderEvidence:
+    client_order_id: str | None
+    broker_order_id: str | None
+    request_id: str | None
+    account_id: str | None
+    symbol: str | None
+    side: str | None
+    status: str
+    total_quantity: Decimal | None
+    filled_quantity: Decimal | None
+    filled_price: str | None
+    filled_fee: str | None
+
+
+def canonical_order_evidence(detail) -> CanonicalOrderEvidence:
+    """Normalize one broker snapshot. Never fill gaps using a Place ACK."""
+    fields = _order_fields(detail)
+    return CanonicalOrderEvidence(
+        client_order_id=fields.get("client_order_id"),
+        broker_order_id=fields.get("order_id"),
+        request_id=fields.get("request_id") or fields.get("requestId"),
+        account_id=fields.get("account_id"),
+        symbol=fields.get("symbol"), side=fields.get("side"),
+        status=normalize_status(fields.get("order_status") or fields.get("status")) or "UNKNOWN",
+        total_quantity=_quantity_evidence(fields, TOTAL_QUANTITY_FIELDS),
+        filled_quantity=_quantity_evidence(fields, FILLED_QUANTITY_FIELDS),
+        filled_price=_coalesce_decimal_string(fields, EXECUTION_PRICE_FIELDS, Decimal("0")),
+        filled_fee=_actual_fee(fields),
+    )
 
 
 def normalize_status(raw) -> str:
@@ -146,9 +211,15 @@ def _order_fields(detail) -> dict:
         if id(detail) in seen:
             raise ValueError("cyclic order detail")
         seen.add(id(detail))
-        for key in ("client_order_id", "order_id", "symbol", "side"):
+        for key in ("client_order_id", "order_id", "symbol", "side", "account_id"):
             if merged.get(key) and detail.get(key) and str(merged[key]) != str(detail[key]):
-                raise ValueError("conflicting order identity: " + key)
+                raise ConflictingOrderEvidence("conflicting order identity: " + key)
+        # Wrapper/child quantity contradictions must not be overwritten by update.
+        for aliases in (TOTAL_QUANTITY_FIELDS, FILLED_QUANTITY_FIELDS):
+            before = _quantity_evidence(merged, aliases)
+            after = _quantity_evidence(detail, aliases)
+            if before is not None and after is not None and before != after:
+                raise ConflictingOrderEvidence("conflicting nested order quantity")
         merged.update(detail)
         children = [detail[key] for key in ("items", "orders", "data", "sub_orders")
                     if isinstance(detail.get(key), (dict, list)) and detail[key]]
@@ -214,12 +285,12 @@ def _coalesce_decimal_string(
 def summarize_order_result(place_response: dict, detail: dict | None = None) -> dict:
     fields = _order_fields(detail) if detail else {}
     placed = _order_fields(place_response) if place_response else {}
+    evidence = canonical_order_evidence(detail)
     status = normalize_status(
         fields.get("order_status") or fields.get("status")
         or placed.get("order_status")
         or placed.get("status"))
-    filled = _coalesce_decimal_string(
-        fields, ("filled_quantity", "filled_qty"))
+    filled = str(evidence.filled_quantity) if evidence.filled_quantity is not None else None
     filled_number = Decimal(filled) if filled is not None else None
     # Shares moved or they did not; the status is a label on top of that. Keying
     # this on the status set alone lost every fill that ended somewhere else: a
@@ -245,11 +316,10 @@ def summarize_order_result(place_response: dict, detail: dict | None = None) -> 
                 break
     if filled is not None:
         out["filled_quantity"] = filled
-    price = _coalesce_decimal_string(
-        fields, EXECUTION_PRICE_FIELDS, minimum_exclusive=Decimal("0"))
+    price = evidence.filled_price
     if price is not None:
         out["filled_price"] = price
-    fee = _actual_fee(fields)
+    fee = evidence.filled_fee
     if fee is not None:
         out["filled_fee"] = fee
     reason = _reject_reason(fields) or _reject_reason(placed)

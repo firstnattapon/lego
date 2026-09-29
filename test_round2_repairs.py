@@ -83,13 +83,12 @@ def test_broker_decimal_summary_accepts_scientific_notation_and_rejects_nonfinit
     assert valid["filled_quantity"] == "2E+1"
     assert valid["filled_price"] == "100.1234567890123456789"
     assert valid["filled_fee"] == "1.25E-7"
-    invalid = summarize_order_result({}, {
-        "order_status": "FILLED", "filled_quantity": "NaN",
-        "filled_price": "Infinity", "filled_fee": "-0.1",
-    })
-    assert "filled_quantity" not in invalid
-    assert "filled_price" not in invalid
-    assert "filled_fee" not in invalid
+    # An explicitly invalid quantity is a contract anomaly, never missing/zero.
+    with pytest.raises(ValueError, match="invalid quantity"):
+        summarize_order_result({}, {
+            "order_status": "FILLED", "filled_quantity": "NaN",
+            "filled_price": "Infinity", "filled_fee": "-0.1",
+        })
 
 
 def test_v2_tick_ignores_legacy_decimal_precision_before_recovery(monkeypatch):

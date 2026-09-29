@@ -573,6 +573,8 @@ print(json.dumps({
 PY
 )" || fail "ตรวจ DNA bundle ไม่ผ่าน; ติดตั้ง requirements.txt แล้วตรวจไฟล์อีกครั้ง"
 
+GIT_COMMIT="$(git rev-parse --verify HEAD)"
+[[ -z "$(git status --porcelain)" ]] || fail "Deployment requires a clean committed checkout"
 CANDIDATE_HASH="$(
     python3 tools/candidate_manifest.py | \
         python3 -c 'import json, sys; print(json.load(sys.stdin)["candidate_hash"])'
@@ -688,6 +690,7 @@ step "8/10 DEPLOY DATABASE RULES + CLOUD FUNCTION GEN2"
 
 ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=${SYMBOL},LEGO_FIX_C=${FIX_C},LEGO_ALLOW_FRACTIONAL=${ALLOW_FRACTIONAL},LEGO_DIFF=${DIFF},LEGO_DNA_BUNDLE=${DNA_BUNDLE},LEGO_MODE=${MODE},LEGO_ACTIVE=${ACTIVE},LEGO_CANDIDATE_HASH=${CANDIDATE_HASH},LEGO_RELEASE_AUTHORIZATION=${RELEASE_AUTHORIZATION_OVERRIDE},WEBULL_TOKEN_DIR=/tmp/webull_token,LEGO_DNA_CLOCK_MODE=market"
 ENV_VARS+=",LEGO_TRACE_PROJECT_ID=${PROJECT_ID},LEGO_MAX_ORDER_QUANTITY=${MAX_ORDER_QUANTITY},LEGO_MAX_ORDER_NOTIONAL_USD=${MAX_ORDER_NOTIONAL},LEGO_MAX_SESSION_ORDERS=${MAX_SESSION_ORDERS},LEGO_TRADING_WINDOW_END=${TRADING_WINDOW_END}"
+ENV_VARS+=",LEGO_GIT_COMMIT=${GIT_COMMIT}"
 
 ENV_VARS+=",LEGO_STALE_ORDER_ACTION=${STALE_ACTION},LEGO_STALE_ORDER_SECONDS=${STALE_SECONDS},LEGO_CANCEL_CONFIRM_GRACE_SECONDS=${CANCEL_GRACE},LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER=1,LEGO_SESSION_KEY_MODE=${SESSION_MODE}"
 if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
@@ -807,6 +810,14 @@ REVISION="$(
         --format='value(status.latestReadyRevisionName)'
 )"
 [[ -n "${REVISION}" ]] || fail "อ่าน latest ready revision ไม่สำเร็จ"
+
+mkdir -p .runtime-artifacts
+gcloud run services describe "${FUNCTION_NAME}" --region="${REGION}" \
+    --project="${PROJECT_ID}" --format=json > ".runtime-artifacts/${REVISION}-service.json"
+python3 -m tools.deployment_manifest \
+    --service ".runtime-artifacts/${REVISION}-service.json" \
+    --git-commit "${GIT_COMMIT}" --candidate "${CANDIDATE_HASH}" \
+    --output ".runtime-artifacts/${REVISION}-manifest.json"
 
 SMOKE_STARTED="$(python3 -c \
     'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"

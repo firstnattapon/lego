@@ -186,6 +186,7 @@ def test_original_quantity_reaches_preview_and_place_once(monkeypatch, environme
     assert stored["order_payload"][0]["quantity"] == "180.27167"
     assert stored["quantity"] == 180.27167
     assert stored["place_attempted"] is True
+    assert stored["broker_order_id"] == "test-broker-order"
     row = FAKE_DB.reference(f"webull_lego_rows/{intent['run_id']}").get()
     assert row["จำนวนสั่ง (หุ้น)"] == committed["จำนวนสั่ง (หุ้น)"] == 180.27167
     audit = FAKE_DB.reference(f"{AUDIT_PATH}/{intent['run_id']}").get()

@@ -82,9 +82,11 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
     health = business_status(body, code)
     body["business_status"] = health
     decision = body.get("decision") or {}
+    phases = [body.get("recovery") or {}, body.get("dispatch") or {}]
+    paused = any(phase.get("reconciliation_paused") for phase in phases)
     event = {
         "event": "lego_tick_completed", "timestamp": datetime.now(timezone.utc).isoformat(),
-        "severity": ("ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED",
+        "severity": ("INFO" if paused and health == "MANUAL_RECONCILIATION_REQUIRED" else "ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED",
                                            "BROKER_REJECT_HALT", "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}
                      else "WARNING" if health in {"AUTH_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
                                                   "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW", "TOKEN_EXPIRY_WARNING", "RELEASE_EXPIRING", "TICK_DEFERRED"}
@@ -100,6 +102,8 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
                       "dna_steps_remaining")},
         "operational_health": body.get("operational_health") or {},
         "execution": [],
+        "reconciliation_paused": paused,
+        "halt_since": next((phase.get("halt_since") for phase in phases if phase.get("halt_since")), None),
         "errors": [],
         **request_trace(request),
     }

@@ -10,39 +10,55 @@ import operator_halt
 import tick_runtime
 import transition_audit
 from recovery_policy import RecoveryPolicy
-from lego_orders import TERMINAL_STATUSES, normalize_status, _order_fields
+from lego_orders import (TERMINAL_STATUSES, normalize_status, canonical_order_evidence,
+                         IncompleteOrderEvidence, ConflictingOrderEvidence,
+                         BrokerContractAnomaly)
 
 CANCEL_STATES = {"CANCEL_REQUESTED", "CANCEL_UNKNOWN"}
 CANCELLABLE = {"PENDING", "SUBMITTED", "PARTIAL_FILLED", "PARTIALLY_FILLED"}
 
 
-class IncompleteOrderEvidence(ValueError):
-    pass
-
-
 def validate_evidence(intent, detail, summary):
     """Separate missing evidence (history may help) from conflicting identity."""
-    fields = _order_fields(detail)
+    evidence = canonical_order_evidence(detail)
+    fields = {"client_order_id": evidence.client_order_id, "symbol": evidence.symbol,
+              "side": evidence.side, "order_id": evidence.broker_order_id,
+              "account_id": evidence.account_id}
     for key, expected in (("client_order_id", intent["run_id"]),
                           ("symbol", intent["symbol"]), ("side", intent["side"]),
                           ("order_id", intent.get("broker_order_id"))):
         actual = fields.get(key)
         if expected and actual is not None and str(actual) != str(expected):
-            raise ValueError("order identity changed")
+            raise ConflictingOrderEvidence("order identity changed: " + key)
     if fields.get("account_id") is not None and str(fields["account_id"]) != os.environ.get("WEBULL_ACCOUNT_ID"):
-        raise ValueError("order account changed")
+        raise ConflictingOrderEvidence("order account changed")
     required = ["client_order_id", "symbol", "side"]
     if intent.get("broker_order_id"):
         required.append("order_id")
-    total_raw = fields.get("total_quantity", fields.get("quantity"))
-    if (any(not fields.get(key) for key in required) or total_raw is None
-            or fields.get("filled_quantity") is None):
+    total = evidence.total_quantity
+    filled = evidence.filled_quantity
+    if (any(not fields.get(key) for key in required) or total is None or filled is None):
         raise IncompleteOrderEvidence("order identity/quantity evidence incomplete")
-    total = Decimal(str(total_raw))
-    filled = Decimal(str(summary.get("filled_quantity")))
-    if (not total.is_finite() or not filled.is_finite()
-            or total != Decimal(str(intent["quantity"])) or not 0 <= filled <= total):
-        raise ValueError("order quantity changed")
+    submitted = Decimal(str(intent["quantity"]))
+    payload = intent.get("order_payload")
+    if payload is not None:
+        if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+            raise IncompleteOrderEvidence("submitted payload missing or ambiguous")
+        order = payload[0]
+        if any(order.get(key) != intent.get(expected) for key, expected in
+               (("client_order_id", "run_id"), ("symbol", "symbol"), ("side", "side"))):
+            raise ConflictingOrderEvidence("submitted order identity changed")
+        if Decimal(str(order.get("quantity"))) != submitted:
+            raise ConflictingOrderEvidence("intent/payload quantity changed")
+        submitted = Decimal(str(order["quantity"]))
+    if (not submitted.is_finite() or submitted <= 0 or total != submitted
+            or not 0 <= filled <= total
+            or (evidence.status == "FILLED" and filled != total)):
+        raise BrokerContractAnomaly(
+            f"order quantity changed: broker_total={total}, submitted={submitted}, filled={filled}")
+    if Decimal(str(summary.get("filled_quantity"))) != filled:
+        raise ConflictingOrderEvidence("summary filled quantity changed")
+    return evidence
 
 
 def utc(value):
@@ -67,9 +83,18 @@ def fence_owned(intent, claim, now):
         return False
 
 
-def mark_manual(intent, reason):
+def mark_manual(intent, reason, *, detail=None):
+    import hashlib
+    from security_text import broker_diagnostic_json
+    diagnostic = broker_diagnostic_json(detail) if detail is not None else None
     updated = outbox.update_intent(intent["chain_key"], intent["run_id"], {
+        "status": "MANUAL_RECONCILIATION_REQUIRED",
         "needs_manual_check": True, "cancel_last_error_code": reason,
+        "manual_since": intent.get("manual_since") or datetime.now(timezone.utc).isoformat(),
+        "next_auto_reconcile_at": None,
+        **({"reconcile_evidence": diagnostic,
+            "reconcile_evidence_sha256": hashlib.sha256(diagnostic.encode()).hexdigest()}
+           if diagnostic is not None else {}),
         "audit_pending": True,
     }, expected_claim_owner=intent["claim_owner"],
        expected_claim_generation=intent["claim_generation"])
@@ -114,13 +139,15 @@ def outbox_statuses():
 def handle(intent, detail, summary, claim, cancel, *, now=None):
     """Return refreshed intent; caller always settles the authoritative summary."""
     now = now or datetime.now(timezone.utc)
+    if intent.get("needs_manual_check"):
+        return intent
     status = normalize_status(summary.get("status"))
     # Never book a terminal result whose side/quantity/broker identity changed.
     if intent.get("cancel_policy") is not None:
         try:
             validate_evidence(intent, detail, summary)
         except (ValueError, TypeError, InvalidOperation):
-            return mark_manual(intent, "CANCEL_EVIDENCE_INVALID")
+            return mark_manual(intent, "CANCEL_EVIDENCE_INVALID", detail=detail)
     if intent.get("cancel_attempt_count"):
         if status in TERMINAL_STATUSES:
             return outbox.update_intent(intent["chain_key"], intent["run_id"], {
@@ -143,18 +170,11 @@ def handle(intent, detail, summary, claim, cancel, *, now=None):
         age = (now - utc(intent.get("placed_at"))).total_seconds()
         if age < 0 or not intent.get("place_attempted"):
             raise ValueError("invalid place witness")
-        fields = _order_fields(detail)
-        quantity = Decimal(str(fields.get("total_quantity", fields.get("quantity"))))
-        filled = Decimal(str(summary.get("filled_quantity")))
-        if (fields.get("client_order_id") != intent["run_id"]
-                or str(fields.get("symbol", "")).upper() != intent["symbol"]
-                or fields.get("side") != intent["side"]
-                or not quantity.is_finite() or not filled.is_finite()
-                or quantity != Decimal(str(intent["quantity"])) or not 0 <= filled < quantity
-                or (intent.get("broker_order_id") and fields.get("order_id") != intent["broker_order_id"])):
+        evidence = validate_evidence(intent, detail, summary)
+        if not 0 <= evidence.filled_quantity < evidence.total_quantity:
             raise ValueError("unverified cancellation identity/quantity")
     except (ValueError, TypeError, InvalidOperation):
-        return mark_manual(intent, "CANCEL_EVIDENCE_INVALID")
+        return mark_manual(intent, "CANCEL_EVIDENCE_INVALID", detail=detail)
     if age < policy.stale_seconds:
         return intent
     started = begin_cancel(intent, claim, policy, now)

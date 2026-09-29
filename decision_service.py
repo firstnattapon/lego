@@ -331,15 +331,24 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             alerting.notify(broker_circuit.HALT, runtime_identity + cfg.symbol,
                             symbol=cfg.symbol, count=circuit.get("consecutive_broker_rejects"))
 
-        if auto:
-            import operator_halt
-            stop = operator_halt.status(runtime_identity, cfg.symbol)
-            if stop.get("halted") or stop.get("audit_pending_event"):
-                auto = False
-                outbox_blocked = "OPERATOR_HALT"
-                _record_warning("operator_halt",
-                                "operator หยุดสร้าง order ใหม่สำหรับ account/symbol นี้",
-                                {"symbol": cfg.symbol})
+        # Observations may advance the DNA clock, but cannot promise an execution
+        # while another run owns this account/symbol's money fence (even in observe).
+        from lego_outbox import DISPATCH_LOCK_PATH, account_symbol_fence_key
+        fence = db.reference(
+            f"{DISPATCH_LOCK_PATH}/{account_symbol_fence_key(runtime_identity, cfg.symbol)}").get() or {}
+        stop = fence.get("operator_halt") or {}
+        if stop.get("halted") or stop.get("audit_pending_event"):
+            auto = False
+            outbox_blocked = "OPERATOR_HALT"
+        elif fence.get("inflight_run_id"):
+            auto = False
+            outbox_blocked = "RECOVERY_BLOCKED"
+        if outbox_blocked:
+            row_status = "PASS_" + outbox_blocked
+            row.update({"สถานะ": row_status, "คำสั่ง": "PASS", "ฝั่ง": None,
+                        "จำนวนสั่ง (หุ้น)": 0.0, "เหตุผล": outbox_blocked})
+            row["_meta"].update(status=row_status, acted=False, execution_pending=False,
+                                side=None, quantity=0.0, action="PASS")
 
         # Evaluate a candidate before the state transaction so the exact payload
         # can be stored in that same transaction.  row_durable=True here means

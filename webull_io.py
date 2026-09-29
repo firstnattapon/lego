@@ -545,7 +545,8 @@ def hydrate_token_from_secret(secret_client=None) -> dict:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     temporary = f"{path}.{uuid.uuid4().hex}.tmp"
     try:
-        with open(temporary, "x", encoding="utf-8") as handle:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(f"{lines[0].strip()}\n{lines[1].strip()}\nNORMAL\n")
         os.replace(temporary, path)
     finally:
@@ -977,6 +978,28 @@ def _configure_sdk_stream_logger(api) -> None:
     _install_redaction()
 
 
+def verify_production_token(api, operation=None):
+    """One read-only live check; never start 2FA or rotate a scheduled token."""
+    local = read_local_token()
+    if not local or local.get("status") != "NORMAL":
+        raise TokenUnavailableError("production token missing or not NORMAL")
+    if operation is None:
+        from webull.core.http.initializer.token.token_operation import TokenOperation
+        operation = TokenOperation(api)
+    api.set_token(local["token"])
+    response = operation.check_token(local["token"])
+    payload = response.json() if response.status_code == 200 else None
+    if not isinstance(payload, dict):
+        raise TokenUnavailableError("production token status unavailable")
+    expiry = _expires_datetime(payload.get("expires"))
+    if (payload.get("status") != "NORMAL" or payload.get("token") != local["token"]
+            or expiry is None or expiry <= datetime.now(timezone.utc)):
+        raise TokenUnavailableError("production token failed live verification")
+    # Use the live expiry for the 24-hour new-order floor, even if the durable
+    # secret was published with a later timestamp. Token identity does not change.
+    _write_local_token(local["token"], payload["expires"], "NORMAL")
+
+
 def build_clients():
     """Build (or reuse) the SDK clients for this instance.
 
@@ -1030,6 +1053,8 @@ def build_clients():
     api.set_token_dir(token_dir())
     _configure_sdk_stream_logger(api)
     try:
+        if environment_label() == PROD:
+            verify_production_token(api)
         trade, data = TradeClient(api), DataClient(api)
         _AUTH_PROFILE = (cache_key, time.monotonic(),
                          getattr(api, "_lego_token_check_enabled", None))
@@ -1356,14 +1381,14 @@ def validate_place_response(payload, client_order_id: str) -> dict:
 
 def validate_order_detail_identity(payload, *, client_order_id: str,
                                    symbol: str) -> dict:
-    from lego_orders import _order_fields
+    from lego_orders import canonical_order_evidence
     try:
-        fields = _order_fields(payload)
+        evidence = canonical_order_evidence(payload)
     except ValueError as exc:
         raise WebullConfigError(str(exc)) from exc
-    if str(fields.get("client_order_id") or "") != str(client_order_id):
+    if str(evidence.client_order_id or "") != str(client_order_id):
         raise WebullConfigError("Order detail client_order_id ไม่ตรง intent")
-    if str(fields.get("symbol") or "").upper() != symbol.strip().upper():
+    if str(evidence.symbol or "").upper() != symbol.strip().upper():
         raise WebullConfigError("Order detail symbol ไม่ตรง intent")
     return dict(payload) if isinstance(payload, dict) else list(payload)
 
