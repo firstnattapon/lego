@@ -31,6 +31,7 @@ TERMINAL = {
     # Terminal for dispatch only — the order audit keeps needs_manual_check so
     # a human still answers whether the order exists.
     "RECONCILE_ABANDONED",
+    "MANUAL_RECONCILIATION_REQUIRED",
     # The broker confirmed the fill; only the 17-column model ledger could not
     # book it. Terminal for the same reason as REALIZED_MATH_ERROR below —
     # re-sending would duplicate a filled order — and needs_manual_check keeps

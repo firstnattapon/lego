@@ -115,6 +115,7 @@ def test_cancel_ack_is_not_terminal_and_terminal_does_not_erase_partial_fill():
     intent, claim, detail, summary = existing_order()
     intent = recovery.handle(intent, detail, summary, claim, lambda _: {"status": "CANCELLED"})
     assert not execution._chain_fence_can_clear(intent)
+    detail.update(status="CANCELLED", filled_quantity="1")
     result = recovery.handle(intent, detail, {"status": "CANCELLED", "filled_quantity": "1"}, claim,
                              lambda _: pytest.fail("terminal cancelled again"))
     assert result["cancel_confirmed_at"]
@@ -260,7 +261,7 @@ def test_conflict_halt_write_failure_is_not_swallowed_as_broker_failure(monkeypa
     intent, claim, detail, summary = existing_order()
     detail["side"] = "SELL"
     monkeypatch.setattr(execution, "fetch_order_detail", lambda *a: detail)
-    monkeypatch.setattr(recovery, "mark_manual", lambda *a: (_ for _ in ()).throw(RuntimeError("persistence failed")))
+    monkeypatch.setattr(recovery, "mark_manual", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("persistence failed")))
     with pytest.raises(RuntimeError, match="persistence failed"):
         execution._dispatch_or_reconcile_one(None, None, SimpleNamespace(symbol="UBER"), intent, claim)
 

@@ -254,11 +254,14 @@ def broker_evidence(detail: Any, *, expected_run_id: str,
                     expected_account_id: str) -> dict:
     """Normalize only explicit evidence; absent fill quantity never means zero."""
     fields = _strict_order_fields(detail)
-    summary = summarize_order_result({}, fields)
+    try:
+        summary = summarize_order_result({}, fields)
+    except ValueError as exc:
+        raise ReconcileRefusal("broker evidence conflicts or is malformed") from exc
     status = normalize_status(summary.get("status")) or "UNKNOWN"
-    raw_quantity = _first(fields, ("filled_quantity", "filled_qty"))
+    raw_quantity = summary.get("filled_quantity")
     quantity = _float(raw_quantity)
-    raw_price = _first(fields, EXECUTION_PRICE_FIELDS)
+    raw_price = summary.get("filled_price")
     price = (_float(raw_price, allow_zero=False)
              if raw_price not in (None, "") else None)
     # Use the same actual-fee normalization as the order worker. Webull may

@@ -594,6 +594,8 @@ def test_build_clients_targets_uat_by_default(monkeypatch):
 
 def test_build_clients_targets_production_when_asked(monkeypatch):
     built = _install_fake_sdk(monkeypatch)
+    checked = []
+    monkeypatch.setattr(webull_io, "verify_production_token", lambda api: checked.append(api))
     monkeypatch.setattr(webull_io, "token_health", lambda: {
         "ready": True, "secret_configured": True, "token_storage": "SECRET_MANAGER",
         "found": True, "days_left": 14})
@@ -605,6 +607,7 @@ def test_build_clients_targets_production_when_asked(monkeypatch):
     trade, data = webull_io.build_clients()
     assert built["endpoint"] == ("th", webull_io.PROD_ENDPOINT)
     assert built["token_dir"] == "/tmp/other"
+    assert len(checked) == 1
     assert webull_io.clients_endpoint(trade, data) == webull_io.PROD_ENDPOINT
 
 
@@ -711,6 +714,7 @@ def test_warm_instances_reuse_one_authenticated_client_pair(monkeypatch):
 
 def test_the_cache_is_dropped_when_the_environment_moves(monkeypatch):
     built = _install_fake_sdk(monkeypatch)
+    monkeypatch.setattr(webull_io, "verify_production_token", lambda api: None)
     monkeypatch.setattr(webull_io, "token_health", lambda: {
         "ready": True, "secret_configured": True, "token_storage": "SECRET_MANAGER",
         "found": True, "days_left": 14})

@@ -314,7 +314,11 @@ def test_a_manual_reconcile_fence_blocks_a_later_decision(monkeypatch, auto_subm
     assert result["dispatch_inflight_run_id"] == first["run_id"]
     assert placed == []
     assert FAKE_DB.reference(
-        f"{OUTBOX_PATH}/{ck}/{later['run_id']}").get()["status"] == "PENDING_DISPATCH"
+        f"{OUTBOX_PATH}/{ck}/{later['run_id']}").get() is None
+    row = FAKE_DB.reference(f"webull_lego_rows/{later['run_id']}").get()
+    assert row["สถานะ"] == "PASS_RECOVERY_BLOCKED"
+    assert row["cashflow_status"] == "NO_ACTION"
+    assert row["จำนวนสั่ง (หุ้น)"] == 0
 
 
 def test_whole_share_quantity_is_not_truncated(monkeypatch, auto_submit):
