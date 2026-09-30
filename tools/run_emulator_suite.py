@@ -1,5 +1,6 @@
 """Run the full suite with a private local RTDB emulator; never use a live DB."""
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -13,17 +14,25 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jar", type=Path, required=True)
     parser.add_argument("--port", type=int, default=9014)
+    parser.add_argument("--java", default="java", help="Java 11+ executable")
+    parser.add_argument("--junitxml", type=Path, help="new output file; never overwrite past evidence")
+    parser.add_argument("--tests", nargs="+", help="optional targeted test paths")
     args = parser.parse_args()
     if not args.jar.is_file() or not 1024 <= args.port <= 65535:
         parser.error("existing Firebase emulator jar and unprivileged port required")
     root = Path(__file__).resolve().parents[1]
     artifacts = root / ".runtime-artifacts"
     artifacts.mkdir(exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    junit = args.junitxml or artifacts / f"emulator-pytest-{stamp}.xml"
+    if junit.exists():
+        parser.error("JUnit output already exists; preserve historical evidence")
+    junit.parent.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "FIREBASE_DATABASE_EMULATOR_HOST": f"127.0.0.1:{args.port}",
            "GCLOUD_PROJECT": "demo-lego-firebase"}
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    with (artifacts / "emulator.log").open("w", encoding="utf-8") as log:
-        process = subprocess.Popen(["java", "-jar", str(args.jar.resolve()), "--host", "127.0.0.1", "--port", str(args.port)],
+    with (artifacts / f"emulator-{stamp}.log").open("x", encoding="utf-8") as log:
+        process = subprocess.Popen([args.java, "-jar", str(args.jar.resolve()), "--host", "127.0.0.1", "--port", str(args.port)],
                                    stdout=log, stderr=subprocess.STDOUT, cwd=root, creationflags=flags)
         try:
             url = f"http://127.0.0.1:{args.port}/.settings/rules.json?ns=demo-lego-firebase-default-rtdb"
@@ -38,7 +47,7 @@ def main():
                 except OSError: time.sleep(0.2)
             if not ready: raise RuntimeError("local emulator did not become ready")
             return subprocess.call([sys.executable, "-m", "pytest", "-q", "-o", "cache_dir=.cache-v4/pytest",
-                "--junitxml=release_evidence/continuous-v4-pytest.xml"], cwd=root, env=env)
+                f"--junitxml={junit.resolve()}", *(args.tests or [])], cwd=root, env=env)
         finally:
             process.terminate()
             try: process.wait(timeout=10)

@@ -1,5 +1,10 @@
 # LEGO PRINCIPAL v2
 
+30 September final audit: [source changes, evidence and remaining UAT/PROD gates](docs/AUDIT_20260930_FINAL_TH.md).
+Adds private broker-blocker diagnostics, Ready Revision digest receipts and
+candidate-bound local evidence checks. Live acceptance remains **NO-GO**; local
+tests do not prove broker fills, incident closure or production readiness.
+
 Continuous execution v4: [final implementation review](docs/implementation_plan_review.md),
 [cutover/operator runbook](docs/CONTINUOUS_RELEASE_V4_TH.md) and
 [study guide](docs/LEARNING_CONTINUOUS_V4_TH.md).

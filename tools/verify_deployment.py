@@ -8,14 +8,22 @@ import hashlib
 import json
 import re
 from pathlib import Path
+try:
+    from .deployment_manifest import resolved_image
+except ImportError:  # supports python tools/verify_deployment.py as well as -m
+    from deployment_manifest import resolved_image
 
 
-def verify(service, scheduler, *, candidate, revision, image, function=None):
+def verify(service, scheduler, *, candidate, revision, image, function=None, revision_capture=None):
     template = service["spec"]["template"]
     spec = template["spec"]
     containers = spec["containers"]
     env = {v["name"]: v.get("value") for v in containers[0].get("env", [])}
     traffic = service["status"].get("traffic", [])
+    try:
+        captured_image = resolved_image(service, revision_capture)
+    except (ValueError, KeyError, TypeError, IndexError):
+        captured_image = None
     checks = {
         "single_container": len(containers) == 1,
         "concurrency": spec.get("containerConcurrency") == 1,
@@ -24,7 +32,7 @@ def verify(service, scheduler, *, candidate, revision, image, function=None):
         "revision": service["status"].get("latestReadyRevisionName") == revision,
         "traffic": (sum(t.get("percent", 0) for t in traffic if t.get("revisionName") == revision) == 100
                     and all(t.get("revisionName") == revision for t in traffic)),
-        "image": bool(re.fullmatch(r".+@sha256:[0-9a-f]{64}", image)) and containers[0].get("image") == image,
+        "image": bool(re.fullmatch(r".+@sha256:[0-9a-f]{64}", image)) and captured_image == image,
         "candidate": bool(re.fullmatch(r"[0-9a-f]{64}", candidate)) and env.get("LEGO_CANDIDATE_HASH") == candidate,
         "environment": env.get("WEBULL_ENV") in {"UAT", "PROD"},
         "scheduler_retry": (scheduler.get("retryConfig", {}).get("retryCount", 0) == 0
@@ -54,10 +62,12 @@ def main():
     parser.add_argument("--revision", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--function", type=Path)
+    parser.add_argument("--revision-capture", type=Path)
     args = parser.parse_args()
     report = verify(json.loads(args.service.read_text()), json.loads(args.scheduler.read_text()),
                     candidate=args.candidate, revision=args.revision, image=args.image,
-                    function=json.loads(args.function.read_text()) if args.function else None)
+                    function=json.loads(args.function.read_text()) if args.function else None,
+                    revision_capture=json.loads(args.revision_capture.read_text()) if args.revision_capture else None)
     print(json.dumps(report, indent=2))
     return 0 if report["status"] == "PASS" else 1
 

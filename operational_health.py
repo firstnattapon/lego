@@ -40,9 +40,13 @@ def report(runtime, decision, token, *, now=None):
     if bundle.origin_utc:
         result["dna_end_utc"] = dna_end(bundle.origin_utc, len(decode_dna(bundle.dna_code)),
                                         bundle.interval_seconds, calendar_fingerprint())
+        result["dna_exhausted"] = now >= datetime.fromisoformat(result["dna_end_utc"])
     raw = runtime.deployment.execution_limits[3]
     if raw:
         end = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        seconds = (end - now).total_seconds()
         result.update(release_expiry_utc=end.isoformat(),
-                      release_expiring=(end - now).total_seconds() <= 86400)
+                      release_seconds_remaining=seconds,
+                      release_expired=seconds <= 0,
+                      release_expiring=seconds <= 86400)
     return result

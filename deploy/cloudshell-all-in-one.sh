@@ -814,8 +814,11 @@ REVISION="$(
 mkdir -p .runtime-artifacts
 gcloud run services describe "${FUNCTION_NAME}" --region="${REGION}" \
     --project="${PROJECT_ID}" --format=json > ".runtime-artifacts/${REVISION}-service.json"
+gcloud run revisions describe "${REVISION}" --region="${REGION}" \
+    --project="${PROJECT_ID}" --format=json > ".runtime-artifacts/${REVISION}-revision.json"
 python3 -m tools.deployment_manifest \
     --service ".runtime-artifacts/${REVISION}-service.json" \
+    --revision ".runtime-artifacts/${REVISION}-revision.json" \
     --git-commit "${GIT_COMMIT}" --candidate "${CANDIDATE_HASH}" \
     --output ".runtime-artifacts/${REVISION}-manifest.json"
 
