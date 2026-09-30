@@ -334,6 +334,7 @@ _AUDIT_INTERNAL_FIELDS = {
     "audit_pending", "claim_owner", "claim_until", "claim_generation",
     "place_fence",
     "broker_raw_detail", "transition_pending", "transition_revision", "cancel_token",
+    "broker_open_order_blocker",
 }
 
 
@@ -1256,10 +1257,18 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             {"pagination_complete": False},
             claim=intent,
         )
+    import open_order_blocker
+    if open_orders or (dispatch_claim or {}).get("broker_open_order_blocker"):
+        observed_at = datetime.now(UTC)
+        blocker = open_order_blocker.describe(open_orders, now=observed_at)
+        if dispatch_claim is not None:
+            scope = account_symbol_fence_key(identity, cfg.symbol)
+            open_order_blocker.record(scope, dispatch_claim, open_orders, now=observed_at)
     if open_orders:
         return _stop(ck, run_id, "SUPPRESSED_ACTIVE_ORDER",
-                     {"terminal_reason": f"{len(open_orders)} active broker order(s)"},
-                     claim=intent)
+                     {"terminal_reason": f"{len(open_orders)} active broker order(s)",
+                      "broker_open_order_blocker": blocker},
+                     claim=intent, **open_order_blocker.public(blocker))
 
     fresh = fetch_snapshot(trade_client, data_client, cfg)
     try:
@@ -1448,13 +1457,20 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 {"pagination_complete": False,
                  "dispatch_check_phase": "post_preview"},
                 claim=intent)
+        if final_open_orders or (dispatch_claim or {}).get("broker_open_order_blocker"):
+            observed_at = datetime.now(UTC)
+            blocker = open_order_blocker.describe(final_open_orders, now=observed_at)
+            if dispatch_claim is not None:
+                scope = account_symbol_fence_key(identity, cfg.symbol)
+                open_order_blocker.record(scope, dispatch_claim, final_open_orders, now=observed_at)
         if final_open_orders:
             return _stop(
                 ck, run_id, "SUPPRESSED_ACTIVE_ORDER",
                 {"terminal_reason":
                  f"{len(final_open_orders)} active broker order(s) after Preview",
-                 "dispatch_check_phase": "post_preview"},
-                claim=intent)
+                 "dispatch_check_phase": "post_preview",
+                 "broker_open_order_blocker": blocker},
+                claim=intent, **open_order_blocker.public(blocker))
     try:
         final_fresh = fetch_snapshot(trade_client, data_client, cfg)
     except Exception as exc:
@@ -1806,8 +1822,10 @@ def _run_order_worker(cfg, limit: int = 3,
             # the broker authentication calls for a genuinely idle tick.
             logger.info("lego_order_worker actionable=0 expired_unsent=%d "
                         "chain_key=%s — no order intent to dispatch", expired, ck)
+            from open_order_blocker import public
             return {"processed": 0, "actionable": 0,
-                    "expired_unsent": expired, "results": []}
+                    "expired_unsent": expired, "results": [],
+                    **public(dispatch_claim.get("broker_open_order_blocker"))}
 
         trade_client, data_client = build_clients()
         for intent in candidates:

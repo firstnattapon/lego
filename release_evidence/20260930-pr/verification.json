@@ -1,0 +1,108 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-09-30T05:53:39.075279+00:00",
+  "candidate_hash": "0fb837f4cae80b13240261735663c3931279e093a745d1055a47685a8bf950d5",
+  "source_frozen_at": "2026-09-30T05:47:10.498238+00:00",
+  "source_unchanged_through_tests": true,
+  "local_status": "PASS",
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "full_suite": {
+    "distinct_cases_passed": 1291,
+    "unresolved_failures": 0,
+    "skipped": 0,
+    "database_rules_cases_passed": 88,
+    "runs": [
+      {
+        "artifact": "full-suite.xml",
+        "sha256": "35bab3fd289f1486f42a3041a358aaabb46b7198f6f1fb260db01defca77d12d",
+        "counts": {
+          "passed": 1153,
+          "failure": 0,
+          "error": 138,
+          "skipped": 0
+        }
+      },
+      {
+        "artifact": "setup-retry.xml",
+        "sha256": "0a0cce76f5c8efc29c4614b249fa134538648c7201af4303d3079a9f0d15c21c",
+        "counts": {
+          "passed": 78,
+          "failure": 21,
+          "error": 39,
+          "skipped": 0
+        }
+      },
+      {
+        "artifact": "temp-final.xml",
+        "sha256": "6e966010446457fb6d09eb13c7cae728a98b58238aa324e38234d8b1e1469cad",
+        "counts": {
+          "passed": 60,
+          "failure": 0,
+          "error": 0,
+          "skipped": 0
+        }
+      }
+    ],
+    "note": "Union of one complete emulator-enabled run and exact failed-node retries; not a claim that the first invocation passed."
+  },
+  "retry_causes": [
+    "138 setup errors: Windows denied access to shared pytest temp directory.",
+    "Workspace basetemp resolved permissions; 60 token tests still require basetemp below the OS temp root.",
+    "Set TEMP/TMP to a private workspace temp root and rerun only those 60: all passed."
+  ],
+  "setup_note": "Dependency-only install/check/audit began before source freeze; their requirements and vendored wheel hashes are identical. Compile, secret scan and tests started after the exact source anchor.",
+  "checks": [
+    {
+      "id": "dependency_install",
+      "exit_code": 0,
+      "started_utc": "2026-09-30T05:45:08.455949+00:00",
+      "finished_utc": "2026-09-30T05:46:40.579121+00:00",
+      "log": "dependency_install.log",
+      "log_sha256": "ee8aa16a31952f76510d42d6f0db0512d9122c4b85ab5ac77188d3f66ef8eee5"
+    },
+    {
+      "id": "pip_check",
+      "exit_code": 0,
+      "started_utc": "2026-09-30T05:46:40.591526+00:00",
+      "finished_utc": "2026-09-30T05:46:42.182163+00:00",
+      "log": "pip_check.log",
+      "log_sha256": "672aec65a45bed50e70229c70934a7eebf0462595c459b83023027645d57cccf"
+    },
+    {
+      "id": "pip_audit",
+      "exit_code": 0,
+      "started_utc": "2026-09-30T05:46:42.188234+00:00",
+      "finished_utc": "2026-09-30T05:47:20.655944+00:00",
+      "log": "pip_audit.log",
+      "log_sha256": "4e4757ff226a44b5c448b1c4624619419c22d5272463dc19510b4754871a72f9"
+    },
+    {
+      "id": "compile",
+      "exit_code": 0,
+      "started_utc": "2026-09-30T05:47:20.662518+00:00",
+      "finished_utc": "2026-09-30T05:47:23.094818+00:00",
+      "log": "compile.log",
+      "log_sha256": "5d690942a8678d547dc68e36ab69081b82cf6fbfad0d1e86f8837ef546976b0d"
+    },
+    {
+      "id": "secret_scan",
+      "exit_code": 0,
+      "started_utc": "2026-09-30T05:47:23.099865+00:00",
+      "finished_utc": "2026-09-30T05:47:25.126148+00:00",
+      "log": "secret_scan.log",
+      "log_sha256": "e5d92f8e84181092ee4b37f123d72bba916f44a2602f5a8ea2744de473cc27cc"
+    }
+  ],
+  "live_gates": {
+    "incident_lineage_terminal_accounting": "BLOCKED",
+    "candidate_deployment_binding": "BLOCKED",
+    "uat_buy_sell_two_sessions_restart_rollover": "BLOCKED",
+    "monitoring_delivery_horizon": "BLOCKED",
+    "prod_observe_two_sessions": "BLOCKED",
+    "controlled_live_authorization": "BLOCKED",
+    "live_fills_fees_positions_cash": "BLOCKED"
+  },
+  "live_actions_performed": false,
+  "raw_evidence": "Original command logs/JUnit retained locally; SHA-256 identifies every invocation. GitHub CI supplies independently retrievable commit-bound checks."
+}

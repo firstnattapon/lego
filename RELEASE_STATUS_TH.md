@@ -1,5 +1,9 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 30 กันยายน: [audit ฉบับ final และ gate ที่ค้าง](docs/AUDIT_20260930_FINAL_TH.md).
+ผล source/PR รอบนี้อยู่ใน `release_evidence/20260930-pr/`; acceptance ด้านล่างเป็น
+หลักฐานย้อนหลัง ไม่ใช้รับรอง candidate ใหม่. UAT ต่อเนื่อง/เงินจริงยังต้องผ่าน live gates.
+
 **NO-GO สำหรับเงินจริง; UAT endurance ยัง BLOCKED**. ผล local candidate และ external gates อยู่ใน [final review](docs/implementation_plan_review.md) และ [acceptance JSON](release_evidence/continuous-v4-acceptance.json). Candidate นี้ยังไม่ได้ deploy หรือส่ง broker mutation จริง. Production rollout ต้อง observe/inactive.
 
 ## หลักฐานย้อนหลังวันที่ 24 กันยายน 2026

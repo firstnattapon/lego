@@ -47,6 +47,30 @@ def binding_command(_args) -> dict:
     return {"release_binding": release_binding_for()}
 
 
+def inspect_open_orders_command(_args) -> dict:
+    """One complete read; never adopts, places, cancels or clears a fence."""
+    import main
+    from open_order_blocker import describe
+    runtime = load_runtime_config()
+    main._init_firebase()
+    cfg = main.Config(runtime.operator.symbol, runtime.operator.principal_usd,
+                      runtime.operator.diff_usd, runtime.operator.dna_bundle.dna_code,
+                      "shannon_demon_lego_v2")
+    trade, _ = main.build_clients()
+    witness = describe(main.fetch_open_orders(trade, cfg.symbol))
+    chain = main.chain_key(cfg)
+    for order in witness["orders"]:
+        intent = main.read_intent(chain, order["client_order_id"])
+        order["current_chain_intent_status"] = (intent or {}).get("status")
+        order["ownership"] = "VERIFY_ORIGINAL_INTENT" if intent else "NOT_FOUND_IN_CURRENT_CHAIN"
+    return {"read_only": True, "broker_scan_complete": True,
+            "environment": runtime.deployment.environment,
+            "account_fingerprint": runtime.deployment.account_fingerprint,
+            "symbol": cfg.symbol, "chain_key": chain,
+            "status": "OPEN_ORDER_BLOCKED" if witness["count"] else "NO_OPEN_ORDERS",
+            "real_money_ready": False, **witness}
+
+
 def bootstrap_command(args) -> dict:
     token_path = Path(args.token_file).resolve()
     lines = token_path.read_text(encoding="utf-8").splitlines()
@@ -194,6 +218,7 @@ def migrate_session_command(args) -> dict:
 
 
 COMMANDS = {"check": check_command, "release-binding": binding_command,
+            "inspect-open-orders": inspect_open_orders_command,
             "migrate-market-day": migrate_session_command,
             "bootstrap-auth": bootstrap_command, "status": status_command,
             "repair-audit": repair_audit_command,
@@ -208,6 +233,7 @@ def parser() -> argparse.ArgumentParser:
     sub = cli.add_subparsers(dest="command", required=True)
     sub.add_parser("check")
     sub.add_parser("release-binding")
+    sub.add_parser("inspect-open-orders")
     boot = sub.add_parser("bootstrap-auth")
     boot.add_argument("--token-file", required=True)
     boot.add_argument("--secret", required=True,

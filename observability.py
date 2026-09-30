@@ -52,6 +52,9 @@ def business_status(body: dict, http_status: int) -> str:
         return "EXECUTION_LIMIT_BLOCKED"
     if any(item.get("reconciliation_overdue") for item in results):
         return "RECONCILIATION_OVERDUE"
+    if (any(phase.get("open_order_blocked") for phase in phases)
+            or any(item.get("status") == "SUPPRESSED_ACTIVE_ORDER" for item in results)):
+        return "OPEN_ORDER_BLOCKED"
     if body.get("pipeline_status") == "TICK_DEFERRED" and (
             body.get("deferred_reason") == "tick_deadline"
             or any(item.get("deferred_reason") == "tick_deadline" for item in results)
@@ -66,6 +69,10 @@ def business_status(body: dict, http_status: int) -> str:
     if decision.get("outbox_blocked") or decision.get("outbox_skipped"):
         return "INTENT_BLOCKED"
     health = body.get("operational_health") or {}
+    if health.get("release_expired"):
+        return "RELEASE_EXPIRED"
+    if health.get("dna_exhausted") or decision.get("pipeline_status") == "DNA_EXHAUSTED":
+        return "DNA_EXHAUSTED"
     if health.get("release_expiring"):
         return "RELEASE_EXPIRING"
     if health.get("token_warning"):
@@ -89,7 +96,7 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
         "severity": ("INFO" if paused and health == "MANUAL_RECONCILIATION_REQUIRED" else "ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED",
                                            "BROKER_REJECT_HALT", "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}
                      else "WARNING" if health in {"AUTH_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
-                                                  "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW", "TOKEN_EXPIRY_WARNING", "RELEASE_EXPIRING", "TICK_DEFERRED"}
+                                                  "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW", "TOKEN_EXPIRY_WARNING", "RELEASE_EXPIRING", "RELEASE_EXPIRED", "TICK_DEFERRED", "OPEN_ORDER_BLOCKED"}
                      else "INFO"),
         "revision": os.environ.get("K_REVISION"),
         "candidate_hash": os.environ.get("LEGO_CANDIDATE_HASH"),
@@ -101,6 +108,9 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
                      ("run_id", "market_slot_id", "step", "status", "pipeline_status", "committed",
                       "dna_steps_remaining")},
         "operational_health": body.get("operational_health") or {},
+        "open_order_blockers": [{key: phase.get(key) for key in
+                                  ("open_order_count", "open_order_observed_at", "open_order_fingerprints")}
+                                 for phase in phases if phase.get("open_order_blocked")],
         "execution": [],
         "reconciliation_paused": paused,
         "halt_since": next((phase.get("halt_since") for phase in phases if phase.get("halt_since")), None),
@@ -136,7 +146,8 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
                                              "execution_limit_blocked", "operator_halt_blocked",
                                              "needs_manual_check",
                                              "reconciliation_overdue", "reconciliation_age_seconds",
-                                             "cancel_requested_at", "cancel_confirmed_at", "cancel_attempt_count")}})
+                                             "cancel_requested_at", "cancel_confirmed_at", "cancel_attempt_count",
+                                             "open_order_count", "open_order_observed_at", "open_order_fingerprints")}})
     print(json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
 
 
