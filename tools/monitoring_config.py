@@ -17,7 +17,7 @@ def build(service, channel):
     metric = f"lego_tick_completed_{service.replace('-', '_')}"
     log_filter = base + ' jsonPayload.event="lego_tick_completed"'
     alarming = ('severity>=ERROR OR jsonPayload.business_status=("AUTH_BACKOFF" OR "OPERATOR_HALT" '
-                'OR "DNA_LOW" OR "DNA_EXHAUSTED" OR "RELEASE_EXPIRING" OR "RELEASE_EXPIRED" OR "TOKEN_EXPIRY_WARNING" OR "OPEN_ORDER_BLOCKED") '
+                'OR "MARKET_DATA_BACKOFF" OR "DNA_LOW" OR "DNA_EXHAUSTED" OR "RELEASE_EXPIRING" OR "RELEASE_EXPIRED" OR "TOKEN_EXPIRY_WARNING" OR "OPEN_ORDER_BLOCKED") '
                 'OR jsonPayload.operational_health.dna_low=true '
                 'OR jsonPayload.operational_health.release_expiring=true '
                 'OR jsonPayload.operational_health.token_warning=true')

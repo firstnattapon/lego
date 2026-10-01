@@ -428,6 +428,7 @@ def _persist_summary(intent: dict, summary: dict) -> None:
 
 def _persist_error(chain_key_: str, run_id: str, status: str, exc: Exception,
                    extra: dict | None = None, *, claim: dict | None = None) -> dict:
+    from market_data_circuit import MarketDataCircuitOpen
     from webull_io import broker_error_details
     err = _error_text(exc)
     details = broker_error_details(exc)
@@ -436,6 +437,8 @@ def _persist_error(chain_key_: str, run_id: str, status: str, exc: Exception,
               "broker_error": details, **(extra or {})}, claim=claim)
     return {"run_id": run_id, "status": status, "error": err,
             "error_type": type(exc).__name__, "broker_error": details,
+            **({"retry_after": exc.state.get("retry_after")}
+               if isinstance(exc, MarketDataCircuitOpen) else {}),
             **({"needs_manual_check": True} if (extra or {}).get("needs_manual_check") else {})}
 
 

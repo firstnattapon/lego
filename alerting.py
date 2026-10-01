@@ -15,7 +15,7 @@ from firebase_admin import db
 import tick_runtime
 
 logger = logging.getLogger(__name__)
-EVENTS = {"BROKER_REJECT_HALT", "AUTH_BACKOFF", "TOKEN_EXPIRY_WARNING",
+EVENTS = {"BROKER_REJECT_HALT", "AUTH_BACKOFF", "MARKET_DATA_BACKOFF", "TOKEN_EXPIRY_WARNING",
           "MANUAL_RECONCILIATION_REQUIRED", "FEE_OVERDUE", "EXECUTION_LIMIT_BLOCKED",
           "RECONCILIATION_OVERDUE"}
 
@@ -25,7 +25,7 @@ def notify_tick(body):
     if not os.environ.get("ALERT_WEBHOOK_URL", "").strip():
         return False
     kind = body.get("business_status")
-    if kind not in {"MANUAL_RECONCILIATION_REQUIRED", "FEE_OVERDUE", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}:
+    if kind not in {"MARKET_DATA_BACKOFF", "MANUAL_RECONCILIATION_REQUIRED", "FEE_OVERDUE", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}:
         return False
     try:
         account = os.environ.get("WEBULL_ACCOUNT_ID", "").strip()

@@ -210,6 +210,10 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         # interpreted for this decision. v2 chain identity deliberately excludes
         # this operational capability, while the exact resolved values are
         # snapshotted into the intent for cross-revision recovery.
+        if tick_runtime.correlation_id():
+            import market_data_circuit
+            from webull_io import market_data_scope
+            market_data_circuit.guard(market_data_scope(cfg))
         trade_client, data_client = build_clients()
         capability = None
         if runtime is not None:
@@ -534,6 +538,9 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         # durable witness in the worker. Resume from the committed state.
         return {"pipeline_status": "TICK_DEFERRED", "deferred_reason": "tick_deadline"}, 200
     except Exception as exc:
+        import market_data_circuit
+        if isinstance(exc, market_data_circuit.MarketDataCircuitOpen):
+            return exc.response(), 200
         from webull_io import is_auth_blocked
         if is_auth_blocked(exc):
             return {"status": "AUTH_BACKOFF", "committed": False,

@@ -8,6 +8,7 @@ import traceback
 import uuid
 import tick_runtime
 import auth_circuit
+import market_data_circuit
 from observability import emit_tick
 from datetime import datetime, timedelta, timezone
 
@@ -378,6 +379,8 @@ def _run_tick(request):
             cfg, limit=3, runtime_identity=runtime_identity, runtime=runtime)
     except tick_runtime.TickDeadlineExceeded:
         return {"pipeline_status": "TICK_DEFERRED", "deferred_reason": "tick_deadline"}, 200
+    except market_data_circuit.MarketDataCircuitOpen as exc:
+        return exc.response(), 200
     except Exception as exc:
         return {
             "pipeline_status": "RECOVERY_ERROR",
@@ -396,7 +399,7 @@ def _run_tick(request):
         request, runtime=runtime, cfg_override=cfg)
     dispatch = None
     if (decision_code < 500 and runtime.allows_new_broker_mutation
-            and decision.get("pipeline_status") != "AUTH_BACKOFF"):
+            and decision.get("pipeline_status") not in {"AUTH_BACKOFF", market_data_circuit.BACKOFF}):
         try:
             # Recovery already queried this unresolved order in this tick. A
             # second query cannot unblock any newer intent and wastes deadline.
@@ -436,8 +439,14 @@ def _run_tick(request):
     from operational_health import report as health_report
     circuit = broker_circuit.status(runtime_identity, cfg.symbol)
     health = health_report(runtime, decision, token_health())
+    quote_failures = [item for phase in (recovery, dispatch or {})
+                      for item in phase.get("results", [])
+                      if item.get("error_type") == "MarketDataCircuitOpen"]
+    market_data_paused = (decision.get("pipeline_status") == market_data_circuit.BACKOFF
+                          or bool(quote_failures))
     return {
         "pipeline_status": ("TICK_DISPATCH_ERROR" if dispatch_error else
+                            market_data_circuit.BACKOFF if market_data_paused else
                             "TICK_DEFERRED" if dispatch_deferred else "TICK_OK" if decision_code < 400 else "TICK_DECISION_ERROR"),
         "correlation_id": correlation_id,
         "environment": runtime.deployment.environment,
@@ -448,6 +457,8 @@ def _run_tick(request):
         "operational_health": health,
         "recovery": recovery,
         "decision": decision,
+        **({"retry_after": decision.get("retry_after") or next(
+            (item.get("retry_after") for item in quote_failures), None)} if market_data_paused else {}),
         "dispatch": dispatch,
         "archive": archive,
         "duration_ms": round((time.monotonic() - started) * 1000, 3),

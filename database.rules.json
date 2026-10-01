@@ -76,6 +76,10 @@
       ".read": false,
       ".write": false
     },
+    "webull_lego_market_data_circuit": {
+      ".read": false,
+      ".write": false
+    },
     "webull_lego_execution_transitions": {
       ".read": false,
       ".write": false

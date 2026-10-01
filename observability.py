@@ -32,8 +32,13 @@ def business_status(body: dict, http_status: int) -> str:
             phase.get("dispatch_blocked") for phase in phases):
         return "MANUAL_RECONCILIATION_REQUIRED"
     if (http_status >= 400 or any(phase.get("error") for phase in phases)
-            or any(item.get("error") for item in results)):
+            or any(item.get("error") and item.get("error_type") != "MarketDataCircuitOpen"
+                   for item in results)):
         return "ERROR"
+    if (body.get("pipeline_status") == "MARKET_DATA_BACKOFF"
+            or decision.get("pipeline_status") == "MARKET_DATA_BACKOFF"
+            or any(item.get("error_type") == "MarketDataCircuitOpen" for item in results)):
+        return "MARKET_DATA_BACKOFF"
     if any(item.get("fee_overdue") for item in results):
         return "FEE_OVERDUE"
     if (decision.get("outbox_blocked") == "OPERATOR_HALT"
@@ -95,13 +100,14 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
         "event": "lego_tick_completed", "timestamp": datetime.now(timezone.utc).isoformat(),
         "severity": ("INFO" if paused and health == "MANUAL_RECONCILIATION_REQUIRED" else "ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED",
                                            "BROKER_REJECT_HALT", "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}
-                     else "WARNING" if health in {"AUTH_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
+                     else "WARNING" if health in {"AUTH_BACKOFF", "MARKET_DATA_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
                                                   "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW", "TOKEN_EXPIRY_WARNING", "RELEASE_EXPIRING", "RELEASE_EXPIRED", "TICK_DEFERRED", "OPEN_ORDER_BLOCKED"}
                      else "INFO"),
         "revision": os.environ.get("K_REVISION"),
         "candidate_hash": os.environ.get("LEGO_CANDIDATE_HASH"),
         "correlation_id": body.get("correlation_id"), "http_status": code,
         "pipeline_status": body.get("pipeline_status"), "business_status": health,
+        "retry_after": body.get("retry_after", decision.get("retry_after")),
         "duration_ms": body.get("duration_ms"), "environment": body.get("environment"),
         "mode": body.get("mode"), "active": body.get("active"),
         "decision": {key: decision.get(key) for key in
@@ -122,7 +128,7 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
     for phase_name, phase in (("tick", body), ("decision", decision),
                               ("recovery", body.get("recovery") or {}),
                               ("dispatch", body.get("dispatch") or {})):
-        if phase.get("error"):
+        if phase.get("error") or phase.get("pipeline_status") == "MARKET_DATA_BACKOFF":
             details = _broker_fields(phase)
             event["errors"].append({
                 "phase": phase_name,

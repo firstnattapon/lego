@@ -295,6 +295,13 @@ def _record_auth_failure(exc):
 
 def broker_error_details(exc: Exception) -> dict:
     """Allowlisted diagnostic metadata, never a request, message or account ID."""
+    from market_data_circuit import MarketDataCircuitOpen
+    if isinstance(exc, MarketDataCircuitOpen):
+        from types import SimpleNamespace
+        details = exc.state.get("broker_error") or {}
+        return broker_error_details(SimpleNamespace(
+            http_status=details.get("http_status"), error_code=details.get("code"),
+            request_id=details.get("request_id"), _lego_operation=details.get("operation")))
     out = {}
     status = _http_status(exc)
     if status is not None and 100 <= status <= 599:
@@ -302,7 +309,7 @@ def broker_error_details(exc: Exception) -> dict:
     code = str(getattr(exc, "error_code", "") or "").upper()
     known = _TRANSIENT_CODES | {
         "OPENAPI_PARAM_ERR", "INVALID_PARAMETER", "UNAUTHORIZED", "FORBIDDEN",
-        "INVALID_TOKEN", "TOKEN_EXPIRED", "SYSTEM_ERROR",
+        "INVALID_TOKEN", "TOKEN_EXPIRED", "SYSTEM_ERROR", "INTERNAL_ERROR",
     }
     if code in known:
         out["code"] = code
@@ -1165,27 +1172,46 @@ def validate_preview_funding(*, side: str, quantity: object,
     return {"buying_power": str(buying_power), "required_cash": str(required)}
 
 
+def market_data_scope(cfg: Config) -> str:
+    import market_data_circuit
+    return market_data_circuit.scope(
+        runtime_identity_fingerprint(), cfg.symbol, market_category())
+
+
 def fetch_snapshot(trade_client, data_client, cfg: Config) -> dict:
+    import market_data_circuit
+    managed = bool(tick_runtime.correlation_id())
+    key = market_data_scope(cfg) if managed else None
+    if managed:
+        market_data_circuit.guard(key)
     holdings = fetch_holdings(trade_client, cfg)
     category = market_category()
+
+    def read_quote():
+        tick_runtime.require_budget()
+        snap = data_client.market_data.get_snapshot(
+            cfg.symbol.upper(), category,
+            extend_hour_required=False, overnight_required=False).json()
+        price = _extract_price(snap, cfg.symbol)
+        if not (price and math.isfinite(price) and price > 0):
+            raise ValueError(f"snapshot price ไม่ถูกต้อง ({price}) — fail closed")
+        quote_time = _extract_quote_time(snap, cfg.symbol)
+        if quote_time is None:
+            raise ValueError(
+                "snapshot ไม่มี last_trade_time ที่ตรวจสอบได้ — fail closed ไม่ใช้เวลารับ response แทนเวลา quote")
+        return float(price), quote_time
+
     try:
-        snap = _retry_transient(
-            lambda: data_client.market_data.get_snapshot(
-                cfg.symbol.upper(), category,
-                extend_hour_required=False, overnight_required=False).json())
+        price, quote_time = (market_data_circuit.run(
+            key, read_quote, is_transient=is_transient_exception,
+            error_details=broker_error_details) if managed
+                             else _retry_transient(read_quote))
     except Exception as exc:
         if _http_status(exc) == 403:
             raise MarketDataForbidden(
                 "403 จาก market data — OpenAPI ต้องซื้อ subscription (LV1/LV2) แยกจาก "
                 "แอป Webull; ตรวจสิทธิ์ที่ /app/subscriptions/list") from exc
         raise
-    price = _extract_price(snap, cfg.symbol)
-    if not (price and price > 0):
-        raise ValueError(f"snapshot price ไม่ถูกต้อง ({price}) — fail closed")
-    quote_time = _extract_quote_time(snap, cfg.symbol)
-    if quote_time is None:
-        raise ValueError(
-            "snapshot ไม่มี last_trade_time ที่ตรวจสอบได้ — fail closed ไม่ใช้เวลารับ response แทนเวลา quote")
     return {
         "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "quote_time": quote_time.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
