@@ -98,32 +98,6 @@ def test_five_place_contract_from_older_data_still_loads_under_the_ceiling():
         _capability(decimal_precision=MAX_FRACTIONAL_DECIMAL_PLACES + 1)
 
 
-@pytest.mark.parametrize("increment,places", [
-    ("0.001", 3), ("0.00001", 5), ("0.5", 1), ("1", 0)])
-def test_a_stated_increment_fixes_the_places_instead_of_the_default(
-        increment, places):
-    """An increment finer than the places would build payloads no intent equals."""
-    capability = parse_instrument_capability(
-        _profile(fractional_increment=increment), "UBER")
-
-    assert capability.quantity_increment == Decimal(increment)
-    assert capability.decimal_precision == places
-
-
-@pytest.mark.parametrize("increment", [
-    "NaN", "Infinity", "-Infinity", "0", "-0.01"])
-def test_an_unusable_increment_is_still_a_config_error(increment):
-    """Deriving the places from it must not turn this into a TypeError."""
-    with pytest.raises(WebullConfigError, match="positive finite"):
-        _capability(quantity_increment=Decimal(increment))
-
-
-def test_a_stated_precision_wins_over_the_increment():
-    capability = _capability(quantity_increment=Decimal("0.00001"),
-                             decimal_precision=3)
-    assert capability.decimal_precision == 3
-
-
 # --- the order is built at the places the broker echoes ---------------------------
 
 def test_sell_payload_is_built_at_two_places_and_never_rounds_up():
@@ -531,3 +505,26 @@ def test_the_five_place_contract_against_a_two_place_broker_is_the_incident(
     identity = webull_io.runtime_identity_fingerprint()
     halt = operator_halt.status(identity, "UBER")
     assert halt["halted"] is True and halt["set_by"] == "system:order-recovery"
+
+
+def test_a_stated_finer_increment_is_refused_at_dispatch_and_never_reaches_the_broker(
+        monkeypatch):
+    """If the profile ever states an increment finer than the default places.
+
+    The engine then sizes at that increment while the payload is built at the
+    default places, so the order can never equal the committed intent. That must
+    end as NOT_PLACED before Preview, not as a Place the broker will echo back
+    at other places.
+    """
+    capability = _capability(quantity_increment=Decimal("0.00001"))
+    assert capability.decimal_precision == 2
+
+    body, row, stored, client, result, runtime = _replay(monkeypatch, capability, 2)
+
+    assert row["จำนวนสั่ง (หุ้น)"] == 1.53175
+    assert stored["status"] == "NOT_PLACED"
+    assert client.order_v3.preview_order.calls == []
+    assert client.order_v3.place_order.calls == []
+    assert stored.get("place_attempted") is not True
+    identity = webull_io.runtime_identity_fingerprint()
+    assert operator_halt.status(identity, "UBER").get("halted") is not True

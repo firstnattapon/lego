@@ -149,18 +149,10 @@ class InstrumentCapability:
                 _to_decimal(self.quantity_increment) if self.quantity_increment is not None
                 else FRACTIONAL_QUANTITY_INCREMENT
             )
-            if self.decimal_precision is not None:
-                resolved_prec = self.decimal_precision
-            elif (self.quantity_increment is not None
-                    and resolved_inc.is_finite() and resolved_inc > 0):
-                # A stated increment already fixes the places; falling back to
-                # the default beside a finer increment would build payloads the
-                # committed intent quantity can never equal. An unusable one is
-                # left to the check below, which names it.
-                resolved_prec = max(
-                    0, -resolved_inc.normalize().as_tuple().exponent)
-            else:
-                resolved_prec = DEFAULT_FRACTIONAL_DECIMAL_PLACES
+            resolved_prec = (
+                self.decimal_precision if self.decimal_precision is not None
+                else DEFAULT_FRACTIONAL_DECIMAL_PLACES
+            )
             min_notional = (
                 _to_decimal(self.minimum_notional_usd_if_authoritative)
                 if self.minimum_notional_usd_if_authoritative is not None
