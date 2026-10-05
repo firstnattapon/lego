@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import json
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,12 +12,19 @@ import pytest
 import lego_broker_smoke as smoke
 from lego_one_row import Config
 from lego_orders import PROD, UAT
-from webull_io import PROD_ENDPOINT, UAT_ENDPOINT
+from webull_io import PROD_ENDPOINT, UAT_ENDPOINT, InstrumentCapability
 
 
+# The env-default precision on purpose: the preview must follow the capability.
 CFG = Config(symbol="AAPL", fix_c=1000.0, diff=0.0,
              dna_code="bypass:100", strategy_id="shannon_demon_lego",
              decimal_precision=5)
+
+
+def _capability(**changes):
+    return InstrumentCapability(
+        symbol="AAPL", status="OC", category="US_STOCK", currency="USD",
+        lot_size=Decimal("1"), fractionable=True, **changes)
 
 
 class Response:
@@ -44,7 +52,8 @@ def broker(monkeypatch):
     monkeypatch.setattr(smoke, "clients_endpoint",
                         lambda *_a: UAT_ENDPOINT)
     monkeypatch.setattr(smoke, "fetch_holdings", lambda *_a: 2.0)
-    monkeypatch.setattr(smoke, "fetch_instrument_capability", lambda *_a: object())
+    monkeypatch.setattr(smoke, "fetch_instrument_capability",
+                        lambda *_a: _capability())
     monkeypatch.setattr(smoke, "fetch_buying_power", lambda *_a: 1000)
     monkeypatch.setattr(smoke, "fetch_open_orders", lambda *_a: [])
     monkeypatch.setattr(smoke, "fetch_snapshot", lambda *_a: {
@@ -80,6 +89,41 @@ def test_explicit_uat_preview_uses_safe_payload(broker, monkeypatch):
     assert order["side"] == "BUY"
     assert order["quantity"] == "1"
     assert len(order["client_order_id"]) == 32
+
+
+def test_preview_is_built_at_the_instrument_precision_not_the_env_default(
+        broker, monkeypatch):
+    payloads = []
+    monkeypatch.setattr(smoke, "preview_market_order",
+                        lambda _client, payload: payloads.append(payload) or True)
+
+    report = smoke.run_smoke(preview_side="BUY", preview_quantity="1.53")
+
+    assert report["ok"] is True
+    assert payloads[0][0]["quantity"] == "1.53"
+
+
+def test_preview_finer_than_the_instrument_precision_is_refused_not_truncated(
+        broker, monkeypatch):
+    """A Preview of 1.53 for a 1.53175 request would pass for the wrong order."""
+    monkeypatch.setattr(
+        smoke, "preview_market_order",
+        lambda *_a: pytest.fail("a non-representable quantity must not preview"))
+
+    with pytest.raises(smoke.SmokeRefusal, match="2 decimal places"):
+        smoke.run_smoke(preview_side="BUY", preview_quantity="1.53175")
+
+
+def test_preview_keeps_a_stated_five_place_capability(broker, monkeypatch):
+    payloads = []
+    monkeypatch.setattr(smoke, "fetch_instrument_capability", lambda *_a: _capability(
+        quantity_increment=Decimal("0.00001"), decimal_precision=5))
+    monkeypatch.setattr(smoke, "preview_market_order",
+                        lambda _client, payload: payloads.append(payload) or True)
+
+    smoke.run_smoke(preview_side="BUY", preview_quantity="1.53175")
+
+    assert payloads[0][0]["quantity"] == "1.53175"
 
 
 def test_preview_rejection_is_a_failed_smoke_not_a_submission(broker, monkeypatch):

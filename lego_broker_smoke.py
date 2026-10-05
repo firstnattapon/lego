@@ -13,6 +13,7 @@ import math
 import os
 import sys
 import uuid
+from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -86,7 +87,7 @@ def run_smoke(*, preview_side: str | None = None,
         raise SmokeRefusal(
             "configured account is not present in authenticated account list")
 
-    fetch_instrument_capability(trade_client, config.symbol)
+    capability = fetch_instrument_capability(trade_client, config.symbol)
     fetch_buying_power(trade_client)
 
     holdings = fetch_holdings(trade_client, config)
@@ -129,8 +130,18 @@ def run_smoke(*, preview_side: str | None = None,
             raise SmokeRefusal(
                 "SELL Preview quantity exceeds current broker holdings")
         client_order_id = ("legosmoke" + uuid.uuid4().hex)[:32]
+        # The places the decision path builds its orders with, not the
+        # LEGO_DECIMAL_PRECISION default: a Preview at another precision proves
+        # a payload shape production no longer sends.
+        preview_config = replace(
+            config, decimal_precision=capability.decimal_precision,
+            quantity_increment=float(capability.quantity_increment))
         payload = build_order_payload(
-            config, side, quantity, client_order_id)
+            preview_config, side, quantity, client_order_id)
+        if Decimal(payload[0]["quantity"]) != Decimal(str(quantity)):
+            raise SmokeRefusal(
+                "preview quantity needs more than the instrument's "
+                f"{capability.decimal_precision} decimal places")
         preview_ok = bool(preview_market_order(trade_client, payload))
         checks["preview_accepted"] = preview_ok
         report["ok"] = preview_ok

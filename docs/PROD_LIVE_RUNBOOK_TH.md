@@ -135,6 +135,7 @@ python ops.py bootstrap-auth --token-file PRIVATE_TOKEN --secret projects/lego-f
 ปิด new orders (ข้อ 6) แล้วคง worker ที่เข้าใจ schema v4 ไว้เพื่อ reconcile ต่อ — ไม่ย้อนกลับไป binary ที่ไม่รู้จักสถานะใหม่,
 ไม่ลบ outbox/fence, ไม่ refund quota (`LEGO_MAX_SESSION_ORDERS` นับก่อน Place และไม่คืน), ไม่ clear operator halt อัตโนมัติ
 หลัง order ค้างทั้งหมด terminal และ ledger ปิดครบ จึงออก release ใหม่
+ถ้า chain ถูกผูกกับ quantity contract ที่แคบลงแล้ว (เช่น 5→2 ตำแหน่ง) revision ที่ใช้ contract กว้างกว่าจะ commit ไม่ได้ (`CONFIG_ERROR`, ไม่มี order, DNA clock หยุด) — roll forward ไม่ roll back (`docs/UAT_20261005_INCIDENT_TH.md`)
 
 ## 10. ตาราง caps สำหรับ FIX_C=10000 (ตัวอย่าง ไม่ใช่คำแนะนำให้ใช้เงินจริงขนาดนี้)
 
