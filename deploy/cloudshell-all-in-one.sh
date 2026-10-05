@@ -20,6 +20,18 @@ set -Eeuo pipefail
 #   LEGO_MODE_OVERRIDE=trade \
 #   LEGO_ACTIVE_OVERRIDE=true \
 #   bash deploy/cloudshell-all-in-one.sh
+#
+# `python ops.py release-plan` prints every value above for the release you mean
+# to deploy (window end, caps, candidate hash, release authorization).
+# trade+active deployments also run it here and refuse on any BLOCK finding.
+#
+# Optional: ALERT_WEBHOOK_SECRET_OVERRIDE=<Secret Manager secret holding the HTTPS
+# receiver URL> so release/DNA/halt alerts are delivered (alerting.py).
+#
+# PRODUCTION is observe/inactive unless a real-money release is requested with
+# WEBULL_ENV_OVERRIDE=PROD LEGO_MODE_OVERRIDE=trade LEGO_ACTIVE_OVERRIDE=true. That
+# run first prints the acknowledgement for the exact release and exits 3; deploy by
+# running it again with LEGO_PROD_LIVE_ACK=<that value>. See docs/PROD_LIVE_RUNBOOK_TH.md.
 
 readonly PROJECT_ID="lego-firebase"
 readonly REGION="asia-southeast1"
@@ -55,11 +67,23 @@ readonly STALE_ACTION="${LEGO_STALE_ORDER_ACTION_OVERRIDE:-hold}"
 readonly STALE_SECONDS="${LEGO_STALE_ORDER_SECONDS_OVERRIDE:-300}"
 readonly CANCEL_GRACE="${LEGO_CANCEL_CONFIRM_GRACE_SECONDS_OVERRIDE:-120}"
 readonly SESSION_MODE="${LEGO_SESSION_KEY_MODE_OVERRIDE:-release_window}"
+readonly PROD_LIVE_ACK="${LEGO_PROD_LIVE_ACK:-}"
+readonly ALERT_WEBHOOK_SECRET="${ALERT_WEBHOOK_SECRET_OVERRIDE:-}"
 [[ "${ENVIRONMENT}" == UAT || "${ENVIRONMENT}" == PROD ]] || exit 1
-# Live activation is a separately reviewed release, never the default deploy path.
-if [[ "${ENVIRONMENT}" == PROD && ( "${MODE}" != observe || "${ACTIVE}" != false ) ]]; then
-    echo "Production rollout requires observe/inactive; live activation is a separate release." >&2
-    exit 1
+# Production is observe/inactive by default. Real-money activation (trade+active)
+# is a separately reviewed release: it needs the acknowledgement derived from the
+# exact release (python ops.py release-plan), is refused during the regular
+# session, and the runtime re-checks the same acknowledgement before any order.
+PROD_LIVE=false
+if [[ "${ENVIRONMENT}" == PROD ]]; then
+    if [[ "${MODE}" == observe && "${ACTIVE}" == false ]]; then
+        :
+    elif [[ "${MODE}" == trade && "${ACTIVE}" == true ]]; then
+        PROD_LIVE=true
+    else
+        echo "Production rollout must be observe/inactive, or trade/active (real money) with LEGO_PROD_LIVE_ACK." >&2
+        exit 1
+    fi
 fi
 
 step() {
@@ -283,6 +307,12 @@ if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
     python3 -c 'import sys; from datetime import datetime,timezone; from execution_limits import ExecutionLimits; x=ExecutionLimits.parse(sys.argv[1:]); sys.exit("trading window expired" if datetime.now(timezone.utc) >= x.end else 0)' \
         "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}"
 fi
+if [[ "${PROD_LIVE}" == true ]]; then
+    # The smoke tick at the end of this script is an ordinary tick. Outside the
+    # regular session it cannot decide or place anything.
+    python3 -c 'import sys; from market_clock import is_regular_session; sys.exit(1 if is_regular_session() else 0)' || \
+        fail "PROD live release is refused during the regular session; run it outside 09:30-16:00 New York"
+fi
 for limit_value in "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}"; do
     reject_comma "execution limit" "${limit_value}"
 done
@@ -417,6 +447,19 @@ do
         --project="${PROJECT_ID}" \
         --quiet >/dev/null
 done
+
+# Optional alert receiver. The URL often embeds a bearer credential, so it is a
+# Secret Manager secret (never an environment value) and only its name is given.
+if [[ -n "${ALERT_WEBHOOK_SECRET}" ]]; then
+    [[ "${ALERT_WEBHOOK_SECRET}" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || \
+        fail "ALERT_WEBHOOK_SECRET_OVERRIDE must be a Secret Manager secret name, not the URL"
+    require_enabled_secret_version "${ALERT_WEBHOOK_SECRET}"
+    gcloud secrets add-iam-policy-binding "${ALERT_WEBHOOK_SECRET}" \
+        --member="serviceAccount:${RUNTIME_SA}" \
+        --role="roles/secretmanager.secretAccessor" \
+        --project="${PROJECT_ID}" \
+        --quiet >/dev/null
+fi
 
 # -----------------------------------------------------------------------------
 # 5. IAM
@@ -615,6 +658,43 @@ print(release_binding_for(env))
 )"
 require_sha256 "computed release binding" "${EXPECTED_RELEASE_BINDING}"
 
+# Judge the whole release before anything is deployed: complete sessions left in
+# the approval window, DNA horizon, caps against the principal and, for
+# production, the acknowledgement. A clean environment on purpose: the plan must
+# see exactly the values the function will receive, never ambient LEGO_* values
+# from this shell. The account id is piped in and never printed.
+PLAN_JSON=""
+if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
+    PLAN_STATUS=0
+    PLAN_JSON="$(
+        gcloud secrets versions access latest \
+            --secret="${ACCOUNT_ID_SECRET}" \
+            --project="${PROJECT_ID}" | \
+        env -i PATH="${PATH}" HOME="${HOME:-/tmp}" \
+            WEBULL_ENV="${ENVIRONMENT}" LEGO_SYMBOL="${SYMBOL}" LEGO_FIX_C="${FIX_C}" \
+            LEGO_DIFF="${DIFF}" LEGO_DNA_BUNDLE="${DNA_BUNDLE}" LEGO_MODE="${MODE}" \
+            LEGO_ACTIVE="${ACTIVE}" LEGO_ALLOW_FRACTIONAL="${ALLOW_FRACTIONAL}" \
+            LEGO_MAX_ORDER_QUANTITY="${MAX_ORDER_QUANTITY}" \
+            LEGO_MAX_ORDER_NOTIONAL_USD="${MAX_ORDER_NOTIONAL}" \
+            LEGO_MAX_SESSION_ORDERS="${MAX_SESSION_ORDERS}" \
+            LEGO_TRADING_WINDOW_END="${TRADING_WINDOW_END}" \
+            LEGO_STALE_ORDER_ACTION="${STALE_ACTION}" LEGO_STALE_ORDER_SECONDS="${STALE_SECONDS}" \
+            LEGO_CANCEL_CONFIRM_GRACE_SECONDS="${CANCEL_GRACE}" \
+            LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER=1 LEGO_SESSION_KEY_MODE="${SESSION_MODE}" \
+            python3 ops.py release-plan --account-id-stdin \
+                --candidate-hash "${CANDIDATE_HASH}" --enforce
+    )" || PLAN_STATUS=$?
+    [[ -n "${PLAN_JSON}" ]] || fail "release-plan produced no report (status ${PLAN_STATUS})"
+    printf '%s' "${PLAN_JSON}" | python3 -c '
+import json, sys
+for finding in json.load(sys.stdin)["assessment"]["findings"]:
+    if finding["severity"] != "INFO":
+        print("  [%s] %s: %s" % (finding["severity"], finding["id"], finding["message"]))
+'
+    (( PLAN_STATUS == 0 )) || \
+        fail "release horizon/limits check failed; fix the BLOCK findings above (python ops.py release-plan)"
+fi
+
 ORDER_SUBMISSION_EXPECTED="false"
 if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
     [[ -n "${EXPECTED_CANDIDATE_HASH}" ]] || \
@@ -627,6 +707,29 @@ if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
 elif [[ -n "${RELEASE_AUTHORIZATION_OVERRIDE}" \
         && "${RELEASE_AUTHORIZATION_OVERRIDE}" != "${EXPECTED_RELEASE_BINDING}" ]]; then
     fail "release authorization ไม่ตรงกับ environment/account/candidate นี้"
+fi
+
+if [[ "${PROD_LIVE}" == true ]]; then
+    EXPECTED_ACKS="$(printf '%s' "${PLAN_JSON}" | python3 -c '
+import json, sys
+acks = json.load(sys.stdin).get("prod_live_acks", {})
+print("\n".join(value for value in acks.values() if value))
+')"
+    [[ -n "${EXPECTED_ACKS}" ]] || \
+        fail "this PRODUCTION release cannot be acknowledged; fix the findings above"
+    if [[ -z "${PROD_LIVE_ACK}" ]]; then
+        echo
+        echo "REAL-MONEY RELEASE. Review every value above (symbol, caps, window end, funding mode)."
+        echo "To deploy exactly this release, run the same command with:"
+        while IFS= read -r expected_ack; do
+            echo "  LEGO_PROD_LIVE_ACK=${expected_ack}"
+        done <<<"${EXPECTED_ACKS}"
+        echo "(-prefunded-: the account already holds the position; -initial-funding-: the loose one-off funding release)"
+        exit 3
+    fi
+    grep -Fxq -- "${PROD_LIVE_ACK}" <<<"${EXPECTED_ACKS}" || \
+        fail "LEGO_PROD_LIVE_ACK does not match this release (it is bound to its caps, window and binding)"
+    echo "PROD live acknowledgement verified."
 fi
 
 if [[ "${ENVIRONMENT}" == PROD && -z "${TOKEN_SECRET_RESOURCE_OVERRIDE}" ]]; then
@@ -674,6 +777,11 @@ if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
 else
     echo "Token source   : broker HMAC/token policy (no token secret requested)"
 fi
+if [[ -n "${ALERT_WEBHOOK_SECRET}" ]]; then
+    echo "Alert webhook  : Secret Manager (${ALERT_WEBHOOK_SECRET})"
+else
+    echo "Alert webhook  : NOT configured; release/DNA/halt alerts then depend on Cloud Monitoring policies"
+fi
 
 # -----------------------------------------------------------------------------
 # 8. DEPLOY DATABASE RULES + CLOUD FUNCTION GEN2
@@ -696,8 +804,14 @@ ENV_VARS+=",LEGO_STALE_ORDER_ACTION=${STALE_ACTION},LEGO_STALE_ORDER_SECONDS=${S
 if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
     ENV_VARS="${ENV_VARS},WEBULL_TOKEN_SECRET=${TOKEN_SECRET_RESOURCE}"
 fi
+if [[ "${PROD_LIVE}" == true ]]; then
+    ENV_VARS="${ENV_VARS},LEGO_PROD_LIVE_ACK=${PROD_LIVE_ACK}"
+fi
 
 SECRET_BINDINGS="WEBULL_APP_KEY=${APP_KEY_SECRET}:latest,WEBULL_APP_SECRET=${APP_SECRET_SECRET}:latest,WEBULL_ACCOUNT_ID=${ACCOUNT_ID_SECRET}:latest"
+if [[ -n "${ALERT_WEBHOOK_SECRET}" ]]; then
+    SECRET_BINDINGS+=",ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_SECRET}:latest"
+fi
 
 gcloud functions deploy "${FUNCTION_NAME}" \
     --gen2 \

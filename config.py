@@ -177,6 +177,10 @@ class DeploymentProfile:
     strategy_binding: str = ""
     session_key_mode: str = "release_window"
     recovery_policy: RecoveryPolicy = RecoveryPolicy()
+    # Production only: the acknowledgement of the exact release (see
+    # release_horizon.prod_live_ack). Deliberately NOT part of
+    # expected_release_binding, so existing UAT releases keep their binding.
+    prod_live_ack: str = ""
 
     def __post_init__(self) -> None:
         if self.session_key_mode not in {"market_day", "release_window"}:
@@ -230,8 +234,25 @@ class RuntimeConfig:
     deployment: DeploymentProfile
 
     @property
+    def prod_live_gate_open(self) -> bool:
+        """Real money needs the operator to echo the ack derived from this release.
+
+        The release binding alone is a fingerprint anyone can recompute, and it
+        is checked by the runtime but not by every deploy path (deploy.ps1 and a
+        plain `gcloud` deploy never looked at it). Enforcing the ack here makes
+        the gate independent of how the service was deployed. Non-production
+        environments are unaffected.
+        """
+        if self.deployment.environment != "PROD":
+            return True
+        from release_horizon import prod_live_gate_open
+        return prod_live_gate_open(self)
+
+    @property
     def allows_new_broker_mutation(self) -> bool:
-        return self.operator.allows_new_intents and self.deployment.release_is_authorized
+        return (self.operator.allows_new_intents
+                and self.deployment.release_is_authorized
+                and self.prod_live_gate_open)
 
 
 def _load_bundle(env: Mapping[str, str]) -> DNABundle:
@@ -296,6 +317,7 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         }, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
         session_key_mode=env.get("LEGO_SESSION_KEY_MODE", "release_window"),
         recovery_policy=recovery_policy,
+        prod_live_ack=env.get("LEGO_PROD_LIVE_ACK", "").strip(),
     )
     return RuntimeConfig(operator=operator, deployment=deployment)
 

@@ -4,7 +4,7 @@
 
 ## Policy ที่ใช้
 
-UAT profile อยู่ใน `deploy/uat-continuous.env.example`: UBER, FIX_C=10000, DIFF=25, fractional=true, trade/active, slot=900s, 30 attempts ต่อ market day, quantity cap=1000 และ estimated notional cap=36000 USD ตาม UAT เดิม ไม่ใช่วงเงิน Production.
+UAT profile อยู่ใน `deploy/uat-continuous.env.example`: UBER, FIX_C=10000, DIFF=25, fractional=true, trade/active, slot=900s, DNA bundle `strategy.uat-continuous.json` (`bypass:6500`, origin เดิม, จบ 2027-09-07T19:30Z), 26 attempts ต่อ market day (= จำนวน slot ต่อ session), quantity cap=30 และ estimated notional cap=1,500 USD (15% ของ principal) ไม่ใช่วงเงิน Production. ค่าเดิม 30/1000/36000 ไม่เคย bind (order จริงสูงสุด ~86 USD) จึงถูกแทนที่ — ที่มาและวิธีเลือก cap ดู `docs/AUDIT_20261005_TH.md`. DNA ใหม่ = `config_hash`/chain ใหม่ (strategy ไม่เปลี่ยน) และเริ่มจาก holdings จริงของบัญชี.
 
 | Config | ค่าเริ่มต้น runtime | UAT profile |
 |---|---|---|
@@ -13,7 +13,8 @@ UAT profile อยู่ใน `deploy/uat-continuous.env.example`: UBER, FIX_C=
 | `LEGO_CANCEL_CONFIRM_GRACE_SECONDS` | 120 | 120 |
 | `LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER` | 1 | 1 |
 | `LEGO_SESSION_KEY_MODE` | `release_window` (legacy compatibility) | `market_day` |
-| `LEGO_MAX_SESSION_ORDERS` | ต้องระบุเมื่อเปิด new orders | 30 |
+| `LEGO_MAX_SESSION_ORDERS` | ต้องระบุเมื่อเปิด new orders | 26 |
+| `LEGO_MAX_ORDER_QUANTITY` / `LEGO_MAX_ORDER_NOTIONAL_USD` | ต้องระบุเมื่อเปิด new orders | 30 / 1500 |
 | `LEGO_TRADING_WINDOW_END` | ต้องระบุเมื่อเปิด new orders | เวลาที่เจ้าของบัญชีอนุมัติใหม่ |
 
 `LEGO_ORDER_TIMEOUT_SECONDS` เป็น configuration error พร้อมคำแนะนำย้ายค่า ไม่มี alias ที่เปลี่ยน policy เงียบ ๆ. Internal budget คง 35s และ Cloud Run timeout 45s. หลัง Place อ่าน detail ทันทีได้ไม่เกินหนึ่งครั้ง จากนั้น tick ถัดไปรับงานต่อ. Safe deadline deferral ตอบ 200/TICK_DEFERRED; configuration/persistence failures ยังคง 5xx. Auth circuit ไม่กลบ persistence failure ให้กลายเป็น success.
@@ -38,7 +39,7 @@ Zero-fill cancel ไม่สร้าง cashflow. Partial fills ใช้ cumu
 4. Counter ใช้ `XNYS:YYYY-MM-DD` จาก market clock นิวยอร์ก แยก release expiry. Migration ยกยอดอย่างอนุรักษนิยมด้วยค่าสูงกว่าระหว่าง legacy/daily; reservation นับก่อน Place และไม่ refund เมื่อ cancel/crash. ห้ามเปลี่ยน release/DNA/config เพื่อคืน quota วันเดิม.
 5. ตรวจ candidate manifest, revision/image digest, config hash, secret versions และ runtime service account. ห้ามให้ worker รุ่นก่อน v4 รับ traffic หรือ tagged URL หลัง cutover. ลบ old revision tags/ปิด old scheduler endpoints และตรวจว่าไม่มี worker เก่ารันอยู่ก่อนเปิดใหม่. Runtime v4 ปฏิเสธ intent schema ที่ใหม่กว่าตน; marker นี้ไม่อาจทำให้ binary รุ่นเก่าที่มีสิทธิ์ admin เรียนรู้ schema ใหม่ได้ จึงต้องบังคับที่ rollout/traffic/IAM ด้วย.
 6. สร้าง binding ด้วย `python ops.py release-binding` ภายใต้ env/profile ที่จะใช้จริง. Deploy script เรียก `config.release_binding_for` ตัวเดียวกัน. Binding v4 ครอบคลุม account/environment/candidate/symbol/strategy/DNA/fractional/limits/session/cancel policy. v3 binding เปิด new orders ไม่ได้.
-7. ระบุ approval expiry ใหม่ที่ครอบคลุมช่วงทดสอบ และใช้ `deploy/continuous-uat.sh` เฉพาะเมื่อ cutover หลักฐานครบ. Wrapper กำหนด UAT policy ที่ตกลงและต้องมี EXPECTED_CANDIDATE_HASH, LEGO_RELEASE_AUTHORIZATION_OVERRIDE, LEGO_TRADING_WINDOW_END_OVERRIDE. Deploy script มี smoke invocation ซึ่งอาจ Place ใน trade/active ที่ได้รับอนุญาตแล้ว.
+7. วางแผน release ด้วย `python ops.py release-plan` (ดูหัวข้อ "ต่ออายุ release UAT" ด้านล่าง) แล้วใช้ `deploy/continuous-uat.sh` เฉพาะเมื่อ cutover หลักฐานครบ. Wrapper กำหนด UAT policy ที่ตกลงและต้องมี EXPECTED_CANDIDATE_HASH, LEGO_RELEASE_AUTHORIZATION_OVERRIDE, LEGO_TRADING_WINDOW_END_OVERRIDE ซึ่ง release-plan พิมพ์ให้ครบ. Deploy script รัน release-plan ซ้ำก่อน deploy trade/active และไม่ deploy เมื่อมี BLOCK (window หมด/สั้นกว่าสอง session, DNA จบก่อน window, caps ใช้ไม่ได้). Deploy script มี smoke invocation ซึ่งอาจ Place ใน trade/active ที่ได้รับอนุญาตแล้ว.
 8. ตรวจ actual settings ที่ deploy: max instances=1, concurrency=1, timeout=45, Scheduler retry=0, cadence ทุกนาที, traffic 100% ไป revision เดียว ไม่มี tag ไป worker เก่า. `tools/verify_deployment.py` ตรวจ captured JSON แบบ read-only. เก็บผลและ source captures แบบ private.
 
 ```bash
@@ -50,9 +51,32 @@ python tools/verify_deployment.py --service private-service.json --scheduler pri
 
 หาก service capture ระบุ image เป็น tag ยังตรวจ image digest ไม่ผ่าน ต้องเก็บ revision/image provenance จริงเพิ่มเติม ห้ามแทนด้วย hash ที่เดา. ห้าม commit captures ที่มี environment secrets.
 
+## ต่ออายุ release UAT (ก่อนหมด ≥ 48 ชม.)
+
+Window, DNA และ token หมดอายุเงียบ ๆ ได้ (เหตุการณ์ 1–5 ตุลาคม: window 24 ชม. ครอบ session เดียวแล้ว order ถูกบล็อกสี่วัน) จึงไม่มีอะไรต่ออายุเอง และทุก release ต้องผ่าน `release-plan` ก่อน deploy. จาก checkout ที่สะอาดของ commit ที่ตรวจแล้ว:
+
+```bash
+python ops.py status                         # ไม่มี inflight, operator halt หรือ fence ค้าง
+PLAN="$(gcloud secrets versions access latest --secret=webull-account-id-uat --project=lego-firebase \
+  | python ops.py release-plan --env-file deploy/uat-continuous.env.example --account-id-stdin \
+      --window-sessions 10 --enforce)"
+jq -r '.assessment.findings[] | select(.severity != "INFO") | "[\(.severity)] \(.id): \(.message)"' <<<"$PLAN"   # หยุดเมื่อมี BLOCK
+export EXPECTED_CANDIDATE_HASH="$(jq -r .deploy_env.EXPECTED_CANDIDATE_HASH <<<"$PLAN")" \
+       LEGO_RELEASE_AUTHORIZATION_OVERRIDE="$(jq -r .deploy_env.LEGO_RELEASE_AUTHORIZATION_OVERRIDE <<<"$PLAN")" \
+       LEGO_TRADING_WINDOW_END_OVERRIDE="$(jq -r .deploy_env.LEGO_TRADING_WINDOW_END_OVERRIDE <<<"$PLAN")"
+ALERT_WEBHOOK_SECRET_OVERRIDE=<secret> bash deploy/continuous-uat.sh
+```
+
+- `--window-sessions N` สิ้นสุดที่ปิดตลาดของ session ที่ N (หรือ `--window-end 2026-10-16T20:00:00Z`); ต้องครอบ ≥ 2 session สมบูรณ์
+- `release-plan` ไม่เขียน/ไม่ส่งอะไร และไม่พิมพ์ account id; `--enforce` exit 1 เมื่อ BLOCK: window หมดแล้ว/สั้นกว่าสอง session,
+  DNA จบก่อน window, caps อ่านไม่ได้. WARN (เช่น notional > 25% ของ principal, orders > slot ต่อ session) ต้องอ่านและตัดสินใจ
+- `--reference-price <ราคา> --recommended-limits` แสดง caps ที่คำนวณจาก principal (UAT: notional 15%, qty 1.3 เท่า, orders = slot ต่อ session) เทียบกับ policy file
+- release ใหม่ทุกครั้งต้องคำนวณ binding ใหม่ (window end อยู่ใน policy hash) — ห้ามนำ `LEGO_RELEASE_AUTHORIZATION` เก่ามาใช้
+- DNA ปัจจุบัน (`bypass:6500`) จบ 2027-09-07: ต้องเปลี่ยน bundle (chain ใหม่) ก่อนถึงวันนั้น ดู `docs/PROD_LIVE_RUNBOOK_TH.md` ข้อ 8; release-plan บล็อกเมื่อ DNA จบก่อน window
+
 ## Token และ Production observe
 
-Production profile `deploy/prod-observe.env.example` ใช้ PROD/observe/inactive และเว้น monetary limits/expiry ไว้ให้อนุมัติแยก. Runtime ต้อง hydrate durable token secret ที่ ready ก่อนสร้าง PROD SDK client จึงไม่เริ่ม interactive OTP ระหว่าง cold start. ก่อน new orders ยังต้องผ่าน authenticated account/market-data/capability/positions/buying-power/open-orders reads เดิมครบ.
+Production profile `deploy/prod-observe.env.example` ใช้ PROD/observe/inactive และเว้น monetary limits/expiry ไว้ให้อนุมัติแยก. เส้นทางเงินจริงเป็น release แยกที่ผ่าน acknowledgement (`deploy/prod-canary.env.example`, `docs/PROD_LIVE_RUNBOOK_TH.md`) และยัง NO-GO. Runtime ต้อง hydrate durable token secret ที่ ready ก่อนสร้าง PROD SDK client จึงไม่เริ่ม interactive OTP ระหว่าง cold start. ก่อน new orders ยังต้องผ่าน authenticated account/market-data/capability/positions/buying-power/open-orders reads เดิมครบ.
 
 Token invalid/expired หรือ Secret Manager unavailable ให้ปิด new orders และตรวจ alert. ผู้ดูแลออก/ยืนยัน token ผ่าน Webull workflow ที่รองรับ แล้วนำไฟล์ token รูปแบบ token/expiry/NORMAL ไปยังพื้นที่ private. ใช้ `python ops.py bootstrap-auth --help` เพื่อดู dry-run/apply สำหรับเพิ่ม secret version; ไม่มี token value ใน command line หรือ PR. เปลี่ยน version ที่ deployment ใช้, cold restart และพิสูจน์ authenticated read ใหม่. Token lifecycle อาจต้องยืนยันตัวตนอีกครั้ง ไม่ต่ออายุอัตโนมัติจากการมี Secret Manager เพียงอย่างเดียว.
 
@@ -62,9 +86,9 @@ Token invalid/expired หรือ Secret Manager unavailable ให้ปิด
 python tools/monitoring_config.py --service lego-tick-uat --channel projects/PROJECT/notificationChannels/CHANNEL_ID --output-dir private-monitoring
 ```
 
-คำสั่งนี้ render JSON เท่านั้น: log metric ของ `lego_tick_completed`, log-match health policy และ missing ticks 180s (3 รอบของ cadence 60s). ผู้ดูแลสร้าง metric/policies ใน Cloud Monitoring จากไฟล์เหล่านี้แล้วตรวจ notification channel ปลายทางจริง. ไม่บังคับ ALERT_WEBHOOK_URL. ต้องมี tick เพื่อเริ่ม time series ก่อนทำ absence drill; metric ที่ไม่เคยมีข้อมูลไม่ใช่หลักฐานว่าทดสอบ absence แล้ว.
+คำสั่งนี้ render JSON เท่านั้น: log metric ของ `lego_tick_completed`, log-match health policy (severity ERROR, AUTH_BACKOFF, OPERATOR_HALT, OPEN_ORDER_BLOCKED), horizon policy (release/DNA/token — rate limit 6 ชม. และ auto-close 24 ชม. เพื่อไม่ page ทุก tick ระหว่างรอต่ออายุ) และ missing ticks 180s (3 รอบของ cadence 60s). ผู้ดูแลสร้าง metric/policies ใน Cloud Monitoring จากไฟล์เหล่านี้แล้วตรวจ notification channel ปลายทางจริง. Webhook ไม่บังคับ แต่ถ้าต้องการให้ release/DNA/halt alert ถึงคน ให้เก็บ URL ปลายทางใน Secret Manager แล้วตั้ง `ALERT_WEBHOOK_SECRET_OVERRIDE=<ชื่อ secret>` ตอน deploy (script ผูกเป็น `ALERT_WEBHOOK_URL` และให้สิทธิ์ runtime service account; URL อาจมี credential จึงไม่ใส่เป็น env value). ต้องมี tick เพื่อเริ่ม time series ก่อนทำ absence drill; metric ที่ไม่เคยมีข้อมูลไม่ใช่หลักฐานว่าทดสอบ absence แล้ว.
 
-Health ใช้ business status และ severity ไม่ใช้ HTTP 200 เป็นหลักฐานปกติ. ครอบคลุม manual halt, cancel unresolved ที่เกิน grace, reconciliation overdue, ledger/fee anomaly, token/release/DNA warning และ tick absence. ทดลอง halt/resume, secret invalid, missing tick และบันทึก incident ID/time/received time/channel โดยไม่ใส่ข้อมูลบัญชีลับ. Warning DNA เปรียบเทียบ remaining slots กับสอง sessions ถัดไปและรายงาน end time ตาม calendar; ไม่วน DNA และไม่ต่อ release เอง.
+Health ใช้ business status และ severity ไม่ใช้ HTTP 200 เป็นหลักฐานปกติ. ครอบคลุม manual halt, cancel unresolved ที่เกิน grace, reconciliation overdue, ledger/fee anomaly, token/release/DNA warning และ tick absence. ทดลอง halt/resume, secret invalid, missing tick และบันทึก incident ID/time/received time/channel โดยไม่ใส่ข้อมูลบัญชีลับ. Warning DNA เปรียบเทียบ remaining slots กับสอง sessions ถัดไปและรายงาน end time ตาม calendar; ไม่วน DNA และไม่ต่อ release เอง. `RELEASE_EXPIRING` เตือนล่วงหน้า 48 ชม. (พร้อม `release_sessions_remaining`); `RELEASE_EXPIRED` และ `DNA_EXHAUSTED` เป็น severity NOTICE (สถานะที่รู้อยู่แล้ว ไม่ใช่ WARNING ทุก tick) แต่ webhook ส่งเวลาสิ้นสุดจริงหนึ่งครั้งต่อวัน (cooldown durable 24 ชม. ต่อ kind+scope).
 
 Private path `webull_lego_execution_transitions/{chain}/{run}/r_{revision}` เป็น immutable event. State transaction เก็บ pending event แล้ว replay ด้วย transaction ที่ห้ามทับข้อมูลเดิม ก่อน mutation ถัดไป. Event มี intent/transition revision, candidate, deployment revision, release binding และ state fields ที่อนุญาต. Mirror failure ไม่ทิ้ง pending; backlog เต็มหยุดเพื่อซ่อม. Rules ปฏิเสธ public/reader access; Admin SDK ยังต้องคุม IAM แยก. ไม่บันทึก credentials หรือ raw broker payload ใน telemetry.
 
@@ -86,7 +110,7 @@ Local: `python -m pytest -q` จะ skip emulator เมื่อไม่ได
 
 UAT ต้องผ่านสอง regular sessions ครบ พร้อม cold restart/day rollover, fractional profile, BUY และ SELL positive fill, initial funding และ ledger closure, fault injection ไม่มี duplicate Place/ledger/fence release ผิด, alert delivery และไม่มีการปลด fence ด้วยมือระหว่าง endurance. Whole-share control ทำแยกหลัง fence ว่าง; fractional=false อย่างเดียวไม่รับประกันเกิด whole-share order. Cancel-only หรือ UAT ไม่มี fill ให้ BLOCKED.
 
-PROD observe/inactive อย่างน้อยสอง regular sessions ต้องมี authenticated reads, clock/token/monitoring evidence และไม่มี new-order mutation. การเปิดเงินจริงต้อง release authorization ใหม่พร้อมวงเงินต่อคำสั่ง, daily order count และ approval window. ไม่ใช้ UAT caps เป็นค่าเริ่มต้น.
+PROD observe/inactive อย่างน้อยสอง regular sessions ต้องมี authenticated reads, clock/token/monitoring evidence และไม่มี new-order mutation. การเปิดเงินจริงต้อง release authorization ใหม่พร้อมวงเงินต่อคำสั่ง, daily order count, approval window และ `LEGO_PROD_LIVE_ACK` ที่ผูกกับ release นั้น (runtime ปิดเองถ้าไม่มี/ไม่ตรง). ไม่ใช้ UAT caps เป็นค่าเริ่มต้น. ขั้นตอนและเงื่อนไขอยู่ใน `docs/PROD_LIVE_RUNBOOK_TH.md`.
 
 Rollback: ปิด new orders แล้วคง worker ที่เข้าใจ cancel/audit schema v4 เพื่อ reconcile ต่อ. ไม่ย้อนกลับไป binary ที่ไม่รู้จักสถานะใหม่ ไม่ลบ outbox/fence ไม่ refund quota และไม่ clear operator halt อัตโนมัติ.
 

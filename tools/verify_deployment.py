@@ -46,7 +46,16 @@ def verify(service, scheduler, *, candidate, revision, image, function=None, rev
         checks["function_identity"] = bool(service.get("metadata", {}).get("name")) and function_config.get("service", "").split("/")[-1] == service["metadata"]["name"]
         checks["scheduler_target"] = bool(function_config.get("uri")) and scheduler.get("httpTarget", {}).get("uri") == function_config["uri"]
     if env.get("WEBULL_ENV") == "PROD":
-        checks["production_observe"] = env.get("LEGO_MODE") == "observe" and env.get("LEGO_ACTIVE") == "false"
+        observe = env.get("LEGO_MODE") == "observe" and env.get("LEGO_ACTIVE") == "false"
+        # A real-money revision must carry everything the runtime requires to trade:
+        # the four execution limits, the release authorization and the acknowledgement.
+        # Whether they are *correct* needs the account id, so it is not verifiable here.
+        live = (env.get("LEGO_MODE") == "trade" and env.get("LEGO_ACTIVE") == "true"
+                and all(env.get(name) for name in (
+                    "LEGO_PROD_LIVE_ACK", "LEGO_RELEASE_AUTHORIZATION", "LEGO_MAX_ORDER_QUANTITY",
+                    "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
+                    "LEGO_TRADING_WINDOW_END")))
+        checks["production_mode"] = observe or live
     config_hash = hashlib.sha256(json.dumps(sorted(containers[0].get("env", []), key=lambda v: v["name"]),
                                           sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks,

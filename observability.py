@@ -85,6 +85,33 @@ def business_status(body: dict, http_status: int) -> str:
     return decision.get("pipeline_status") or body.get("pipeline_status", "UNKNOWN")
 
 
+ERROR_STATUSES = frozenset({
+    "ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED", "BROKER_REJECT_HALT",
+    "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED", "EXECUTION_LIMIT_BLOCKED",
+    "RECONCILIATION_OVERDUE"})
+WARNING_STATUSES = frozenset({
+    "AUTH_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
+    "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_LOW", "TOKEN_EXPIRY_WARNING",
+    "RELEASE_EXPIRING", "TICK_DEFERRED", "OPEN_ORDER_BLOCKED"})
+# A finished horizon is a steady state that repeats every minute until an operator
+# deploys the next release. It is alerted by the horizon webhook and the
+# horizon-policy (alerting.notify_tick, tools/monitoring_config), not by one
+# WARNING line per tick: 2,748 of them in four days buried the real warnings.
+NOTICE_STATUSES = frozenset({"RELEASE_EXPIRED", "DNA_EXHAUSTED"})
+
+
+def severity_for(health: str, *, paused: bool = False) -> str:
+    if paused and health == "MANUAL_RECONCILIATION_REQUIRED":
+        return "INFO"
+    if health in ERROR_STATUSES:
+        return "ERROR"
+    if health in WARNING_STATUSES:
+        return "WARNING"
+    if health in NOTICE_STATUSES:
+        return "NOTICE"
+    return "INFO"
+
+
 def emit_tick(body: dict, code: int, *, request=None) -> None:
     health = business_status(body, code)
     body["business_status"] = health
@@ -93,11 +120,7 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
     paused = any(phase.get("reconciliation_paused") for phase in phases)
     event = {
         "event": "lego_tick_completed", "timestamp": datetime.now(timezone.utc).isoformat(),
-        "severity": ("INFO" if paused and health == "MANUAL_RECONCILIATION_REQUIRED" else "ERROR" if health in {"ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED",
-                                           "BROKER_REJECT_HALT", "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}
-                     else "WARNING" if health in {"AUTH_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
-                                                  "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_EXHAUSTED", "DNA_LOW", "TOKEN_EXPIRY_WARNING", "RELEASE_EXPIRING", "RELEASE_EXPIRED", "TICK_DEFERRED", "OPEN_ORDER_BLOCKED"}
-                     else "INFO"),
+        "severity": severity_for(health, paused=paused),
         "revision": os.environ.get("K_REVISION"),
         "candidate_hash": os.environ.get("LEGO_CANDIDATE_HASH"),
         "correlation_id": body.get("correlation_id"), "http_status": code,

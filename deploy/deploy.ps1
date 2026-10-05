@@ -20,6 +20,11 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $DatabaseUrl.StartsWith('https://')) { throw 'DatabaseUrl must be HTTPS' }
 if ($Mode -notin @('observe','trade')) { throw 'Mode must be observe or trade' }
+# Real-money activation needs the acknowledgement flow, which this script does not
+# implement. It used to accept PROD + trade + active with only a release binding.
+if ($Environment -eq 'PROD' -and ($Mode -ne 'observe' -or $Active)) {
+  throw 'PROD is deployed here as observe/inactive only. Real-money activation: deploy/cloudshell-all-in-one.sh with LEGO_PROD_LIVE_ACK (docs/PROD_LIVE_RUNBOOK_TH.md).'
+}
 if ($Mode -eq 'trade' -and $Active) {
   & python -c 'import sys; from execution_limits import ExecutionLimits; from datetime import datetime,timezone; x=ExecutionLimits.parse(sys.argv[1:]); sys.exit("trading window expired" if datetime.now(timezone.utc) >= x.end else 0)' $MaxOrderQuantity $MaxOrderNotionalUsd $MaxSessionOrders $TradingWindowEnd
   if ($LASTEXITCODE -ne 0) { throw 'Valid explicit execution limits required for trade+active' }
