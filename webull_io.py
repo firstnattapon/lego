@@ -87,11 +87,12 @@ class MarketDataForbidden(RuntimeError):
 MAX_FRACTIONAL_DECIMAL_PLACES = 5
 # Nothing here reads a quantity precision from the instrument profile, so this
 # is an assumption, not a broker contract. UAT reported a 5-place order back at
-# 2 places twice
-# (24 Sep 0.31721 -> filled 0.32, 5 Oct 1.53175 -> Order Detail total 1.53), and
-# validate_evidence correctly refuses a broker total that differs from the
-# submitted payload. Ordering at 2 places keeps payload and broker total equal
-# either way; the first live fractional order after the change confirms it.
+# 2 places twice (24 Sep 0.31721 -> filled 0.32, 5 Oct 1.53175 -> Order Detail
+# total 1.53) while the 5 Oct position fell by the full 1.53175, so it may be
+# the report that rounds, not the trade. validate_evidence correctly refuses a
+# broker total that differs from the submitted payload; ordering at 2 places
+# keeps the two equal either way, and the first live fractional order after the
+# change confirms it.
 DEFAULT_FRACTIONAL_DECIMAL_PLACES = 2
 MINIMUM_FRACTIONAL_TRADE_USD = Decimal("1.0")
 FRACTIONAL_QUANTITY_INCREMENT = Decimal(1).scaleb(-DEFAULT_FRACTIONAL_DECIMAL_PLACES)
@@ -185,6 +186,16 @@ class InstrumentCapability:
         if not isinstance(resolved_prec, int) or resolved_prec < 0 or resolved_prec > MAX_FRACTIONAL_DECIMAL_PLACES:
             raise WebullConfigError(
                 f"decimal_precision must be an int between 0 and {MAX_FRACTIONAL_DECIMAL_PLACES}")
+        if self.fractionable:
+            # The engine sizes in steps of quantity_increment and the payload is
+            # built at decimal_precision places, so a step that needs more places
+            # can never equal the quantity it committed. Refused here, before any
+            # decision, so the chain is never bound to a contract like that.
+            step_places = max(0, -resolved_inc.normalize().as_tuple().exponent)
+            if step_places > resolved_prec:
+                raise WebullConfigError(
+                    f"quantity_increment {resolved_inc} needs {step_places} decimal "
+                    f"places, more than decimal_precision {resolved_prec}")
 
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "status", status)
@@ -237,6 +248,20 @@ def parse_instrument_capability(payload, symbol: str) -> InstrumentCapability:
                     break
             except InvalidOperation:
                 pass
+
+    if (raw_fractionable and frac_inc is not None
+            and frac_inc < FRACTIONAL_QUANTITY_INCREMENT):
+        # A finer step than this adapter orders at. Every multiple of the default
+        # step is also a multiple of it, so ordering at the default places stays
+        # inside what the profile allows, and avoids sizing at places the broker
+        # has twice reported back rounded. A step that does not divide the
+        # default has no such safe substitute and is refused by the capability.
+        try:
+            divides_default = FRACTIONAL_QUANTITY_INCREMENT % frac_inc == 0
+        except InvalidOperation:
+            divides_default = False
+        if divides_default:
+            frac_inc = None
 
     return InstrumentCapability(
         symbol=wanted,

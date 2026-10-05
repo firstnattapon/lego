@@ -98,6 +98,51 @@ def test_five_place_contract_from_older_data_still_loads_under_the_ceiling():
         _capability(decimal_precision=MAX_FRACTIONAL_DECIMAL_PLACES + 1)
 
 
+@pytest.mark.parametrize("key", [
+    "fractional_increment", "fractional_lot_size", "min_fractional_lot_size"])
+@pytest.mark.parametrize("stated", ["0.00001", "0.001", "0.002", "0.005"])
+def test_a_profile_step_finer_than_the_default_still_orders_at_the_default(
+        key, stated):
+    """Every multiple of 0.01 is a multiple of these steps, so 0.01 stays allowed."""
+    capability = parse_instrument_capability(_profile(**{key: stated}), "UBER")
+
+    assert capability.quantity_increment == Decimal("0.01")
+    assert capability.decimal_precision == 2
+
+
+@pytest.mark.parametrize("stated", ["0.01", "0.05", "0.5", "1"])
+def test_a_profile_step_at_or_above_the_default_is_kept(stated):
+    capability = parse_instrument_capability(
+        _profile(fractional_increment=stated), "UBER")
+
+    assert capability.quantity_increment == Decimal(stated)
+    assert capability.decimal_precision == 2
+
+
+@pytest.mark.parametrize("stated", ["0.003", "0.0003", "0.0125"])
+def test_a_profile_step_with_no_safe_two_place_substitute_is_refused(stated):
+    with pytest.raises(WebullConfigError, match="decimal places"):
+        parse_instrument_capability(_profile(fractional_increment=stated), "UBER")
+
+
+def test_a_capability_whose_step_needs_more_places_than_its_precision_is_refused():
+    with pytest.raises(WebullConfigError, match="more than decimal_precision 2"):
+        _capability(quantity_increment=Decimal("0.00001"))            # default places
+    with pytest.raises(WebullConfigError, match="more than decimal_precision 3"):
+        _capability(quantity_increment=Decimal("0.00001"), decimal_precision=3)
+    # Consistent contracts, including a coarse step and the old five-place pair.
+    assert _capability(quantity_increment=Decimal("0.00001"),
+                       decimal_precision=5).decimal_precision == 5
+    assert _capability(quantity_increment=Decimal("0.5"),
+                       decimal_precision=2).quantity_increment == Decimal("0.5")
+
+
+@pytest.mark.parametrize("increment", ["NaN", "Infinity", "0", "-0.01"])
+def test_an_unusable_increment_is_still_named_as_such(increment):
+    with pytest.raises(WebullConfigError, match="positive finite"):
+        _capability(quantity_increment=Decimal(increment))
+
+
 # --- the order is built at the places the broker echoes ---------------------------
 
 def test_sell_payload_is_built_at_two_places_and_never_rounds_up():
@@ -244,6 +289,19 @@ def test_the_five_place_chain_rebinds_to_two_places_once_and_says_so():
     again = _commit(new, SLOT_3)
     assert again["committed"] is True
     assert "instrument_capability_migrated_from" not in again
+
+
+def test_a_profile_stating_the_finer_step_rebinds_the_chain_to_a_consistent_contract():
+    """Not to {0.00001, 2 places}, which the one-way guard could never undo."""
+    _commit(_uber(5, 0.00001), SLOT_1)
+    capability = parse_instrument_capability(
+        _profile(fractional_increment="0.00001"), "UBER")
+    cfg = _uber(capability.decimal_precision, float(capability.quantity_increment))
+
+    migrated = _commit(cfg, SLOT_2)
+
+    assert migrated["instrument_capability_migrated_from"] == STORED_FIVE_PLACES
+    assert _state(cfg)["instrument_capability"] == STORED_TWO_PLACES
 
 
 def test_the_chain_cannot_be_widened_back_to_five_places():
@@ -507,24 +565,22 @@ def test_the_five_place_contract_against_a_two_place_broker_is_the_incident(
     assert halt["halted"] is True and halt["set_by"] == "system:order-recovery"
 
 
-def test_a_stated_finer_increment_is_refused_at_dispatch_and_never_reaches_the_broker(
-        monkeypatch):
-    """If the profile ever states an increment finer than the default places.
+@pytest.mark.parametrize("broker_places", [2, 5])
+def test_a_profile_that_states_the_finer_step_is_still_ordered_at_two_places(
+        monkeypatch, broker_places):
+    """The reviewer's case: the profile says 0.00001, the broker reports 2 places."""
+    capability = parse_instrument_capability(
+        _profile(fractional_increment="0.00001"), "UBER")
 
-    The engine then sizes at that increment while the payload is built at the
-    default places, so the order can never equal the committed intent. That must
-    end as NOT_PLACED before Preview, not as a Place the broker will echo back
-    at other places.
-    """
-    capability = _capability(quantity_increment=Decimal("0.00001"))
-    assert capability.decimal_precision == 2
+    body, row, stored, client, result, runtime = _replay(
+        monkeypatch, capability, broker_places)
 
-    body, row, stored, client, result, runtime = _replay(monkeypatch, capability, 2)
-
-    assert row["จำนวนสั่ง (หุ้น)"] == 1.53175
-    assert stored["status"] == "NOT_PLACED"
-    assert client.order_v3.preview_order.calls == []
-    assert client.order_v3.place_order.calls == []
-    assert stored.get("place_attempted") is not True
+    assert row["จำนวนสั่ง (หุ้น)"] == 1.53
+    assert stored["instrument_capability"]["quantity_increment"] == "0.01"
+    assert stored["strategy_config"]["decimal_precision"] == 2
+    placed = client.order_v3.place_order.calls
+    assert len(placed) == 1 and placed[0][0][-1][0]["quantity"] == "1.53"
+    assert stored.get("needs_manual_check") is not True
+    assert stored["status"] in {"PENDING", "SUBMITTED"}
     identity = webull_io.runtime_identity_fingerprint()
     assert operator_halt.status(identity, "UBER").get("halted") is not True
