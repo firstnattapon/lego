@@ -67,6 +67,7 @@ export WEBULL_TOKEN_SECRET_OVERRIDE=projects/lego-firebase/secrets/<token-secret
 export ALERT_WEBHOOK_SECRET_OVERRIDE=<secret ที่เก็บ URL ปลายทาง>
 # ค่าจาก private-plan.json -> deploy_env: EXPECTED_CANDIDATE_HASH, LEGO_RELEASE_AUTHORIZATION_OVERRIDE,
 # LEGO_TRADING_WINDOW_END_OVERRIDE, LEGO_MAX_*_OVERRIDE, LEGO_SYMBOL_OVERRIDE, LEGO_FIX_C_OVERRIDE, LEGO_DNA_BUNDLE_OVERRIDE ฯลฯ
+export LEGO_FUNDING_MODE_OVERRIDE=initial-funding   # เฉพาะ release funding ของวิธี B (release-plan --initial-funding พิมพ์ไว้ใน deploy_env)
 bash deploy/cloudshell-all-in-one.sh        # รอบแรก: พิมพ์ ack ที่คาดหวังแล้ว exit 3 ก่อน deploy function
 ```
 
@@ -74,7 +75,10 @@ bash deploy/cloudshell-all-in-one.sh        # รอบแรก: พิมพ�
    `LEGO_PROD_LIVE_ACK=LIVE-PROD-<SYMBOL>-q<qty>-n<notional>-o<orders>-<window end>-<prefunded|initial-funding>-<binding[:16]>`
 2. อ่านทุกค่าให้ตรงกับที่ตั้งใจ (symbol, caps, window, โหมด funding) แล้วรันคำสั่งเดิมซ้ำพร้อม `LEGO_PROD_LIVE_ACK=<ค่าที่พิมพ์>`
 3. ack ผิดหรือเป็นของ release อื่น → fail; release ที่ไม่ผ่านการตรวจ → ไม่มี ack ให้ ต้องแก้ตาม `[BLOCK]` ก่อน
-4. `deploy/deploy.ps1` ไม่รองรับ PROD live (throw) ใช้ script นี้เท่านั้น
+4. script ตรวจ release ซ้ำก่อน deploy โดยถือเป็น release steady ตามค่าเริ่มต้น (`prefunded`): caps เกิน 25% ของ principal จึงถูก BLOCK
+   — ตั้งใจให้เป็นเช่นนั้นเพื่อไม่ให้ caps หลวมหลุดไปโดยบังเอิญ; release funding ต้องตั้ง `LEGO_FUNDING_MODE_OVERRIDE=initial-funding` เองอย่างชัดเจน
+   (ค่านี้ตรวจ caps แบบ funding: notional ≥ 101% ของ principal และไม่เกิน 125% — caps steady จะถูก BLOCK ถ้าขอโหมดนี้)
+5. `deploy/deploy.ps1` ไม่รองรับ PROD live (throw) ใช้ script นี้เท่านั้น
 
 ## 4. หลัง deploy
 

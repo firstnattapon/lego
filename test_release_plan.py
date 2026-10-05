@@ -145,6 +145,7 @@ def test_production_plan_prints_the_acknowledgement_the_runtime_will_require(tmp
     ack = result["prod_live_acks"]["prefunded"]
     assert ack.startswith("LIVE-PROD-UBER-q20-n1000-o10-20261009T2000Z-prefunded-")
     assert result["prod_live_acks"]["initial-funding"] is None
+    assert "LEGO_FUNDING_MODE_OVERRIDE" not in result["deploy_env"]
     assert result["deploy_env"]["LEGO_PROD_LIVE_ACK"] == ack
     assert any("WEBULL_TOKEN_SECRET_OVERRIDE" in step for step in result["next_steps"])
     assert result["deploy_env"]["LEGO_RELEASE_AUTHORIZATION_OVERRIDE"] == (
@@ -175,7 +176,8 @@ def test_funding_plan_uses_loose_caps_a_separate_ack_and_reminds_to_redeploy(tmp
     assert result["blocked"] is False and "funding_release_temporary" in result["assessment"]["warnings"]
     assert result["prod_live_acks"]["prefunded"] is None
     assert "-initial-funding-" in result["deploy_env"]["LEGO_PROD_LIVE_ACK"]
-    assert any("FUNDING release" in step for step in result["next_steps"])
+    assert result["deploy_env"]["LEGO_FUNDING_MODE_OVERRIDE"] == "initial-funding"     # the script must judge it as such
+    assert any("FUNDING release" in step and "LEGO_FUNDING_MODE_OVERRIDE" in step for step in result["next_steps"])
 
 
 def test_steady_caps_cannot_fund_a_flat_account_and_the_plan_says_so(tmp_path, monkeypatch):

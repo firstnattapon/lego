@@ -158,6 +158,9 @@ def release_plan_command(args, *, now=None) -> dict:
     deploy_env["LEGO_RELEASE_AUTHORIZATION_OVERRIDE"] = binding
     if acks.get(funding):
         deploy_env["LEGO_PROD_LIVE_ACK"] = acks[funding]
+    if args.initial_funding:
+        # The deploy script judges the release again; it must be told this is the funding one.
+        deploy_env["LEGO_FUNDING_MODE_OVERRIDE"] = "initial-funding"
     script = ("deploy/continuous-uat.sh" if runtime.deployment.environment == "UAT"
               else "deploy/cloudshell-all-in-one.sh")
 
@@ -175,7 +178,8 @@ def release_plan_command(args, *, now=None) -> dict:
         steps.insert(2, "PROD also needs WEBULL_TOKEN_SECRET_OVERRIDE (operator-issued, NORMAL, "
                         "more than 24h left) and a deploy outside the regular session.")
     if args.initial_funding:
-        steps.append("This is the FUNDING release (caps are loose on purpose). After the funding "
+        steps.append("This is the FUNDING release (caps are loose on purpose): deploy it with "
+                     "LEGO_FUNDING_MODE_OVERRIDE=initial-funding (in deploy_env). After the funding "
                      "fill is confirmed and holdings match, plan and deploy the steady release "
                      "without --initial-funding.")
     result = {

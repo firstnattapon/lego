@@ -32,6 +32,9 @@ set -Eeuo pipefail
 # WEBULL_ENV_OVERRIDE=PROD LEGO_MODE_OVERRIDE=trade LEGO_ACTIVE_OVERRIDE=true. That
 # run first prints the acknowledgement for the exact release and exits 3; deploy by
 # running it again with LEGO_PROD_LIVE_ACK=<that value>. See docs/PROD_LIVE_RUNBOOK_TH.md.
+# The one-off funding release of a flat account (caps up to 125% of the principal) is
+# judged as such only when asked for: LEGO_FUNDING_MODE_OVERRIDE=initial-funding
+# (default prefunded: caps above 25% of the principal are refused in PROD).
 
 readonly PROJECT_ID="lego-firebase"
 readonly REGION="asia-southeast1"
@@ -68,8 +71,13 @@ readonly STALE_SECONDS="${LEGO_STALE_ORDER_SECONDS_OVERRIDE:-300}"
 readonly CANCEL_GRACE="${LEGO_CANCEL_CONFIRM_GRACE_SECONDS_OVERRIDE:-120}"
 readonly SESSION_MODE="${LEGO_SESSION_KEY_MODE_OVERRIDE:-release_window}"
 readonly PROD_LIVE_ACK="${LEGO_PROD_LIVE_ACK:-}"
+readonly FUNDING_MODE="${LEGO_FUNDING_MODE_OVERRIDE:-prefunded}"
 readonly ALERT_WEBHOOK_SECRET="${ALERT_WEBHOOK_SECRET_OVERRIDE:-}"
 [[ "${ENVIRONMENT}" == UAT || "${ENVIRONMENT}" == PROD ]] || exit 1
+if [[ "${FUNDING_MODE}" != prefunded && "${FUNDING_MODE}" != initial-funding ]]; then
+    echo "LEGO_FUNDING_MODE_OVERRIDE must be prefunded or initial-funding." >&2
+    exit 1
+fi
 # Production is observe/inactive by default. Real-money activation (trade+active)
 # is a separately reviewed release: it needs the acknowledgement derived from the
 # exact release (python ops.py release-plan), is refused during the regular
@@ -666,6 +674,10 @@ require_sha256 "computed release binding" "${EXPECTED_RELEASE_BINDING}"
 PLAN_JSON=""
 if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
     PLAN_STATUS=0
+    PLAN_ARGS=(--account-id-stdin --candidate-hash "${CANDIDATE_HASH}" --enforce)
+    if [[ "${FUNDING_MODE}" == initial-funding ]]; then
+        PLAN_ARGS+=(--initial-funding)
+    fi
     PLAN_JSON="$(
         gcloud secrets versions access latest \
             --secret="${ACCOUNT_ID_SECRET}" \
@@ -681,8 +693,7 @@ if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
             LEGO_STALE_ORDER_ACTION="${STALE_ACTION}" LEGO_STALE_ORDER_SECONDS="${STALE_SECONDS}" \
             LEGO_CANCEL_CONFIRM_GRACE_SECONDS="${CANCEL_GRACE}" \
             LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER=1 LEGO_SESSION_KEY_MODE="${SESSION_MODE}" \
-            python3 ops.py release-plan --account-id-stdin \
-                --candidate-hash "${CANDIDATE_HASH}" --enforce
+            python3 ops.py release-plan "${PLAN_ARGS[@]}"
     )" || PLAN_STATUS=$?
     [[ -n "${PLAN_JSON}" ]] || fail "release-plan produced no report (status ${PLAN_STATUS})"
     printf '%s' "${PLAN_JSON}" | python3 -c '
@@ -692,7 +703,7 @@ for finding in json.load(sys.stdin)["assessment"]["findings"]:
         print("  [%s] %s: %s" % (finding["severity"], finding["id"], finding["message"]))
 '
     (( PLAN_STATUS == 0 )) || \
-        fail "release horizon/limits check failed; fix the BLOCK findings above (python ops.py release-plan)"
+        fail "release horizon/limits check failed; fix the BLOCK findings above (python ops.py release-plan). For the one-off funding release of a flat account set LEGO_FUNDING_MODE_OVERRIDE=initial-funding"
 fi
 
 ORDER_SUBMISSION_EXPECTED="false"
@@ -772,6 +783,9 @@ echo "Candidate hash : ${CANDIDATE_HASH} (${CANDIDATE_STATUS})"
 echo "Mode           : ${MODE}"
 echo "Active         : ${ACTIVE}"
 echo "Order submit   : ${ORDER_SUBMISSION_EXPECTED}"
+if [[ "${PROD_LIVE}" == true ]]; then
+    echo "Funding mode   : ${FUNDING_MODE}"
+fi
 if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
     echo "Token source   : Secret Manager"
 else

@@ -216,6 +216,46 @@ def test_a_production_release_that_cannot_be_acknowledged_is_refused(sandbox):
     assert "FIREBASE_DEPLOY_REACHED" not in log(sandbox)
 
 
+FUNDING = {"LEGO_MAX_ORDER_QUANTITY_OVERRIDE": "200", "LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE": "12500",
+           "LEGO_MAX_SESSION_ORDERS_OVERRIDE": "2"}      # 125% of principal: the one-off funding release
+
+
+def test_funding_caps_are_refused_unless_the_funding_release_is_requested(sandbox):
+    result = run(sandbox, authorized(sandbox, release_env(**FUNDING)))
+    assert result.returncode == 1
+    assert "[BLOCK] notional_cap_ratio" in result.stdout
+    assert "LEGO_FUNDING_MODE_OVERRIDE=initial-funding" in result.stderr        # tells the operator how
+    assert "FIREBASE_DEPLOY_REACHED" not in log(sandbox)
+
+
+def test_the_funding_release_deploys_with_its_own_acknowledgement(sandbox):
+    env = authorized(sandbox, release_env(LEGO_FUNDING_MODE_OVERRIDE="initial-funding", **FUNDING))
+    first = run(sandbox, env)
+    assert first.returncode == 3, first.stdout + first.stderr
+    ack = re.search(r"LEGO_PROD_LIVE_ACK=(\S+)", first.stdout).group(1)
+    assert re.fullmatch(r"LIVE-PROD-UBER-q200-n12500-o2-\d{8}T\d{4}Z-initial-funding-[0-9a-f]{16}", ack)
+    assert "funding_release_temporary" in first.stdout                         # loose caps are called out
+    result = run(sandbox, env, LEGO_PROD_LIVE_ACK=ack)
+    assert result.returncode == 78, result.stdout + result.stderr
+    recorded = log(sandbox)
+    assert f"LEGO_PROD_LIVE_ACK={ack}" in recorded and "GCLOUD_FUNCTIONS_DEPLOY_REACHED" in recorded
+
+
+def test_the_funding_mode_does_not_loosen_a_steady_release(sandbox):
+    """Asking for the funding assessment cannot launder caps that are not funding caps."""
+    env = authorized(sandbox, release_env(LEGO_FUNDING_MODE_OVERRIDE="initial-funding"))   # 1000 / 20 / 10
+    result = run(sandbox, env)
+    assert result.returncode == 1
+    assert "[BLOCK] funding_notional_sufficient" in result.stdout
+    assert "FIREBASE_DEPLOY_REACHED" not in log(sandbox)
+
+
+def test_an_unknown_funding_mode_is_refused_before_any_cloud_call(sandbox):
+    result = run(sandbox, authorized(sandbox, release_env(LEGO_FUNDING_MODE_OVERRIDE="yes")))
+    assert result.returncode == 1 and "LEGO_FUNDING_MODE_OVERRIDE must be" in result.stderr
+    assert log(sandbox) == ""
+
+
 def test_production_observe_deploys_without_an_acknowledgement(sandbox):
     env = release_env(LEGO_MODE_OVERRIDE="observe", LEGO_ACTIVE_OVERRIDE="false")
     for name in ("LEGO_MAX_ORDER_QUANTITY_OVERRIDE", "LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE",
