@@ -1,10 +1,10 @@
 {
   "schema": "lego_audit_verification_v1",
-  "generated_at": "2026-10-05T08:14:26.074349+00:00",
-  "source_commit": "7a4bfbbddb9a1278e6c4b7264a0de07412a68c16",
-  "candidate_hash": "a6b66a3500e744fa89c46f75b944fed1795903dbf97e705196999e6f8c46228b",
+  "generated_at": "2026-10-05T08:23:38.988652+00:00",
+  "source_commit": "d9806b408a8d41c09f322fc511f9d256cf7436f2",
+  "candidate_hash": "36fc6eca69c5248ff0f7639661c78fc418e3d473120462e1ae0aede9644bf4f4",
   "candidate_scope": "backend-only",
-  "source_frozen_at": "2026-10-05T08:13:46.450217+00:00",
+  "source_frozen_at": "2026-10-05T08:22:59.127329+00:00",
   "source_unchanged_through_tests": true,
   "executed_in": "clean git export of source_commit (no sibling lego-firebase-streamlit checkout)",
   "python": "Python 3.12.3",
@@ -14,13 +14,13 @@
   "release_state": "NO_GO",
   "full_suite": {
     "junit": "full-suite.xml (retained locally)",
-    "junit_sha256": "d30218fa2dc430be3c287ef95d285af72312a83852db1d2a8a44fc11c83ee0e1",
+    "junit_sha256": "da574e8193ecb24813a4285b6a2d7d442151f28d5e6cddd5b16b0ebd52b6dfa2",
     "counts": {
-      "tests": 1464,
+      "tests": 1469,
       "failures": 0,
       "errors": 0,
       "skipped": 9,
-      "passed": 1455
+      "passed": 1460
     },
     "note": "skipped = emulator-only tests; CI runs them against the Firebase Database emulator."
   },
@@ -29,8 +29,8 @@
       "id": "pip_check",
       "exit_code": 0,
       "expected_exit_code": 0,
-      "started_utc": "2026-10-05T08:13:46.509526+00:00",
-      "finished_utc": "2026-10-05T08:13:46.798933+00:00",
+      "started_utc": "2026-10-05T08:22:59.191373+00:00",
+      "finished_utc": "2026-10-05T08:22:59.513184+00:00",
       "log": "pip_check.log",
       "log_sha256": "c2d56b8a5bf04b83c17d9f07db44f507be09ff3118e5afa586805da9b2f1600d"
     },
@@ -38,8 +38,8 @@
       "id": "pip_audit",
       "exit_code": 0,
       "expected_exit_code": 0,
-      "started_utc": "2026-10-05T08:13:46.799239+00:00",
-      "finished_utc": "2026-10-05T08:13:56.388685+00:00",
+      "started_utc": "2026-10-05T08:22:59.513575+00:00",
+      "finished_utc": "2026-10-05T08:23:10.157122+00:00",
       "log": "pip_audit.log",
       "log_sha256": "cd2becaa920b6f2227c2042cbb00c3d1ae18b4b5b61af60dd6f4478d239e1833"
     },
@@ -47,8 +47,8 @@
       "id": "compile",
       "exit_code": 0,
       "expected_exit_code": 0,
-      "started_utc": "2026-10-05T08:13:56.388958+00:00",
-      "finished_utc": "2026-10-05T08:13:56.726526+00:00",
+      "started_utc": "2026-10-05T08:23:10.157452+00:00",
+      "finished_utc": "2026-10-05T08:23:10.514858+00:00",
       "log": "compile.log",
       "log_sha256": "596ceb9a1015f525eb0db1a0bb769db1c688b0973ea597850da6cd56804c7a77"
     },
@@ -56,8 +56,8 @@
       "id": "shell_syntax",
       "exit_code": 0,
       "expected_exit_code": 0,
-      "started_utc": "2026-10-05T08:13:56.726873+00:00",
-      "finished_utc": "2026-10-05T08:13:56.737461+00:00",
+      "started_utc": "2026-10-05T08:23:10.515406+00:00",
+      "finished_utc": "2026-10-05T08:23:10.524468+00:00",
       "log": "shell_syntax.log",
       "log_sha256": "2344842df2c47f708c2d29dc379d84bc79cdcbaa985f1067782be01d72cd7ddd"
     },
@@ -65,19 +65,19 @@
       "id": "full_suite",
       "exit_code": 0,
       "expected_exit_code": 0,
-      "started_utc": "2026-10-05T08:13:56.737906+00:00",
-      "finished_utc": "2026-10-05T08:14:25.123388+00:00",
+      "started_utc": "2026-10-05T08:23:10.525033+00:00",
+      "finished_utc": "2026-10-05T08:23:38.103668+00:00",
       "log": "full_suite.log",
-      "log_sha256": "da6b32a04c0ef8f659375e1a7c7dd2b760f77206b7b05ba15a3a82fd28743e6f"
+      "log_sha256": "d2667b281f08bfcde7cfc746bde7a2c390899240de2c8af4713fe149caaca36c"
     },
     {
       "id": "secret_scan_source_commit",
       "exit_code": 0,
       "expected_exit_code": 0,
-      "started_utc": "2026-10-05T08:14:25.126202+00:00",
-      "finished_utc": "2026-10-05T08:14:25.209824+00:00",
+      "started_utc": "2026-10-05T08:23:38.107465+00:00",
+      "finished_utc": "2026-10-05T08:23:38.184567+00:00",
       "log": "secret_scan_source_commit.log",
-      "log_sha256": "e506de4baa4385001f27b6ffc51cd97c142e42b898a7d815a8c50914d97cbf11"
+      "log_sha256": "86a38e6011edd173a36fa8ec9ceec42d03e356b1b3f448fef867933697e93edc"
     }
   ],
   "behavior_checks": [
@@ -103,7 +103,7 @@
       },
       "prod_live_ack_modes_available": [],
       "log": "release_plan_incident_release_as_deployed.log",
-      "log_sha256": "8d673e224d02b1876f5ee662b7755dc1edff6893767073a764b5b3a6b1d77774"
+      "log_sha256": "fc1fbef00df4a5684cd3c0fdce7f343f2362124243c024dac9e06014ccab67a6"
     },
     {
       "id": "incident_release_with_new_window",
@@ -127,7 +127,7 @@
       },
       "prod_live_ack_modes_available": [],
       "log": "release_plan_incident_release_with_new_window.log",
-      "log_sha256": "1522ca9aead13cde6c4757330b312f84438a17120d8aa7f63e7e9b033b50aab4"
+      "log_sha256": "09908854d9e09925367b7f3d8b3ae409a9cd52e67fa12feee7b699f2bd6364d7"
     },
     {
       "id": "uat_continuous_profile",
@@ -144,7 +144,7 @@
       },
       "prod_live_ack_modes_available": [],
       "log": "release_plan_uat_continuous_profile.log",
-      "log_sha256": "e90d4b0a92fffded03f885a438a65d52207121044b1eeadb7d4c7311708b2766"
+      "log_sha256": "9740c21fc144dfec5e6bdf7079c69ecab94c8cfb15c7be91d257294e874a8bcd"
     },
     {
       "id": "prod_canary_prefunded",
@@ -163,7 +163,7 @@
         "prefunded"
       ],
       "log": "release_plan_prod_canary_prefunded.log",
-      "log_sha256": "228ce47daafe1beaedc92fa4ab54284bda5f4270af4163d2da1b6b16d08e934c"
+      "log_sha256": "bfae8bdfc6e29c59a837165280a1afbc3398b7f5022841e42f312d372fc6f71b"
     },
     {
       "id": "prod_funding_release",
@@ -184,7 +184,7 @@
         "initial-funding"
       ],
       "log": "release_plan_prod_funding_release.log",
-      "log_sha256": "932843c21357edc204f56aeaf416325fc40889fb3c2de8bbe31c8cd210fb837c"
+      "log_sha256": "a7cea7632c882d173b38eb816ea9ebf236c1993373fd4d8d3d2706a14c810c73"
     }
   ],
   "live_gates": {
