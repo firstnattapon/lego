@@ -82,9 +82,18 @@ class MarketDataForbidden(RuntimeError):
     """
 
 
+# Ceiling for validation only: intents and chain state written at 5 places must
+# still load. It is not the precision an order is built with.
 MAX_FRACTIONAL_DECIMAL_PLACES = 5
+# The instrument profile states no quantity precision, so this is an assumption,
+# not a broker contract. UAT reported a 5-place order back at 2 places twice
+# (24 Sep 0.31721 -> filled 0.32, 5 Oct 1.53175 -> Order Detail total 1.53), and
+# validate_evidence correctly refuses a broker total that differs from the
+# submitted payload. Ordering at 2 places keeps payload and broker total equal
+# either way; the first live fractional order after the change confirms it.
+DEFAULT_FRACTIONAL_DECIMAL_PLACES = 2
 MINIMUM_FRACTIONAL_TRADE_USD = Decimal("1.0")
-FRACTIONAL_QUANTITY_INCREMENT = Decimal("0.00001")
+FRACTIONAL_QUANTITY_INCREMENT = Decimal(1).scaleb(-DEFAULT_FRACTIONAL_DECIMAL_PLACES)
 
 
 class FractionalGateError(WebullConfigError):
@@ -140,10 +149,18 @@ class InstrumentCapability:
                 _to_decimal(self.quantity_increment) if self.quantity_increment is not None
                 else FRACTIONAL_QUANTITY_INCREMENT
             )
-            resolved_prec = (
-                self.decimal_precision if self.decimal_precision is not None
-                else MAX_FRACTIONAL_DECIMAL_PLACES
-            )
+            if self.decimal_precision is not None:
+                resolved_prec = self.decimal_precision
+            elif (self.quantity_increment is not None
+                    and resolved_inc.is_finite() and resolved_inc > 0):
+                # A stated increment already fixes the places; falling back to
+                # the default beside a finer increment would build payloads the
+                # committed intent quantity can never equal. An unusable one is
+                # left to the check below, which names it.
+                resolved_prec = max(
+                    0, -resolved_inc.normalize().as_tuple().exponent)
+            else:
+                resolved_prec = DEFAULT_FRACTIONAL_DECIMAL_PLACES
             min_notional = (
                 _to_decimal(self.minimum_notional_usd_if_authoritative)
                 if self.minimum_notional_usd_if_authoritative is not None
@@ -1241,9 +1258,10 @@ def evaluate_fractional_order_gate(
         raise FractionalGateError(f"order type {order_type!r} is not supported for fractional trading (only MARKET or LIMIT)")
 
     exp = qty.as_tuple().exponent
-    if isinstance(exp, int) and exp < -MAX_FRACTIONAL_DECIMAL_PLACES:
+    if isinstance(exp, int) and exp < -capability.decimal_precision:
         raise FractionalGateError(
-            f"fractional precision {-exp} exceeds maximum {MAX_FRACTIONAL_DECIMAL_PLACES} decimal places")
+            f"fractional precision {-exp} exceeds the instrument's "
+            f"{capability.decimal_precision} decimal places")
 
     check_session = session_check_fn if session_check_fn is not None else is_regular_session
     if not check_session(at):

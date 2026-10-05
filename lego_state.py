@@ -7,6 +7,7 @@ import json
 import math
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from firebase_admin import db
 
@@ -176,6 +177,33 @@ def config_hash(cfg: Config) -> str:
 
 def chain_key(cfg: Config) -> str:
     return f"{cfg.symbol}_{config_hash(cfg)}"
+
+
+def _capability_is_tightening(prior: dict, current: dict) -> bool:
+    """Whether *current* only narrows the quantities *prior* allowed.
+
+    Fewer decimal places with an increment that is a whole multiple of the old
+    one can express nothing the chain had not already accepted, so binding the
+    chain to it opens no new order shape. The reverse is exactly what a
+    mis-detected broker capability looks like and stays refused, as does
+    anything that cannot be read or compared.
+
+    State keeps float(increment) as ".17g", so 1e-05 reads back as
+    1.0000000000000001e-05 and 0.01 / that is 999.99..., not 1000. The shortest
+    repr recovers the decimal that was meant before the multiple is tested.
+    """
+    try:
+        prior_places = prior["decimal_precision"]
+        new_places = current["decimal_precision"]
+        prior_step = Decimal(repr(float(prior["quantity_increment"])))
+        new_step = Decimal(repr(float(current["quantity_increment"])))
+        return (type(prior_places) is int and type(new_places) is int
+                and new_places < prior_places
+                and prior_step.is_finite() and new_step.is_finite()
+                and prior_step > 0 and new_step > 0
+                and new_step % prior_step == 0)
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        return False
 
 
 def verify_runtime_identity(state: dict | None,
@@ -531,7 +559,10 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
         doc["clock_mode"] = clock_mode
     row_ref.set(doc)
 
+    capability_migrated_from = None
+
     def txn(current):
+        nonlocal capability_migrated_from
         current = current or None
         verify_runtime_identity(current, runtime_identity)
         capability_contract = {
@@ -541,11 +572,17 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
         }
         prior_capability = ((current or {}).get("instrument_capability")
                             if current else None)
+        # A transaction may run more than once; only the last pass counts.
+        capability_migrated_from = None
         if (cfg.strategy_id.endswith("_v2") and prior_capability is not None
                 and prior_capability != capability_contract):
-            raise RuntimeIdentityError(
-                "instrument capability เปลี่ยนจาก state ที่ผูกไว้ — "
-                "ต้องตรวจ lot-size migration ก่อน commit")
+            if not _capability_is_tightening(prior_capability, capability_contract):
+                raise RuntimeIdentityError(
+                    "instrument capability เปลี่ยนจาก state ที่ผูกไว้ — "
+                    "ต้องตรวจ lot-size migration ก่อน commit")
+            # Narrowing only: next_state below rebinds the chain to the new
+            # contract, so this happens once and the old one cannot come back.
+            capability_migrated_from = dict(prior_capability)
         # Re-checked inside the transaction, not only above: the write this
         # fences against is another revision's, and it can land between the read
         # at the top of this function and the moment this transaction runs.
@@ -698,6 +735,10 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
         # is the point: a baseline reset and a corrupted ledger look identical in
         # the 17 columns, and only one of them is supposed to happen.
         result["cashflow_semantics_migrated_from"] = migrated_from
+    if capability_migrated_from is not None:
+        # Said out loud for the same reason: the first commit after a lot-size
+        # tightening is the only moment this is visible without reading RTDB.
+        result["instrument_capability_migrated_from"] = capability_migrated_from
     return result
 
 

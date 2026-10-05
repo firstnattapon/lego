@@ -445,6 +445,9 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         }
         if semantics_migrated_from:
             out["cashflow_semantics_migrated_from"] = semantics_migrated_from
+        if result.get("instrument_capability_migrated_from"):
+            out["instrument_capability_migrated_from"] = result[
+                "instrument_capability_migrated_from"]
         if clock_error:
             out["clock_warning"] = clock_error
         if token_warning:

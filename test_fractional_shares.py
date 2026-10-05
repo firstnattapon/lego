@@ -167,19 +167,19 @@ def test_fractionable_symbol_with_validated_fractional_capability():
         lot_size=Decimal("1"), fractionable=True,
     )
     assert capability.fractionable is True
-    assert capability.quantity_increment == Decimal("0.00001")
-    assert capability.decimal_precision == 5
+    assert capability.quantity_increment == Decimal("0.01")
+    assert capability.decimal_precision == 2
 
     cfg = Config(
         symbol="AAPL", fix_c=3000, diff=0, strategy_id="shannon_demon_lego_v2",
         quantity_increment=float(capability.quantity_increment),
         decimal_precision=capability.decimal_precision,
     )
-    # Principal gap $60 at $335 price -> raw 0.179104... rounds down to 0.17910
+    # Principal gap $60 at $335 price -> raw 0.179104... rounds down to 0.17
     decision = build_decision(cfg, price=335.0, holdings=8.776106, signal=1)
     assert decision.acted is True
     assert decision.side == "BUY"
-    assert abs(decision.quantity - 0.17910) < 1e-5
+    assert Decimal(str(decision.quantity)) == Decimal("0.17")
     assert decision.quantity > 0.0
 
 
@@ -194,8 +194,8 @@ def test_fractionable_true_while_lot_size_1_does_not_force_whole_share():
     cap = parse_instrument_capability(raw_payload, "AAPL")
     assert cap.lot_size == Decimal("1")
     assert cap.fractionable is True
-    assert cap.quantity_increment == Decimal("0.00001")
-    assert cap.decimal_precision == 5
+    assert cap.quantity_increment == Decimal("0.01")
+    assert cap.decimal_precision == 2
 
 
 def test_fractionable_false_forces_whole_share():
@@ -281,9 +281,12 @@ def test_too_small_quantity_fails_closed():
 
 def test_fractional_notional_below_usd_1_blocked():
     """fractional notional below USD 1: no broker placement."""
+    # Pinned to the 5-place contract the cfg below uses: 0.005 is a 3-place
+    # quantity, so the unpinned 2-place default would stop at precision first.
     cap = InstrumentCapability(
         symbol="AAPL", status="OC", category="US_STOCK", currency="USD",
         lot_size=Decimal("1"), fractionable=True,
+        quantity_increment=Decimal("0.00001"), decimal_precision=5,
     )
     cfg = Config(
         symbol="AAPL", fix_c=100.5, diff=0, strategy_id="shannon_demon_lego_v2",
@@ -596,7 +599,7 @@ def test_integration_fractional_order_outside_core_blocked(tmp_path, monkeypatch
     )
     with pytest.raises(FractionalGateError, match="US Regular Trading Hours"):
         evaluate_fractional_order_gate(
-            capability=cap, side="BUY", quantity=Decimal("0.299"), price=Decimal("339.15"),
+            capability=cap, side="BUY", quantity=Decimal("0.29"), price=Decimal("339.15"),
             holdings=Decimal("0.0"), order_type="MARKET", session_check_fn=execution_service.is_regular_session,
         )
 
