@@ -85,8 +85,9 @@ class MarketDataForbidden(RuntimeError):
 # Ceiling for validation only: intents and chain state written at 5 places must
 # still load. It is not the precision an order is built with.
 MAX_FRACTIONAL_DECIMAL_PLACES = 5
-# The instrument profile states no quantity precision, so this is an assumption,
-# not a broker contract. UAT reported a 5-place order back at 2 places twice
+# Nothing here reads a quantity precision from the instrument profile, so this
+# is an assumption, not a broker contract. UAT reported a 5-place order back at
+# 2 places twice
 # (24 Sep 0.31721 -> filled 0.32, 5 Oct 1.53175 -> Order Detail total 1.53), and
 # validate_evidence correctly refuses a broker total that differs from the
 # submitted payload. Ordering at 2 places keeps payload and broker total equal

@@ -20,7 +20,7 @@
 
 ## สาเหตุในโค้ด
 
-instrument profile ของ Webull ไม่มี field ความละเอียดของปริมาณ `parse_instrument_capability` จึงไม่ได้อ่านค่านี้ และ `InstrumentCapability` ใช้ค่าคงที่ 5 ตำแหน่ง (`MAX_FRACTIONAL_DECIMAL_PLACES`, increment 0.00001) เป็น default `decision_service.run_decision` เอาค่านี้ตั้ง `cfg.quantity_increment/decimal_precision` ให้ engine และ `build_order_payload` ทุกขั้นจึงทำงานที่ 5 ตำแหน่ง ส่วน `validate_evidence` ปฏิเสธ broker total ที่ไม่เท่ากับ payload ที่ส่ง (ตั้งใจ — fail closed)
+`parse_instrument_capability` ไม่ได้อ่านความละเอียดของปริมาณจาก instrument profile (อ่านเฉพาะ `lot_size`, `fractionable` และ field increment 3 ชื่อที่เดาไว้; repo ไม่มี profile response จริงบันทึกไว้ จึงไม่ทราบว่า API มี field นี้หรือไม่ — ค่าที่ intent บันทึกไว้เท่ากับ default ทุกตัว) `InstrumentCapability` จึงใช้ค่าคงที่ 5 ตำแหน่ง (`MAX_FRACTIONAL_DECIMAL_PLACES`, increment 0.00001) เป็น default `decision_service.run_decision` เอาค่านี้ตั้ง `cfg.quantity_increment/decimal_precision` ให้ engine และ `build_order_payload` ทุกขั้นจึงทำงานที่ 5 ตำแหน่ง ส่วน `validate_evidence` ปฏิเสธ broker total ที่ไม่เท่ากับ payload ที่ส่ง (ตั้งใจ — fail closed)
 
 "broker ใช้ 2 ตำแหน่ง" เป็น**สมมติฐานจาก 2 เหตุการณ์** (ปัดใกล้สุดทั้งสองครั้ง) ไม่ใช่เอกสารของ broker การส่งแค่ 2 ตำแหน่งปลอดภัยทั้งสองกรณี: ถ้า broker ทำที่ 2 ตำแหน่ง payload กับ total ตรงกัน ถ้า broker ทำที่ 5 ตำแหน่ง ปริมาณ 2 ตำแหน่งก็ยังถูกต้อง
 

@@ -4,8 +4,8 @@ Order f327df93... (chain UBER_33b541c2034c) sent quantity 1.53175. Webull's Orde
 Detail answered total_quantity 1.530000, so order_recovery.validate_evidence
 raised BrokerContractAnomaly, the intent went to MANUAL_RECONCILIATION_REQUIRED
 and the account/symbol fence stayed shut. 24 Sep had the same shape
-(0.31721 -> 0.32). The instrument profile states no precision, so the five places
-came from a constant webull_io assumed; the default is now two.
+(0.31721 -> 0.32). Nothing read a quantity precision from the instrument profile, so
+the five places came from a constant webull_io assumed; the default is now two.
 
 These pin what that change has to keep true together: an order is built at the
 places the broker echoes, a chain bound to the old five-place contract can move
