@@ -1,0 +1,122 @@
+{
+  "checks": [
+    {
+      "criterion": "snapshot_integrity",
+      "detail": {
+        "intents": 12,
+        "issues": {},
+        "mirrors_matched": 12,
+        "positive_fills": 0,
+        "statuses": {
+          "NOT_PLACED": 12
+        }
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "money_fences_resolved",
+      "detail": {
+        "operator_halt_audits_pending": 0,
+        "operator_halts": 0,
+        "unresolved_fences": 0
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "tick_fields",
+      "detail": {
+        "business_statuses": {
+          "ERROR": 1,
+          "EXECUTION_LIMIT_BLOCKED": 12,
+          "RELEASE_EXPIRED": 2748
+        },
+        "malformed_entries": 0,
+        "ticks": 2761
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "unique_tick_correlations",
+      "detail": {
+        "ticks": 2761
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "request_tick_pairing",
+      "detail": {
+        "issues": {
+          "requests_without_tick": 1,
+          "ticks_without_request": 1
+        },
+        "matched": 2760,
+        "requests": 2761,
+        "ticks": 2761
+      },
+      "status": "FAIL"
+    },
+    {
+      "criterion": "committed_row_log_lineage",
+      "detail": {
+        "commit_events": 19,
+        "issues": {},
+        "matched_rows": 19,
+        "rows_in_request_window": 19
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "candidate_revision_binding",
+      "detail": {
+        "expected_candidate": "0fb837f4cae80b13240261735663c3931279e093a745d1055a47685a8bf950d5",
+        "expected_revision": "lego-tick-uat-00037-led"
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "current_broker_orders_positions_cash_fees",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "complete_transition_history",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "exact_candidate_ci_emulator",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "deployed_identity_config_image_binding",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "uat_buy_sell_restart_timeout_soak",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "alert_delivery_and_operator_drill",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "prod_observe_and_canary_authorization",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    }
+  ],
+  "cutover_safe": true,
+  "evidence": {
+    "export_sha256": "a9e5458f94a78bd2bd7767c8aa0771b5fe62db887f7717dc1dae8522e7f4e1ae",
+    "logs_sha256": "49bf09f4bd2c8d22291e377e453e48dea308ef0ec26a8cfe79eb43b02b2a5620"
+  },
+  "generated_at": "2026-10-05T07:58:56.339073+00:00",
+  "real_money_ready": false,
+  "schema_version": 1,
+  "scope": "offline snapshot and supplied log window; not broker certification",
+  "status": "BLOCKED"
+}
