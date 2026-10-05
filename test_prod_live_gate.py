@@ -1,11 +1,14 @@
 """Real-money gate: a production release must echo the ack derived from itself."""
 import json
 from dataclasses import replace
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
 import execution_service as execution
+import observability
+import operational_health
 import release_horizon as rh
 from config import load_runtime_config, release_binding_for
 from dna_engine import dna_fingerprint
@@ -13,6 +16,7 @@ from test_dispatch_overshoot import CFG, dispatch_fixture, isolate  # noqa: F401
 
 ORIGIN = "2026-09-08T13:30:00Z"
 WINDOW = "2026-10-09T20:00:00Z"        # static checks never read the clock
+NOW = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
 
 
 def bundle(tmp_path, code="bypass:6500"):
@@ -160,3 +164,56 @@ def test_dispatch_aborts_an_unsent_production_intent_without_the_ack(monkeypatch
     result = execution._dispatch_or_reconcile_one(client, object(), CFG, intent, claim, unacked)
     assert result["status"] == "UNSENT_ABORTED"
     assert not client.order_v3.preview_order.calls and not client.order_v3.place_order.calls
+
+
+# ------------------------------------------- a closed gate must not be silent
+@pytest.fixture
+def slot_clock(monkeypatch):
+    # main._run_tick exports these from the bundle before any health report.
+    monkeypatch.setenv("LEGO_SLOT_SECONDS", "900")
+    monkeypatch.setenv("LEGO_DNA_ORIGIN_UTC", ORIGIN)
+
+
+def blocked_flag(values):
+    runtime = load_runtime_config(values)
+    return operational_health.report(runtime, {}, {}, now=NOW)["orders_blocked_by_release"]
+
+
+def test_a_live_deployment_that_cannot_send_orders_says_so(tmp_path, slot_clock):
+    no_ack = authorized(env(tmp_path))
+    assert blocked_flag(no_ack) is True                               # PROD: authorized binding, no ack
+    assert blocked_flag(acked(no_ack)) is False
+    assert blocked_flag({**acked(no_ack), "LEGO_MAX_ORDER_NOTIONAL_USD": "900"}) is True   # drifted caps
+    uat = env(tmp_path, WEBULL_ENV="UAT", LEGO_ALLOW_FRACTIONAL="true")
+    assert blocked_flag(authorized(uat)) is False
+    assert blocked_flag({**uat, "LEGO_RELEASE_AUTHORIZATION": "0" * 64}) is True          # stale binding
+
+
+def test_deployments_that_never_intended_to_trade_are_not_flagged(tmp_path, slot_clock):
+    base = authorized(env(tmp_path))                                   # PROD, no ack: gate closed
+    assert blocked_flag({**base, "LEGO_MODE": "observe"}) is False
+    assert blocked_flag({**base, "LEGO_ACTIVE": "false"}) is False
+
+
+def test_the_flag_is_its_own_error_status():
+    assert observability.business_status(
+        {"operational_health": {"orders_blocked_by_release": True}}, 200) == "RELEASE_UNAUTHORIZED"
+    assert observability.severity_for("RELEASE_UNAUTHORIZED") == "ERROR"
+
+
+def test_the_status_outranks_the_soft_warnings_but_not_a_finished_horizon():
+    def status(**flags):
+        return observability.business_status(
+            {"operational_health": {"orders_blocked_by_release": True, **flags}}, 200)
+
+    assert status(release_expiring=True, token_warning=True, dna_low=True) == "RELEASE_UNAUTHORIZED"
+    assert status(release_expired=True) == "RELEASE_EXPIRED"
+    assert status(dna_exhausted=True) == "DNA_EXHAUSTED"
+
+
+def test_minimal_runtimes_without_a_gate_report_not_blocked():
+    runtime = SimpleNamespace(
+        operator=SimpleNamespace(dna_bundle=SimpleNamespace(
+            interval_seconds=900, origin_utc=None, dna_code="bypass:50")),
+        deployment=SimpleNamespace(execution_limits=("", "", "", "")))
+    assert operational_health.report(runtime, {}, {}, now=NOW)["orders_blocked_by_release"] is False

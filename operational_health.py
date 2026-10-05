@@ -78,4 +78,10 @@ def report(runtime, decision, token, *, now=None):
                       release_expiring=seconds <= RELEASE_WARNING_SECONDS,
                       release_sessions_remaining=(
                           complete_sessions_between(now, end) if seconds > 0 else 0))
+    # trade+active that still cannot send an order because the release binding or
+    # the PROD acknowledgement does not match: the deployment looks live and is not.
+    # getattr: report() is also driven by minimal duck-typed runtimes that carry no gate.
+    intends_orders = getattr(getattr(runtime, "operator", None), "allows_new_intents", False)
+    result["orders_blocked_by_release"] = bool(
+        intends_orders and getattr(runtime, "allows_new_broker_mutation", None) is False)
     return result

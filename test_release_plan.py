@@ -266,3 +266,5 @@ def test_check_reports_the_horizon_too(monkeypatch):
         monkeypatch.setenv(key, value)
     report = ops.check_command(None)
     assert report["horizon"]["ok"] is True and report["horizon"]["trading"] is False
+    assert report["new_orders_authorized"] is False       # observe/inactive never sends orders
+    assert report["prod_live_gate_open"] is True          # UAT is not subject to the production gate

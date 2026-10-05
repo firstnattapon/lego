@@ -46,6 +46,8 @@ def check_command(_args) -> dict:
         "config_hash": runtime.operator.config_hash,
         "account_fingerprint": runtime.deployment.account_fingerprint,
         "release_authorized": runtime.deployment.release_is_authorized,
+        "prod_live_gate_open": runtime.prod_live_gate_open,
+        "new_orders_authorized": runtime.allows_new_broker_mutation,
         "candidate_hash_local": local_candidate,
         "candidate_matches": runtime.deployment.candidate_hash == local_candidate,
         "execution_limits_status": limit_status,

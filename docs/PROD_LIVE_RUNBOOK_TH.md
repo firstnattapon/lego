@@ -85,6 +85,7 @@ python tools/verify_deployment.py --service private-service.json --scheduler pri
 ```
 
 - `verify_deployment` ตรวจ `production_mode`: observe/inactive หรือ trade/active ที่มี ack, authorization และ caps ครบ — ไม่ได้ตรวจว่าค่าถูกต้องต่อบัญชี
+- `business_status=RELEASE_UNAUTHORIZED` (severity ERROR, `operational_health.orders_blocked_by_release=true`) = deployment เป็น trade/active แต่ไม่ส่ง order เพราะ release authorization หรือ `LEGO_PROD_LIVE_ACK` ไม่ตรงกับ release (มักเกิดจากการแก้ env ของ function ภายหลัง) — `python ops.py check` แสดง `release_authorized`, `prod_live_gate_open`, `new_orders_authorized`; แก้ด้วยการ deploy ใหม่ผ่าน script ไม่ใช่แก้ env ทีละค่า
 - เฝ้า tick แรกของ session ถัดไปด้วยตัวเอง: `business_status`, `release_expiring`, order แรกและ fill ตรงกับ caps ที่อนุมัติ
 - วิธี B: ทันทีที่ funding fill ยืนยันและ holdings ตรง broker ให้ออก release steady (caps แน่น, `--initial-funding` ออก) — อย่าปล่อย release funding ไว้
 

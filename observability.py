@@ -73,6 +73,10 @@ def business_status(body: dict, http_status: int) -> str:
         return "RELEASE_EXPIRED"
     if health.get("dna_exhausted") or decision.get("pipeline_status") == "DNA_EXHAUSTED":
         return "DNA_EXHAUSTED"
+    # After the finished horizons (those need a new release anyway), before the
+    # soft warnings that would otherwise hide it for the last 48 hours of a release.
+    if health.get("orders_blocked_by_release"):
+        return "RELEASE_UNAUTHORIZED"
     if health.get("release_expiring"):
         return "RELEASE_EXPIRING"
     if health.get("token_warning"):
@@ -88,7 +92,7 @@ def business_status(body: dict, http_status: int) -> str:
 ERROR_STATUSES = frozenset({
     "ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED", "BROKER_REJECT_HALT",
     "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED", "EXECUTION_LIMIT_BLOCKED",
-    "RECONCILIATION_OVERDUE"})
+    "RECONCILIATION_OVERDUE", "RELEASE_UNAUTHORIZED"})
 WARNING_STATUSES = frozenset({
     "AUTH_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
     "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_LOW", "TOKEN_EXPIRY_WARNING",
