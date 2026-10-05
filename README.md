@@ -1,5 +1,14 @@
 # LEGO PRINCIPAL v2
 
+5 October audit: [release horizon, caps and the guarded real-money path](docs/AUDIT_20261005_TH.md).
+The 1–4 October UAT stall was not a money-path defect: a 24-hour approval window covered one
+session, the DNA (`bypass:500`) was due to end that week and the caps (36,000 USD vs a 10,000 USD
+principal) could never bind. `python ops.py release-plan` now checks window, DNA and caps before
+every release and prints the values to deploy; renewal alerts fire 48 hours ahead; a PROD live
+release needs `LEGO_PROD_LIVE_ACK` bound to its caps and window
+([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)). Nothing renews itself and PROD stays observe/inactive
+by default. Live acceptance remains **NO-GO** (no UAT BUY/SELL fills or alert delivery proven yet).
+
 30 September final audit: [source changes, evidence and remaining UAT/PROD gates](docs/AUDIT_20260930_FINAL_TH.md).
 Adds private broker-blocker diagnostics, Ready Revision digest receipts and
 candidate-bound local evidence checks. Live acceptance remains **NO-GO**; local
@@ -10,8 +19,9 @@ Continuous execution v4: [final implementation review](docs/implementation_plan_
 [study guide](docs/LEARNING_CONTINUOUS_V4_TH.md).
 This candidate adds one-shot durable cancellation, market-day quotas, release
 binding v4 and immutable transition audit. Production remains **NO-GO** pending
-live UAT fill/endurance, deployment and alert evidence. Deploy Production only in
-observe/inactive mode. The older review below is historical.
+live UAT fill/endurance, deployment and alert evidence. Until those gates pass, deploy
+Production only in observe/inactive mode (the acknowledged live path is documented in
+[PROD_LIVE_RUNBOOK_TH.md](docs/PROD_LIVE_RUNBOOK_TH.md)). The older review below is historical.
 
 23 September readiness hardening: [implementation plan and incident evidence](docs/IMPLEMENTATION_PLAN_20260923_TH.md).
 That release required deployment-bound execution limits and a v3 release

@@ -4,6 +4,33 @@ from functools import lru_cache
 from dna_engine import decode_dna
 from market_clock import NY, session_bounds, session_slot_count, calendar_fingerprint
 
+# Warn two days ahead. A window that ends over a weekend has to page before the
+# operator leaves on Friday; the previous 24 hours gave a Sunday-night expiry no
+# working-hours warning at all.
+RELEASE_WARNING_SECONDS = 172800
+_MAX_CALENDAR_DAYS = 4000
+
+
+def regular_sessions(start):
+    """(open, close) of each regular session, from *start*'s New York date onward."""
+    day = start.astimezone(NY).date()
+    for _ in range(_MAX_CALENDAR_DAYS):
+        bounds = session_bounds(day)
+        if bounds:
+            yield bounds
+        day += timedelta(days=1)
+
+
+def complete_sessions_between(start, end):
+    """Regular sessions that open at/after *start* and close at/before *end*."""
+    count = 0
+    for opened, closed in regular_sessions(start):
+        if opened >= end:
+            break
+        if opened >= start and closed <= end:
+            count += 1
+    return count
+
 
 @lru_cache(maxsize=32)
 def dna_end(origin_text, length, interval, calendar_hash):
@@ -48,5 +75,13 @@ def report(runtime, decision, token, *, now=None):
         result.update(release_expiry_utc=end.isoformat(),
                       release_seconds_remaining=seconds,
                       release_expired=seconds <= 0,
-                      release_expiring=seconds <= 86400)
+                      release_expiring=seconds <= RELEASE_WARNING_SECONDS,
+                      release_sessions_remaining=(
+                          complete_sessions_between(now, end) if seconds > 0 else 0))
+    # trade+active that still cannot send an order because the release binding or
+    # the PROD acknowledgement does not match: the deployment looks live and is not.
+    # getattr: report() is also driven by minimal duck-typed runtimes that carry no gate.
+    intends_orders = getattr(getattr(runtime, "operator", None), "allows_new_intents", False)
+    result["orders_blocked_by_release"] = bool(
+        intends_orders and getattr(runtime, "allows_new_broker_mutation", None) is False)
     return result

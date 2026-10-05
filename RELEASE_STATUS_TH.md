@@ -1,7 +1,13 @@
 # สถานะ candidate continuous execution v4
 
-ล่าสุด 30 กันยายน: [audit ฉบับ final และ gate ที่ค้าง](docs/AUDIT_20260930_FINAL_TH.md).
-ผล source/PR รอบนี้อยู่ใน `release_evidence/20260930-pr/`; acceptance ด้านล่างเป็น
+ล่าสุด 5 ตุลาคม: [audit release horizon/caps และเส้นทางเงินจริงแบบ acknowledgement](docs/AUDIT_20261005_TH.md)
+และ [runbook PROD live](docs/PROD_LIVE_RUNBOOK_TH.md). ผล local และ candidate ของ PR นี้อยู่ใน
+`release_evidence/20261005-pr/`. สถานะ: **code-ready, live-evidence-pending (NO-GO)** — ยังไม่มี UAT BUY/SELL fill,
+endurance สอง session, alert delivery จริง, PROD observe สอง session หรือ token ที่ rotate โดยคน.
+`ops.py release-plan` ตรวจ window/DNA/caps ก่อนทุก release; ไม่มีอะไรต่ออายุเอง.
+
+ก่อนหน้า 30 กันยายน: [audit ฉบับ final และ gate ที่ค้าง](docs/AUDIT_20260930_FINAL_TH.md).
+ผล source/PR รอบนั้นอยู่ใน `release_evidence/20260930-pr/`; acceptance ด้านล่างเป็น
 หลักฐานย้อนหลัง ไม่ใช้รับรอง candidate ใหม่. UAT ต่อเนื่อง/เงินจริงยังต้องผ่าน live gates.
 
 **NO-GO สำหรับเงินจริง; UAT endurance ยัง BLOCKED**. ผล local candidate และ external gates อยู่ใน [final review](docs/implementation_plan_review.md) และ [acceptance JSON](release_evidence/continuous-v4-acceptance.json). Candidate นี้ยังไม่ได้ deploy หรือส่ง broker mutation จริง. Production rollout ต้อง observe/inactive.

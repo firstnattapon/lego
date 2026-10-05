@@ -15,17 +15,47 @@ from firebase_admin import db
 import tick_runtime
 
 logger = logging.getLogger(__name__)
+# The release window and the DNA end silently. One alert per family (the most
+# severe that applies), each carrying the instant its horizon ends, so an
+# operator hears before it closes (RELEASE_EXPIRING within 48h, DNA_LOW under two
+# sessions) and once more when it has. Delivery shares the 24h durable cooldown,
+# so an expired release costs one message a day instead of one per tick.
+HORIZON_FAMILIES = (
+    (("RELEASE_EXPIRED", "release_expired", "release_expiry_utc"),
+     ("RELEASE_EXPIRING", "release_expiring", "release_expiry_utc")),
+    (("DNA_EXHAUSTED", "dna_exhausted", "dna_end_utc"),
+     ("DNA_LOW", "dna_low", "dna_end_utc")),
+)
+ACTION_EVENTS = frozenset({"MANUAL_RECONCILIATION_REQUIRED", "FEE_OVERDUE",
+                           "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"})
 EVENTS = {"BROKER_REJECT_HALT", "AUTH_BACKOFF", "TOKEN_EXPIRY_WARNING",
           "MANUAL_RECONCILIATION_REQUIRED", "FEE_OVERDUE", "EXECUTION_LIMIT_BLOCKED",
-          "RECONCILIATION_OVERDUE"}
+          "RECONCILIATION_OVERDUE"} | {
+    kind for family in HORIZON_FAMILIES for kind, _flag, _key in family}
+
+
+def horizon_events(body):
+    """[(kind, ends_at)] for each horizon family that needs attention."""
+    health = body.get("operational_health") or {}
+    events = []
+    for family in HORIZON_FAMILIES:
+        for kind, flag, key in family:
+            if health.get(flag):
+                events.append((kind, health.get(key)))
+                break
+    return events
 
 
 def notify_tick(body):
-    """Reuse durable rate limiting for actionable execution health only."""
+    """Reuse durable rate limiting for actionable execution and horizon health."""
     if not os.environ.get("ALERT_WEBHOOK_URL", "").strip():
         return False
+    events = []
     kind = body.get("business_status")
-    if kind not in {"MANUAL_RECONCILIATION_REQUIRED", "FEE_OVERDUE", "EXECUTION_LIMIT_BLOCKED", "RECONCILIATION_OVERDUE"}:
+    if kind in ACTION_EVENTS:
+        events.append((kind, None))
+    events.extend(horizon_events(body))
+    if not events:
         return False
     try:
         account = os.environ.get("WEBULL_ACCOUNT_ID", "").strip()
@@ -34,9 +64,14 @@ def notify_tick(body):
         identity = hashlib.sha256(
             f"{os.environ.get('WEBULL_ENV', 'UAT')}\0{account}".encode()).hexdigest()
         symbol = os.environ.get("LEGO_SYMBOL", "")
-        return notify(kind, f"{identity}:{symbol}", symbol=symbol)
+        delivered = False
+        for event, ends_at in events:
+            delivered = notify(event, f"{identity}:{symbol}", symbol=symbol,
+                               expires_at=ends_at) or delivered
+        return delivered
     except Exception:
-        logger.warning("lego tick alert unavailable event=%s", kind)
+        logger.warning("lego tick alert unavailable events=%s",
+                       ",".join(event for event, _ in events))
         return False
 
 

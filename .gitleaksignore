@@ -25,3 +25,10 @@ a04de40219d326b37551de27e90e81303efe7fd6:release_evidence/continuous-v4-candidat
 b80fbae0b8faef6a2f44bd0ee9a4d54d1335accc:release_evidence/20260930-pr/candidate-final.json:generic-api-key:18
 b80fbae0b8faef6a2f44bd0ee9a4d54d1335accc:release_evidence/20260930-pr/candidate-final.json:generic-api-key:119
 b80fbae0b8faef6a2f44bd0ee9a4d54d1335accc:release_evidence/20260930-pr/candidate-final.json:generic-api-key:143
+
+# 2026-10-05 PR: exact SHA-256 values of auth_circuit.py, deploy/token-dir.md and
+# tools/backfill_outbox_query_keys.py, recomputed from the committed source blobs
+# (tools/candidate_manifest.py). Keep the generic rule and all other lines/commits in scope.
+946de14fe4489268e3e913e48022481c0a5fcc41:release_evidence/20261005-pr/candidate-final.json:generic-api-key:26
+946de14fe4489268e3e913e48022481c0a5fcc41:release_evidence/20261005-pr/candidate-final.json:generic-api-key:41
+946de14fe4489268e3e913e48022481c0a5fcc41:release_evidence/20261005-pr/candidate-final.json:generic-api-key:152

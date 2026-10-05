@@ -138,8 +138,19 @@ def dispatch_fixture(monkeypatch, *, environment="UAT", final_price=27.6843,
            "LEGO_CANDIDATE_HASH": "test-candidate"}
     env.update(LEGO_MAX_ORDER_QUANTITY="1000", LEGO_MAX_ORDER_NOTIONAL_USD="10000",
                LEGO_MAX_SESSION_ORDERS="10", LEGO_TRADING_WINDOW_END="2030-01-01T00:00:00Z")
+    if environment == "PROD":
+        # The fixture's order is ~4,990 USD (half the principal). A production
+        # release may only carry that with the funding caps (<= 125% of principal,
+        # >= principal + 1% dispatch drift) and the matching acknowledgement.
+        env["LEGO_MAX_ORDER_NOTIONAL_USD"] = "12500"
     env["LEGO_RELEASE_AUTHORIZATION"] = load_runtime_config(
         env).deployment.expected_release_binding
+    if environment == "PROD":
+        import release_horizon
+        unacked = load_runtime_config(env)
+        env["LEGO_PROD_LIVE_ACK"] = release_horizon.prod_live_acks(
+            release_horizon.inputs_from_runtime(unacked),
+            unacked.deployment.expected_release_binding)["initial-funding"]
     runtime = load_runtime_config(env)
     monkeypatch.setenv("WEBULL_ENV", environment)
     intent = intent_for()
@@ -165,8 +176,13 @@ def dispatch_fixture(monkeypatch, *, environment="UAT", final_price=27.6843,
         place={"client_order_id": run_id, "order_id": "test-broker-order"})
     monkeypatch.setattr(execution, "_poll_order_status",
                         lambda *_, **__: {"status": "SUBMITTED", "filled_quantity": 0})
+    # new_order_token_block compares the token expiry with the real clock, not
+    # with the fixture's frozen NOW; a NOW-based expiry turned this fixture into a
+    # time bomb that failed every PROD dispatch test once the wall clock got
+    # within 24 hours of NOW + 14 days.
     monkeypatch.setattr(execution, "token_health", lambda: {
-        "status": "NORMAL", "expires_at": (NOW + timedelta(days=14)).isoformat(),
+        "status": "NORMAL",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
         "secret_configured": True, "token_storage": "SECRET_MANAGER", "ready": True})
     return runtime, intent, claim, client, committed
 

@@ -1,0 +1,202 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-10-05T08:30:04.681063+00:00",
+  "source_commit": "54f31ab2c8c416a8cbdcf7f4b59afbbfe09f1fef",
+  "candidate_hash": "930917b2ac9f85c339672d3dab3f739b75a73abd4dc1049e200f50c8dd3e1638",
+  "candidate_scope": "backend-only",
+  "source_frozen_at": "2026-10-05T08:29:21.275375+00:00",
+  "source_unchanged_through_tests": true,
+  "executed_in": "clean git export of source_commit (no sibling lego-firebase-streamlit checkout)",
+  "python": "Python 3.12.3",
+  "local_status": "PASS",
+  "failed_checks": [],
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "full_suite": {
+    "junit": "full-suite.xml (retained locally)",
+    "junit_sha256": "b972cc5e77c92b5a549b675c8e05b3e47ba7e465c5a98c7fa04ad576e34f2afb",
+    "counts": {
+      "tests": 1473,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1464
+    },
+    "note": "skipped = emulator-only tests; CI runs them against the Firebase Database emulator."
+  },
+  "checks": [
+    {
+      "id": "pip_check",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "started_utc": "2026-10-05T08:29:21.329954+00:00",
+      "finished_utc": "2026-10-05T08:29:21.615348+00:00",
+      "log": "pip_check.log",
+      "log_sha256": "c2d56b8a5bf04b83c17d9f07db44f507be09ff3118e5afa586805da9b2f1600d"
+    },
+    {
+      "id": "pip_audit",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "started_utc": "2026-10-05T08:29:21.616068+00:00",
+      "finished_utc": "2026-10-05T08:29:31.624672+00:00",
+      "log": "pip_audit.log",
+      "log_sha256": "cd2becaa920b6f2227c2042cbb00c3d1ae18b4b5b61af60dd6f4478d239e1833"
+    },
+    {
+      "id": "compile",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "started_utc": "2026-10-05T08:29:31.625231+00:00",
+      "finished_utc": "2026-10-05T08:29:31.980986+00:00",
+      "log": "compile.log",
+      "log_sha256": "596ceb9a1015f525eb0db1a0bb769db1c688b0973ea597850da6cd56804c7a77"
+    },
+    {
+      "id": "shell_syntax",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "started_utc": "2026-10-05T08:29:31.981274+00:00",
+      "finished_utc": "2026-10-05T08:29:31.990442+00:00",
+      "log": "shell_syntax.log",
+      "log_sha256": "2344842df2c47f708c2d29dc379d84bc79cdcbaa985f1067782be01d72cd7ddd"
+    },
+    {
+      "id": "full_suite",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "started_utc": "2026-10-05T08:29:31.990757+00:00",
+      "finished_utc": "2026-10-05T08:30:03.607628+00:00",
+      "log": "full_suite.log",
+      "log_sha256": "00075c35cfd0d5a8f78487879104933db3fbe921e1f47cace446b8d2e978b5fd"
+    },
+    {
+      "id": "secret_scan_source_commit",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "started_utc": "2026-10-05T08:30:03.611243+00:00",
+      "finished_utc": "2026-10-05T08:30:03.740667+00:00",
+      "log": "secret_scan_source_commit.log",
+      "log_sha256": "92f4c84e6256d5d4879690d110f4480c82b1a09ac475b70cfcdcd43ac5b4af28"
+    }
+  ],
+  "behavior_checks": [
+    {
+      "id": "incident_release_as_deployed",
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "blocking": [
+        "window_open"
+      ],
+      "expected_blocking": [
+        "window_open"
+      ],
+      "warnings": [
+        "notional_cap_ratio",
+        "session_orders_cap"
+      ],
+      "limits": {
+        "LEGO_MAX_ORDER_QUANTITY": "1000",
+        "LEGO_MAX_ORDER_NOTIONAL_USD": "36000",
+        "LEGO_MAX_SESSION_ORDERS": "30",
+        "LEGO_TRADING_WINDOW_END": "2026-10-01T06:19:26Z"
+      },
+      "prod_live_ack_modes_available": [],
+      "log": "release_plan_incident_release_as_deployed.log",
+      "log_sha256": "29f64994dcfdadab0b999731018d421c22092568a5c53acc67c3d8a6a523ce44"
+    },
+    {
+      "id": "incident_release_with_new_window",
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "blocking": [
+        "dna_covers_window"
+      ],
+      "expected_blocking": [
+        "dna_covers_window"
+      ],
+      "warnings": [
+        "notional_cap_ratio",
+        "session_orders_cap"
+      ],
+      "limits": {
+        "LEGO_MAX_ORDER_QUANTITY": "1000",
+        "LEGO_MAX_ORDER_NOTIONAL_USD": "36000",
+        "LEGO_MAX_SESSION_ORDERS": "30",
+        "LEGO_TRADING_WINDOW_END": "2026-10-16T20:00:00Z"
+      },
+      "prod_live_ack_modes_available": [],
+      "log": "release_plan_incident_release_with_new_window.log",
+      "log_sha256": "4098ecea8f1f41741990ea6091a526c0425da109eaf583688bd005fcf6f73f3d"
+    },
+    {
+      "id": "uat_continuous_profile",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "blocking": [],
+      "expected_blocking": [],
+      "warnings": [],
+      "limits": {
+        "LEGO_MAX_ORDER_QUANTITY": "30",
+        "LEGO_MAX_ORDER_NOTIONAL_USD": "1500",
+        "LEGO_MAX_SESSION_ORDERS": "26",
+        "LEGO_TRADING_WINDOW_END": "2026-10-16T20:00:00Z"
+      },
+      "prod_live_ack_modes_available": [],
+      "log": "release_plan_uat_continuous_profile.log",
+      "log_sha256": "6d796cf2a62a35997228edabaf2bf43d9d17e18584d65703f5f11e48d280d3fa"
+    },
+    {
+      "id": "prod_canary_prefunded",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "blocking": [],
+      "expected_blocking": [],
+      "warnings": [],
+      "limits": {
+        "LEGO_MAX_ORDER_QUANTITY": "20",
+        "LEGO_MAX_ORDER_NOTIONAL_USD": "1000",
+        "LEGO_MAX_SESSION_ORDERS": "10",
+        "LEGO_TRADING_WINDOW_END": "2026-10-09T20:00:00Z"
+      },
+      "prod_live_ack_modes_available": [
+        "prefunded"
+      ],
+      "log": "release_plan_prod_canary_prefunded.log",
+      "log_sha256": "32714956ca7061a6cf5a003bf5b3545b45ff63e7eddf14b44b62ac51c8624335"
+    },
+    {
+      "id": "prod_funding_release",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "blocking": [],
+      "expected_blocking": [],
+      "warnings": [
+        "funding_release_temporary"
+      ],
+      "limits": {
+        "LEGO_MAX_ORDER_QUANTITY": "200",
+        "LEGO_MAX_ORDER_NOTIONAL_USD": "12500",
+        "LEGO_MAX_SESSION_ORDERS": "2",
+        "LEGO_TRADING_WINDOW_END": "2026-10-06T20:00:00Z"
+      },
+      "prod_live_ack_modes_available": [
+        "initial-funding"
+      ],
+      "log": "release_plan_prod_funding_release.log",
+      "log_sha256": "205827d3f69cde2d2ece591c0b5622aeb222037dde3fa25b8a26a6fae56f8aee"
+    }
+  ],
+  "live_gates": {
+    "uat_buy_sell_two_sessions_restart_rollover": "BLOCKED",
+    "fractional_fill_precision": "BLOCKED",
+    "monitoring_delivery_horizon": "BLOCKED",
+    "release_renewal_dry_run": "BLOCKED",
+    "prod_observe_two_sessions": "BLOCKED",
+    "prod_token_operator_rotation": "BLOCKED",
+    "controlled_live_authorization": "BLOCKED",
+    "live_fills_fees_positions_cash": "BLOCKED"
+  },
+  "live_actions_performed": false,
+  "raw_evidence": "Command logs and JUnit retained locally; SHA-256 identifies every invocation. GitHub CI supplies independently retrievable commit-bound checks."
+}

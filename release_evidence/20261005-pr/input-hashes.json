@@ -1,0 +1,135 @@
+{
+  "schema": "lego_audit_input_hashes_v1",
+  "generated_at": "2026-10-05T08:15:08.554736+00:00",
+  "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; aggregates below are the numbers quoted in docs/AUDIT_20261005_TH.md.",
+  "inputs": [
+    {
+      "name": "downloaded-logs-20261004-201750.json",
+      "role": "Cloud Run logs of lego-tick-uat, 2026-10-02T15:17:10Z..2026-10-04T13:17:05Z",
+      "bytes": 11454621,
+      "sha256": "49bf09f4bd2c8d22291e377e453e48dea308ef0ec26a8cfe79eb43b02b2a5620"
+    },
+    {
+      "name": "lego-firebase-default-rtdb-export.json",
+      "role": "Realtime Database export",
+      "bytes": 1002588,
+      "sha256": "a9e5458f94a78bd2bd7767c8aa0771b5fe62db887f7717dc1dae8522e7f4e1ae"
+    },
+    {
+      "name": "YAML.txt",
+      "role": "Cloud Run service and revision YAML (lego-tick-uat-00037-led)",
+      "bytes": 13169,
+      "sha256": "c60469e6c4608214345d2424d7ab83218c1ddaf06f3918d4807c4e31a250cab2"
+    },
+    {
+      "name": "lego-webull-audit-rev2.md",
+      "role": "Operator audit, revision 2 (did not read the source)",
+      "bytes": 24476,
+      "sha256": "d422750bb6c2c5efad705f92df483a17f82b80e5b0281b79c10ac9ff96594981"
+    },
+    {
+      "name": "webull-llms.txt",
+      "role": "Webull TH API documentation index",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    }
+  ],
+  "readiness_audit": {
+    "command": "python -m tools.readiness_audit --export <rtdb-export> --logs <cloud-run-logs> --candidate 0fb837f4cae80b13240261735663c3931279e093a745d1055a47685a8bf950d5 --revision lego-tick-uat-00037-led --output readiness-audit.json",
+    "audited": "the deployed incident revision and its candidate, not this PR's candidate",
+    "exit_code": 1,
+    "status": "BLOCKED",
+    "explanation": {
+      "request_tick_pairing": "FAIL with 2,760 of 2,761 pairs matched. The tick at 2026-10-02T15:17:18Z is the first of the window; the first log lines are the SDK retries of its own request, so the download began mid-request and its request log is outside the file. The one request without a tick is HTTP 403 for /robots.txt from Googlebot, rejected by IAM before the container (the service is not public).",
+      "blocked_criteria": "seven criteria need independently captured operational evidence (broker state, transition history, CI emulator, deployed identity, UAT BUY/SELL soak, alert delivery, PROD observe) and are BLOCKED by design"
+    }
+  },
+  "aggregates": {
+    "log_window_utc": [
+      "2026-10-02T15:17:10Z",
+      "2026-10-04T13:17:05Z"
+    ],
+    "log_entries": 5660,
+    "completed_ticks": 2761,
+    "pipeline_status": {
+      "TICK_OK": 2760,
+      "TICK_DECISION_ERROR": 1
+    },
+    "business_status": {
+      "RELEASE_EXPIRED": 2748,
+      "EXECUTION_LIMIT_BLOCKED": 12,
+      "ERROR": 1
+    },
+    "tick_severity": {
+      "WARNING": 2748,
+      "ERROR": 13
+    },
+    "tick_http_status": {
+      "200": 2760,
+      "503": 1
+    },
+    "request_http_status": {
+      "200": 2760,
+      "403": 1
+    },
+    "tick_duration_ms": {
+      "median": 829.6,
+      "max": 15894.1
+    },
+    "order_intents": {
+      "total": 12,
+      "BUY": 7,
+      "SELL": 5,
+      "status": {
+        "NOT_PLACED": 12
+      },
+      "terminal_reason": "trading window expired",
+      "positive_fills": 0
+    },
+    "order_notional_usd": {
+      "min": 25.75,
+      "max": 86.07
+    },
+    "order_quantity_shares": {
+      "min": 0.37787,
+      "max": 1.27744
+    },
+    "committed_rows": 19,
+    "market_ordinals": [
+      475,
+      493
+    ],
+    "price_usd": {
+      "min": 67.38,
+      "max": 68.34
+    },
+    "holdings_shares": 147.13455,
+    "broker_errors": {
+      "total": 473,
+      "ServerException": 470,
+      "ClientException_read_timeout": 3,
+      "first_utc": "2026-10-01T13:43:13Z",
+      "last_utc": "2026-10-02T15:17:17Z"
+    },
+    "auth_backoff": {
+      "failures": 3,
+      "first_utc": "2026-10-01T19:51:11Z",
+      "last_utc": "2026-10-01T19:56:05Z",
+      "resolved_utc": "2026-10-02T13:30:10Z"
+    },
+    "deployed_revision": {
+      "name": "lego-tick-uat-00037-led",
+      "created_utc": "2026-09-30T06:21:11Z",
+      "git_commit": "572767eec6721c1b686efc147aadc8d76043848a",
+      "candidate_hash": "0fb837f4cae80b13240261735663c3931279e093a745d1055a47685a8bf950d5",
+      "trading_window_end": "2026-10-01T06:19:26Z",
+      "caps": {
+        "quantity": 1000,
+        "notional_usd": 36000,
+        "session_orders": 30
+      },
+      "dna_bundle": "strategy.example.json",
+      "alert_webhook_configured": false
+    }
+  }
+}
