@@ -15,15 +15,21 @@ submitted payload is still refused. The fixtures are the incident's own values.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_DOWN, Decimal
 
 import pytest
 
+import decision_service
+import execution_service as execution
 import lego_orders as orders
+import lego_outbox as outbox
 import main
+import operator_halt
 import order_recovery as recovery
-from conftest import FAKE_DB
+import webull_io
+from config import load_runtime_config
+from conftest import FAKE_DB, fake_trade_client
 from lego_one_row import (PASS_MIN_ORDER, READY_BUY, READY_SELL, Config,
                           build_decision, compute_row)
 from lego_state import (STATE_PATH, RuntimeIdentityError,
@@ -389,3 +395,139 @@ def test_the_tick_reports_the_rebind_once_and_stops_on_a_widening(monkeypatch):
     assert code == 500
     assert widened["status"] == "CONFIG_ERROR" and widened["committed"] is False
     assert "lot-size migration" in widened["error"]
+
+
+# --- the incident replayed through the real decision and worker paths --------------
+
+DECISION_TIME = datetime(2026, 10, 5, 13, 45, 5, tzinfo=UTC)        # the incident's
+DISPATCH_TIME = datetime(2026, 10, 5, 13, 45, 20, tzinfo=UTC)
+DISPATCH_PRICE = 68.955                       # dispatch_quote_check.dispatch_price
+
+
+def _replay_runtime(monkeypatch):
+    env = {
+        "LEGO_SYMBOL": "UBER", "LEGO_FIX_C": "10000", "LEGO_DIFF": "25",
+        "WEBULL_ENV": "UAT", "WEBULL_ACCOUNT_ID": "test-account",
+        "LEGO_DNA_CODE": "bypass:1000", "LEGO_DNA_CLOCK_MODE": "market",
+        "LEGO_SLOT_SECONDS": "900", "LEGO_DNA_ORIGIN_UTC": "2026-10-05T13:30:00Z",
+        "LEGO_MODE": "trade", "LEGO_ACTIVE": "true", "LEGO_CANDIDATE_HASH": "candidate",
+        "LEGO_ALLOW_FRACTIONAL": "true", "FIREBASE_DB_URL": "https://test.firebaseio.com",
+        "LEGO_MAX_ORDER_QUANTITY": "1000", "LEGO_MAX_ORDER_NOTIONAL_USD": "10000",
+        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_TRADING_WINDOW_END": "2030-01-01T00:00:00Z",
+    }
+    env["LEGO_RELEASE_AUTHORIZATION"] = load_runtime_config(
+        env).deployment.expected_release_binding
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    return load_runtime_config(env)
+
+
+def _frozen(moment: datetime):
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment.astimezone(tz) if tz else moment
+    return Frozen
+
+
+def _replay(monkeypatch, capability, broker_places: int):
+    """Decide the incident's slot, then dispatch it; only broker I/O is a double.
+
+    The broker double reports a placed quantity back at `broker_places` decimal
+    places, which is what UAT did on 24 Sep and 5 Oct.
+    """
+    webull_io.reset_clients()
+    execution.configure(main)
+    decision_service.configure(main)
+    runtime = _replay_runtime(monkeypatch)
+    cfg = Config("UBER", 10000.0, 25.0, "bypass:1000", "shannon_demon_lego_v2")
+
+    monkeypatch.setattr(decision_service, "datetime", _frozen(DECISION_TIME))
+    monkeypatch.setattr(decision_service, "build_clients", lambda: (object(), object()))
+    monkeypatch.setattr(decision_service, "fetch_instrument_capability",
+                        lambda *_a: capability)
+    monkeypatch.setattr(decision_service, "token_health",
+                        lambda: {"ok": True, "ready": True})
+    monkeypatch.setattr(decision_service, "fetch_snapshot", lambda *_a: {
+        "price": 68.68, "holdings": 147.13455,
+        "captured_at": DECISION_TIME.isoformat(),
+        "quote_time": DECISION_TIME.isoformat()})
+    body, code = decision_service.run_decision(None, runtime, cfg)
+    assert code == 200 and body["status"] == READY_SELL, body
+
+    client = fake_trade_client(
+        preview={"estimated_cost": "106.15", "estimated_transaction_fee": "1.14"},
+        place=lambda *args, **_kw: {
+            "client_order_id": args[-1][0]["client_order_id"],
+            "order_id": BROKER_ORDER_ID})
+
+    def broker_detail(_client, run_id):
+        placed = client.order_v3.place_order.calls[-1][0][-1][0]
+        total = Decimal(placed["quantity"]).quantize(Decimal(1).scaleb(-broker_places))
+        detail = _order_detail(total=f"{total:f}", status="PENDING")
+        detail["client_order_id"] = detail["orders"][0]["client_order_id"] = run_id
+        return detail
+
+    monkeypatch.setattr(execution, "datetime", _frozen(DISPATCH_TIME))
+    monkeypatch.setattr(outbox, "datetime", _frozen(DISPATCH_TIME))
+    monkeypatch.setattr(execution, "build_clients", lambda: (client, object()))
+    monkeypatch.setattr(execution, "fetch_open_orders", lambda *_a: [])
+    monkeypatch.setattr(execution, "fetch_snapshot", lambda *_a: {
+        "price": DISPATCH_PRICE, "holdings": 147.13455,
+        "quote_time": DISPATCH_TIME.isoformat(),
+        "captured_at": DISPATCH_TIME.isoformat()})
+    monkeypatch.setattr(execution, "fetch_buying_power", lambda *_a: Decimal("100000"))
+    monkeypatch.setattr(execution, "fetch_order_detail", broker_detail)
+    monkeypatch.setattr(execution, "token_health", lambda: {
+        "status": "NORMAL", "ready": True, "secret_configured": True,
+        "token_storage": "SECRET_MANAGER",
+        "expires_at": (datetime.now(UTC) + timedelta(days=14)).isoformat()})
+    result = execution._run_order_worker(cfg, limit=1, runtime=runtime)
+    stored = outbox.read_intent(main.chain_key(cfg), body["run_id"])
+    row = FAKE_DB.reference(f"webull_lego_rows/{body['run_id']}").get()
+    return body, row, stored, client, result, runtime
+
+
+@pytest.mark.parametrize("places,broker_places,quantity", [
+    (2, 2, 1.53),         # this change, against the broker as observed
+    (2, 5, 1.53),         # ... and against a broker that keeps all five places
+    (5, 5, 1.53175),      # the old default, which only a five-place broker allows
+])
+def test_the_incident_slot_places_and_reconciles_without_an_anomaly(
+        monkeypatch, places, broker_places, quantity):
+    capability = (parse_instrument_capability(_profile(), "UBER") if places == 2
+                  else _capability(quantity_increment=Decimal("0.00001"),
+                                   decimal_precision=5))
+
+    body, row, stored, client, result, runtime = _replay(
+        monkeypatch, capability, broker_places)
+
+    assert row["จำนวนสั่ง (หุ้น)"] == quantity
+    assert stored["quantity"] == quantity
+    assert stored["strategy_config"]["decimal_precision"] == places
+    assert stored["instrument_capability"]["decimal_precision"] == places
+    placed = client.order_v3.place_order.calls
+    assert len(placed) == 1
+    assert Decimal(placed[0][0][-1][0]["quantity"]) == Decimal(str(quantity))
+    assert stored["place_attempted"] is True
+    assert stored.get("needs_manual_check") is not True
+    assert stored["status"] in {"PENDING", "SUBMITTED"}
+    identity = webull_io.runtime_identity_fingerprint()
+    assert operator_halt.status(identity, "UBER").get("halted") is not True
+
+
+def test_the_five_place_contract_against_a_two_place_broker_is_the_incident(
+        monkeypatch):
+    """The old default and the broker as observed: the order that stopped the fence."""
+    capability = _capability(quantity_increment=Decimal("0.00001"), decimal_precision=5)
+
+    body, row, stored, client, result, runtime = _replay(monkeypatch, capability, 2)
+
+    assert row["จำนวนสั่ง (หุ้น)"] == 1.53175
+    assert client.order_v3.place_order.calls[0][0][-1][0]["quantity"] == "1.53175"
+    assert stored["status"] == "MANUAL_RECONCILIATION_REQUIRED"
+    assert stored["needs_manual_check"] is True
+    assert stored["cancel_last_error_code"] == "BrokerContractAnomaly"
+    identity = webull_io.runtime_identity_fingerprint()
+    halt = operator_halt.status(identity, "UBER")
+    assert halt["halted"] is True and halt["set_by"] == "system:order-recovery"

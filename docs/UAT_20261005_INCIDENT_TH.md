@@ -32,7 +32,7 @@ instrument profile ของ Webull ไม่มี field ความละเ�
 - ไม่ผ่อน `validate_evidence`, admin reconcile หรือ `_holdings_match_fill` (tolerance 1e-6) และไม่เพิ่ม env ใหม่ — `chain_key`/`config_hash` ของ `_v2` ไม่รวม precision chain เดิมจึงต่อเนื่อง
 - test: `test_fractional_quantity_incident.py` (ใช้ค่าและสตริงจริงจาก export), ปรับ `test_fractional_shares.py` และ `test_broker_smoke.py`
 
-หลักฐาน local: `pytest` 1,537 passed / 9 skipped (ก่อนแก้ 1,464 / 9); ด้วย RTDB emulator 1,546 passed ทั้งหมด
+หลักฐาน local: `pytest` 1,541 passed / 9 skipped (ก่อนแก้ 1,464 / 9); ด้วย RTDB emulator 1,550 passed ทั้งหมด; มี test ที่ replay เหตุการณ์นี้ผ่าน `run_decision` และ `_run_order_worker` จริง (broker เป็น double ที่รายงานปริมาณกลับที่ 2 ตำแหน่ง): สัญญา 5 ตำแหน่งได้ anomaly เหมือนเดิม สัญญา 2 ตำแหน่งไม่เกิด
 
 ## ลำดับที่ต้องทำ (ห้ามสลับ)
 
