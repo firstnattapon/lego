@@ -104,8 +104,25 @@ WARNING_STATUSES = frozenset({
 NOTICE_STATUSES = frozenset({"RELEASE_EXPIRED", "DNA_EXHAUSTED"})
 
 
-def severity_for(health: str, *, paused: bool = False) -> str:
+# A halted account must never be silent, yet a paused tick repeats every minute, so
+# the steady state stays an INFO heartbeat. Only the first PAUSED_PAGE_SECONDS of each
+# hour of halt age are ERROR: the page when the halt begins and an hourly reminder
+# reach `severity>=ERROR` (the health policy of tools/monitoring_config.py). 2026-10-05
+# a halt began at 17:09 and was INFO for 3.5 hours, including its first tick. Ticks come
+# ~60 s apart with jitter, so the window is three ticks wide: with +-5 s jitter and 1% of
+# ticks lost, a 60 s window missed a page or reminder in 85% of simulated 8-hour halts,
+# 180 s in none of 4,000.
+PAUSED_PAGE_SECONDS = 180
+PAUSED_REMINDER_PERIOD_SECONDS = 3600
+
+
+def severity_for(health: str, *, paused: bool = False,
+                 halt_age_seconds: float | None = None) -> str:
     if paused and health == "MANUAL_RECONCILIATION_REQUIRED":
+        if (halt_age_seconds is not None
+                and max(0.0, halt_age_seconds) % PAUSED_REMINDER_PERIOD_SECONDS
+                < PAUSED_PAGE_SECONDS):
+            return "ERROR"
         return "INFO"
     if health in ERROR_STATUSES:
         return "ERROR"
@@ -116,15 +133,29 @@ def severity_for(health: str, *, paused: bool = False) -> str:
     return "INFO"
 
 
-def emit_tick(body: dict, code: int, *, request=None) -> None:
+def _halt_age_seconds(halt_since, now: datetime) -> float:
+    """Seconds since the halt began. Unreadable means unknown, and unknown pages (0)."""
+    try:
+        since = datetime.fromisoformat(str(halt_since).replace("Z", "+00:00"))
+        if since.tzinfo is None:
+            return 0.0
+        return max(0.0, (now - since).total_seconds())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def emit_tick(body: dict, code: int, *, request=None, now: datetime | None = None) -> None:
+    now = now or datetime.now(timezone.utc)
     health = business_status(body, code)
     body["business_status"] = health
     decision = body.get("decision") or {}
     phases = [body.get("recovery") or {}, body.get("dispatch") or {}]
     paused = any(phase.get("reconciliation_paused") for phase in phases)
+    halt_since = next((phase.get("halt_since") for phase in phases if phase.get("halt_since")), None)
     event = {
-        "event": "lego_tick_completed", "timestamp": datetime.now(timezone.utc).isoformat(),
-        "severity": severity_for(health, paused=paused),
+        "event": "lego_tick_completed", "timestamp": now.isoformat(),
+        "severity": severity_for(health, paused=paused,
+                                 halt_age_seconds=_halt_age_seconds(halt_since, now) if paused else None),
         "revision": os.environ.get("K_REVISION"),
         "candidate_hash": os.environ.get("LEGO_CANDIDATE_HASH"),
         "correlation_id": body.get("correlation_id"), "http_status": code,
@@ -140,7 +171,7 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
                                  for phase in phases if phase.get("open_order_blocked")],
         "execution": [],
         "reconciliation_paused": paused,
-        "halt_since": next((phase.get("halt_since") for phase in phases if phase.get("halt_since")), None),
+        "halt_since": halt_since,
         "errors": [],
         **request_trace(request),
     }
@@ -174,6 +205,7 @@ def emit_tick(body: dict, code: int, *, request=None) -> None:
                                              "needs_manual_check",
                                              "reconciliation_overdue", "reconciliation_age_seconds",
                                              "cancel_requested_at", "cancel_confirmed_at", "cancel_attempt_count",
+                                             "cancel_last_error_code", "cancel_refused_at",
                                              "open_order_count", "open_order_observed_at", "open_order_fingerprints")}})
     print(json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
 

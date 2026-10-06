@@ -16,6 +16,16 @@ from lego_orders import (TERMINAL_STATUSES, normalize_status, canonical_order_ev
 
 CANCEL_STATES = {"CANCEL_REQUESTED", "CANCEL_UNKNOWN"}
 CANCELLABLE = {"PENDING", "SUBMITTED", "PARTIAL_FILLED", "PARTIALLY_FILLED"}
+# The broker answered the one cancel with "this status cannot be operated on"
+# (HTTP 417 OPENAPI_ORDER_CANNOT_OPERATE). That is a refusal, not an unknown
+# outcome: the order is still live and ends by itself (a fill or its DAY expiry),
+# so it stays in ordinary reconciliation instead of halting after the grace.
+# 2026-10-05: a 0.47-share UAT market order sat PENDING, the refused cancel was
+# read as unknown and trading stopped for 3.5 hours. A DAY order cannot outlive
+# its session, so the hold is bounded; after it a person decides (mark_manual).
+CANCEL_REFUSED = "CANCEL_REFUSED_NOT_OPERABLE"
+CANCEL_REFUSAL_CODES = frozenset({"OPENAPI_ORDER_CANNOT_OPERATE"})
+REFUSED_HOLD_SECONDS = 8 * 3600
 
 
 def validate_evidence(intent, detail, summary):
@@ -136,6 +146,15 @@ def outbox_statuses():
     return CANCELLABLE | {"PLACING_UNKNOWN", "UNKNOWN", "PLACING"}
 
 
+def cancel_refused(exc):
+    """True only for the broker's definitive 'cannot operate' answer to a cancel.
+
+    Duck-typed on the SDK ServerException (error_code); a timeout, a 5xx or any
+    other code stays an unknown outcome, because the cancel may have been taken.
+    """
+    return str(getattr(exc, "error_code", "") or "").strip().upper() in CANCEL_REFUSAL_CODES
+
+
 def handle(intent, detail, summary, claim, cancel, *, now=None):
     """Return refreshed intent; caller always settles the authoritative summary."""
     now = now or datetime.now(timezone.utc)
@@ -192,12 +211,21 @@ def handle(intent, detail, summary, claim, cancel, *, now=None):
     try:
         cancel(started["run_id"])
     except Exception as exc:
-        code = "TICK_DEFERRED" if isinstance(exc, tick_runtime.TickDeadlineExceeded) else "CANCEL_OUTCOME_UNKNOWN"
-        return outbox.update_intent(started["chain_key"], started["run_id"], {
-            "status": "CANCEL_UNKNOWN", "cancel_last_error_code": code,
-            "audit_pending": True,
-        }, expected_claim_owner=started["claim_owner"],
-           expected_claim_generation=started["claim_generation"])
+        fields = {"status": "CANCEL_UNKNOWN", "audit_pending": True}
+        if isinstance(exc, tick_runtime.TickDeadlineExceeded):
+            fields["cancel_last_error_code"] = "TICK_DEFERRED"
+        elif cancel_refused(exc):
+            # Move the deadline rather than add a branch: read_failed and any older
+            # binary read the same field, so a rollback still honours the hold.
+            fields.update(
+                cancel_last_error_code=CANCEL_REFUSED, cancel_refused_at=now.isoformat(),
+                cancel_confirmation_deadline=(
+                    now + timedelta(seconds=REFUSED_HOLD_SECONDS)).isoformat())
+        else:
+            fields["cancel_last_error_code"] = "CANCEL_OUTCOME_UNKNOWN"
+        return outbox.update_intent(started["chain_key"], started["run_id"], fields,
+                                    expected_claim_owner=started["claim_owner"],
+                                    expected_claim_generation=started["claim_generation"])
     return started
 
 
@@ -210,5 +238,9 @@ def read_failed(intent, *, now=None):
         except (TypeError, ValueError):
             return mark_manual(intent, "CANCEL_DEADLINE_INVALID")
         if now >= deadline:
-            return mark_manual(intent, "CANCEL_CONFIRMATION_OVERDUE")
+            # After a refused cancel the deadline is the end of the bounded hold
+            # (handle), and the order was never terminal in all that time.
+            return mark_manual(intent, "CANCEL_REFUSED_HOLD_EXPIRED"
+                               if intent.get("cancel_refused_at")
+                               else "CANCEL_CONFIRMATION_OVERDUE")
     return intent

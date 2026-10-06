@@ -1,0 +1,11 @@
+{
+  "algorithm": "sha256(canonical path-to-sha256 map)",
+  "candidate_hash": "f6b07608ac6103195f87b43a56e4ad9f43defec1d3916a2675db8f4077809df3",
+  "dependency_files": {
+    "requirements-dev.txt": "1438527233ce7beb1cdf4a046b8b5d38f140bd77217ef4df17d5592989d3ec15",
+    "requirements.txt": "e490169eb88d8a418243fa4553de948753483aa2d23f490f8ef1fbe414675e00"
+  },
+  "dependency_lock_hash": "83fe34847c136c16702bb842ce58b1603d5ddfcdca1a812bed30ec258067031c",
+  "file_count": 180,
+  "scope": "backend-only"
+}

@@ -1,0 +1,279 @@
+{
+  "schema": "lego_audit_input_hashes_v1",
+  "generated_at": "2026-10-06T06:22:05.985730+00:00",
+  "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates below are the numbers quoted in docs/AUDIT_20261006_TH.md.",
+  "inputs": [
+    {
+      "name": "downloaded-logs-20261006-120735.json",
+      "role": "Cloud Run logs of lego-tick-uat, 2026-10-05T15:36:04Z..20:35:05Z",
+      "bytes": 1489775,
+      "sha256": "8f8ca6f9bfe243790a75fad7d4e695884301d35283e0507f2afab689a6354e78"
+    },
+    {
+      "name": "lego-firebase-default-rtdb-export.json",
+      "role": "Realtime Database export (taken 2026-10-06, after 05:04Z)",
+      "bytes": 66685,
+      "sha256": "6b0e25e30aae7ff671f5203ef08f8408e0056ce54cd8e4fcd6216fa834069261"
+    },
+    {
+      "name": "YAML.txt",
+      "role": "Cloud Run service and revision YAML (lego-tick-uat-00039-yip)",
+      "bytes": 13178,
+      "sha256": "4a46c31bfc9fd3db6357c778e2f1f7e70f9faecbf260978f842cfed7ce9d3bc2"
+    },
+    {
+      "name": "webull-llms.txt",
+      "role": "Webull TH API documentation index",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    },
+    {
+      "name": "webull-llms-current.txt",
+      "role": "second copy of the index, byte-identical to webull-llms.txt",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    }
+  ],
+  "readiness_audit": {
+    "command": "python -m tools.readiness_audit --export <rtdb-export> --logs <cloud-run-logs> --candidate <LEGO_CANDIDATE_HASH of the revision> --revision lego-tick-uat-00039-yip --output readiness-audit.json",
+    "audited": "the deployed revision and its candidate (main b5e39cc), not this PR's candidate",
+    "exit_code": 1,
+    "status": "BLOCKED",
+    "cutover_safe": false,
+    "criteria": {
+      "FAIL": 2,
+      "PASS": 5,
+      "BLOCKED": 7
+    },
+    "explanation": {
+      "snapshot_integrity": "FAIL: one intent is MANUAL_RECONCILIATION_REQUIRED and one execution is unresolved (the order held since 17:09Z)",
+      "money_fences_resolved": "FAIL: one operator halt and one unresolved money fence, both from that order",
+      "blocked_criteria": "seven criteria need independently captured operational evidence and are BLOCKED by design"
+    }
+  },
+  "aggregates": {
+    "log_window_utc": [
+      "2026-10-05T15:36:04.836920Z",
+      "2026-10-05T20:35:05.913994Z"
+    ],
+    "log_entries": 730,
+    "entry_kinds": {
+      "request": 300,
+      "tick": 300,
+      "lego_operation": 114,
+      "sdk_text": 16
+    },
+    "business_status": {
+      "WAITING_RECONCILIATION": 10,
+      "SLOT_CONSUMED": 78,
+      "ROW_COMMITTED": 5,
+      "MANUAL_RECONCILIATION_REQUIRED": 207
+    },
+    "tick_severity": {
+      "WARNING": 10,
+      "INFO": 290
+    },
+    "tick_http_status": {
+      "200": 300
+    },
+    "request_http_status": {
+      "200": 300
+    },
+    "tick_duration_ms": {
+      "median": 578.2,
+      "max": 23885.2
+    },
+    "tick_gap_seconds": {
+      "min": 36.9,
+      "median": 60.0,
+      "max": 83.7
+    },
+    "paused_ticks": {
+      "count": 207,
+      "severity": {
+        "INFO": 207
+      },
+      "first_utc": "2026-10-05T17:09:07.433132+00:00",
+      "halt_since": [
+        "2026-10-05T17:09:06.135738+00:00"
+      ]
+    },
+    "operations": {
+      "sdk_positions": {
+        "calls": 26,
+        "ok": 22,
+        "failed": 4,
+        "ok_mean_s": 3.02,
+        "failed_mean_s": 7.86,
+        "max_s": 10.63
+      },
+      "sdk_cancel": {
+        "calls": 1,
+        "ok": 0,
+        "failed": 1,
+        "ok_mean_s": null,
+        "failed_mean_s": 0.84,
+        "max_s": 0.84
+      },
+      "cancel": {
+        "calls": 1,
+        "ok": 0,
+        "failed": 1,
+        "ok_mean_s": null,
+        "failed_mean_s": 0.86,
+        "max_s": 0.86
+      },
+      "sdk_place": {
+        "calls": 2,
+        "ok": 2,
+        "failed": 0,
+        "ok_mean_s": 0.82,
+        "failed_mean_s": null,
+        "max_s": 0.95
+      },
+      "sdk_order_detail": {
+        "calls": 12,
+        "ok": 12,
+        "failed": 0,
+        "ok_mean_s": 1.22,
+        "failed_mean_s": null,
+        "max_s": 2.46
+      },
+      "sdk_snapshot": {
+        "calls": 21,
+        "ok": 21,
+        "failed": 0,
+        "ok_mean_s": 0.97,
+        "failed_mean_s": null,
+        "max_s": 3.81
+      }
+    },
+    "budget_remaining_at_place_s": [
+      22.9,
+      14.4
+    ],
+    "broker_errors_in_window": [
+      {
+        "action": "/trading/assets/positions/list",
+        "error_code": null,
+        "read_timeout": true,
+        "utc": "2026-10-05T15:45:18Z"
+      },
+      {
+        "action": "/trading/assets/positions/list",
+        "error_code": "GATEWAY_TIMEOUT",
+        "read_timeout": false,
+        "utc": "2026-10-05T16:15:14Z"
+      },
+      {
+        "action": "/trading/orders/cancel",
+        "error_code": "OPENAPI_ORDER_CANNOT_OPERATE",
+        "read_timeout": false,
+        "utc": "2026-10-05T17:06:08Z"
+      },
+      {
+        "action": "/trading/assets/positions/list",
+        "error_code": "GATEWAY_TIMEOUT",
+        "read_timeout": false,
+        "utc": "2026-10-05T17:30:13Z"
+      },
+      {
+        "action": "/trading/assets/positions/list",
+        "error_code": "GATEWAY_TIMEOUT",
+        "read_timeout": false,
+        "utc": "2026-10-05T19:00:13Z"
+      }
+    ],
+    "rows": {
+      "total": 18,
+      "committed": 18,
+      "ordinals": [
+        502,
+        519
+      ],
+      "status": {
+        "READY_SELL": 2,
+        "PASS_THRESHOLD": 5,
+        "PASS_OPERATOR_HALT": 11
+      },
+      "price_usd": [
+        69.4,
+        69.87
+      ],
+      "holdings_last": 143.6028,
+      "slot_return_std_pct": 0.1889,
+      "slot_returns": 17
+    },
+    "order_intents": [
+      {
+        "run": "9f8ec809",
+        "status": "MANUAL_RECONCILIATION_REQUIRED",
+        "side": "SELL",
+        "quantity": 0.47,
+        "placed_at": "2026-10-05T17:00:24Z"
+      },
+      {
+        "run": "a62da402",
+        "status": "FILLED",
+        "side": "SELL",
+        "quantity": 2,
+        "placed_at": "2026-10-05T15:36:15Z"
+      }
+    ],
+    "fill": {
+      "run": "a62da402",
+      "quantity": "2.000000",
+      "notional": "139.240000000000",
+      "fee": "1.50",
+      "fee_pct_of_notional": 1.077,
+      "cash_delta": "137.740000000000"
+    },
+    "halt": {
+      "halted": true,
+      "set_by": "system:order-recovery",
+      "reason": "CANCEL_CONFIRMATION_OVERDUE",
+      "set_at": "2026-10-05T17:09:06.271561+00:00",
+      "audit_events": [
+        "HALT"
+      ]
+    },
+    "fence": {
+      "inflight_run": "9f8ec809",
+      "execution_session": {
+        "count": 2,
+        "end_epoch": 1792440000,
+        "key": "XNYS:2026-10-05",
+        "last_run_id": "9f8ec8092b0afdd2ad5f2432d283f4ba",
+        "reserved_at": "2026-10-05T17:00:24.527299+00:00"
+      }
+    },
+    "deployed_revision": {
+      "name": "lego-tick-uat-00039-yip",
+      "created_utc": "2026-10-05T15:32:48Z",
+      "git_commit": "b5e39ccdab6bb76544f249f3226c34a7e660a266",
+      "candidate_hash": "ee25f39b70b9ab270829062a2944a250a8d2aa33a351940b614f8637bbe66c15",
+      "trading_window_end": "2026-10-19T20:00:00Z",
+      "caps": {
+        "quantity": 30,
+        "notional_usd": 1500,
+        "session_orders": 26
+      },
+      "dna_bundle": "strategy.uat-continuous.json",
+      "cancel_policy": {
+        "action": "cancel",
+        "stale_seconds": 300,
+        "grace_seconds": 120,
+        "max_mutations": 1
+      },
+      "resources": {
+        "cpu": 0.3333,
+        "memory": "512Mi",
+        "timeout_seconds": 45,
+        "concurrency": 1,
+        "max_scale": 1
+      },
+      "alert_webhook_configured": false
+    },
+    "fee_model": "fee-model.py (numpy only; reproduces the table in docs/AUDIT_20261006_TH.md)"
+  }
+}

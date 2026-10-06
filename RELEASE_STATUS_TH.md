@@ -1,6 +1,12 @@
 # สถานะ candidate continuous execution v4
 
-ล่าสุด 5 ตุลาคม: [audit release horizon/caps และเส้นทางเงินจริงแบบ acknowledgement](docs/AUDIT_20261005_TH.md)
+ล่าสุด 6 ตุลาคม: [audit incident UAT หยุดเทรด 3.5 ชั่วโมง](docs/AUDIT_20261006_TH.md) — broker ปฏิเสธ cancel
+(HTTP 417 `OPENAPI_ORDER_CANNOT_OPERATE`) แต่ระบบนับเป็น "ไม่รู้ผล" แล้ว halt เงียบ; แก้ใน `order_recovery.py` (hold 8 ชั่วโมง
+แล้ว poll ต่อ) และ `observability.py` (halt ต้อง page). ผล local และ evidence ของ PR นี้อยู่ใน `release_evidence/20261006-pr/`.
+สถานะ: **code-ready, live-evidence-pending (NO-GO)** — order ที่ค้างอยู่ต้องกู้ด้วยคนก่อนเปิดเทรดต่อ (ขั้นตอนใน audit);
+ยังไม่มี BUY fill, alert delivery จริง, PROD observe หรือ fee PROD ที่วัดแล้ว.
+
+ก่อนหน้า 5 ตุลาคม: [audit release horizon/caps และเส้นทางเงินจริงแบบ acknowledgement](docs/AUDIT_20261005_TH.md)
 และ [runbook PROD live](docs/PROD_LIVE_RUNBOOK_TH.md). ผล local และ candidate ของ PR นี้อยู่ใน
 `release_evidence/20261005-pr/`. สถานะ: **code-ready, live-evidence-pending (NO-GO)** — ยังไม่มี UAT BUY/SELL fill,
 endurance สอง session, alert delivery จริง, PROD observe สอง session หรือ token ที่ rotate โดยคน.

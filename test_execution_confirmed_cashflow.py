@@ -816,3 +816,118 @@ def test_fetch_holdings_reads_the_position_without_market_data(monkeypatch):
 
     assert webull_io.fetch_holdings(trade, _cfg()) == 12.5
     assert data.market_data.get_snapshot.calls == []
+
+
+
+# --- Case 5: a refused cancel keeps the order in reconciliation ----------------
+# 2026-10-05: the broker answered the one cancel with 417 OPENAPI_ORDER_CANNOT_OPERATE
+# and the order later filled. It used to halt 120 s after the refusal, and the fill was
+# never booked. These drive the real path: stale -> cancel refused by an SDK
+# ServerException -> time passes -> the late fill.
+
+def _fenced_runs():
+    locks = FAKE_DB.reference("webull_lego_order_dispatch_locks").get() or {}
+    return {doc.get("inflight_run_id") for doc in locks.values()
+            if isinstance(doc, dict) and doc.get("inflight_run_id")}
+
+
+def _refused_scenario(monkeypatch, *, refuse):
+    """A READY_BUY that is placed and goes stale; with `refuse` its one cancel gets a 417.
+
+    refuse=False is the control: the same order with no cancel policy and no cancel.
+    """
+    from datetime import timedelta
+    from webull.core.exception.exceptions import ServerException
+    from recovery_policy import RecoveryPolicy
+
+    FAKE_DB.store.clear()
+    _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
+    body, _ = _run(monkeypatch, SLOT_1, 330.0, holdings=8.0)
+    run_id = body["run_id"]
+    _stub_broker(monkeypatch, holdings_after=8.0,
+                 detail={"order_status": "SUBMITTED", "filled_quantity": 0})
+    _work()
+    intent = _intent(run_id)
+    ordered = float(intent["quantity"])
+    evidence = {"client_order_id": run_id, "symbol": "AAPL", "side": intent["side"],
+                "total_quantity": ordered, "filled_quantity": 0}
+    attempts = []
+    if refuse:
+        policy = RecoveryPolicy("cancel")
+        stale = datetime.now(UTC) - timedelta(seconds=policy.stale_seconds + 60)
+        FAKE_DB.reference(f"{OUTBOX_PATH}/{chain_key(_cfg())}/{run_id}").update({
+            "cancel_policy": policy.snapshot(), "cancel_policy_hash": policy.fingerprint,
+            "placed_at": stale.isoformat()})
+
+        def refuse_cancel(trade_client, client_order_id):
+            attempts.append(client_order_id)
+            raise ServerException("OPENAPI_ORDER_CANNOT_OPERATE",
+                                  "The current status cannot be modified.", 417)
+
+        monkeypatch.setattr(webull_io, "cancel_order", refuse_cancel)
+        _stub_broker(monkeypatch, holdings_after=8.0, detail={**evidence, "order_status": "PENDING"})
+        first = _work()[0]
+        assert attempts == [run_id] and first["status"] == "CANCEL_UNKNOWN"
+        assert first["cancel_last_error_code"] == "CANCEL_REFUSED_NOT_OPERABLE"
+    return run_id, ordered, evidence, attempts
+
+
+def _fill_and_collect(monkeypatch, run_id, ordered, evidence):
+    _stub_broker(monkeypatch, holdings_after=8.0 + ordered, detail={
+        **evidence, "order_status": "FILLED", "filled_quantity": ordered,
+        "avg_filled_price": 331.25})
+    result = [r for r in _work() if r["run_id"] == run_id][0]
+    repeat = _work()                                    # a retry must not book again
+    return {"status": result["status"], "finalized": result.get("cashflow_finalized"),
+            "seq": _cashflow()["finalized_seq"], "delta": _row(run_id)[DELTA_COLUMN],
+            "actual": _cashflow()["actual_cumulative"], "fenced": _fenced_runs(),
+            "repeat": [r["status"] for r in repeat]}
+
+
+def test_a_late_fill_after_a_refused_cancel_books_exactly_like_an_ordinary_fill(monkeypatch):
+    from datetime import timedelta
+    import order_recovery
+    control = _fill_and_collect(monkeypatch, *_refused_scenario(monkeypatch, refuse=False)[:3])
+
+    run_id, ordered, evidence, attempts = _refused_scenario(monkeypatch, refuse=True)
+    # Ten minutes on, the 120 s grace that used to halt the account is long gone.
+    monkeypatch.setattr(order_recovery, "datetime",
+                        _fixed_now(datetime.now(UTC) + timedelta(minutes=10)))
+    _stub_broker(monkeypatch, holdings_after=8.0, detail={**evidence, "order_status": "PENDING"})
+    for _ in range(3):                                   # the broker keeps it PENDING
+        held = _work()[0]
+        assert held["status"] == "CANCEL_UNKNOWN" and not held.get("needs_manual_check")
+        assert held["broker_status"] == "PENDING" and held["cancel_refused_at"]
+    assert attempts == [run_id]                          # the one cancel is never repeated
+    assert _cashflow()["finalized_seq"] == 0 and _fenced_runs() == {run_id}
+    # DNA time keeps moving, but no second order can open while this one is held.
+    blocked, _ = _run(monkeypatch, SLOT_2, 331.0, holdings=8.0)
+    assert blocked["status"] == "PASS_RECOVERY_BLOCKED"
+    assert [i["run_id"] for i in list_actionable(chain_key(_cfg()))] == [run_id]
+
+    late = _fill_and_collect(monkeypatch, run_id, ordered, evidence)
+
+    assert late["status"] == control["status"] == "FILLED"
+    assert late["finalized"] is control["finalized"] is True
+    assert late["seq"] == control["seq"] == 1
+    assert late["delta"] == pytest.approx(control["delta"])
+    assert late["actual"] == pytest.approx(control["actual"])
+    assert late["fenced"] == control["fenced"] == set()
+    assert late["repeat"] == control["repeat"]
+
+
+def test_a_refused_order_that_never_resolves_ends_in_a_reviewed_halt(monkeypatch):
+    from datetime import timedelta
+    import order_recovery
+    run_id, ordered, evidence, attempts = _refused_scenario(monkeypatch, refuse=True)
+    monkeypatch.setattr(order_recovery, "datetime", _fixed_now(
+        datetime.now(UTC) + timedelta(seconds=order_recovery.REFUSED_HOLD_SECONDS + 60)))
+    _stub_broker(monkeypatch, holdings_after=8.0, detail={**evidence, "order_status": "PENDING"})
+
+    stopped = _work()[0]
+
+    assert stopped["needs_manual_check"] and stopped["status"] == "MANUAL_RECONCILIATION_REQUIRED"
+    assert _intent(run_id)["cancel_last_error_code"] == "CANCEL_REFUSED_HOLD_EXPIRED"
+    assert _fenced_runs() == {run_id} and attempts == [run_id]
+    blocked = main._run_order_worker(_cfg(), limit=3)
+    assert blocked["dispatch_blocked"] and blocked["reconciliation_paused"]
