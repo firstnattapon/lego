@@ -911,7 +911,8 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
         summary["broker_status"] = summary["status"]
         summary["status"] = ("CANCEL_UNKNOWN" if intent.get("status") == "CANCEL_UNKNOWN"
                              else "CANCEL_REQUESTED")
-    for key in ("cancel_attempt_count", "cancel_requested_at", "cancel_confirmation_deadline", "cancel_confirmed_at"):
+    for key in ("cancel_attempt_count", "cancel_requested_at", "cancel_confirmation_deadline", "cancel_confirmed_at",
+                "cancel_last_error_code", "cancel_refused_at"):
         if key in intent:
             summary[key] = intent[key]
     _persist_summary(intent, summary)

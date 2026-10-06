@@ -6,7 +6,7 @@ from firebase_admin import db
 PATH = "webull_lego_execution_transitions"
 FIELDS = ("status", "broker_status", "place_attempted", "placed_at", "cancel_attempt_count",
           "cancel_requested_at", "cancel_confirmed_at", "cancel_last_error_code",
-          "cancel_confirmation_deadline", "cancel_policy",
+          "cancel_confirmation_deadline", "cancel_refused_at", "cancel_policy",
           "needs_manual_check", "filled_quantity", "filled_price", "filled_fee",
           "cashflow_finalized", "realized", "cancel_policy_hash",
           "manual_since", "reconcile_evidence_sha256", "reconcile_resume")

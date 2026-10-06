@@ -111,7 +111,9 @@ def test_missing_detail_uses_verified_history_without_new_place(monkeypatch):
 def test_quiet_heartbeat_retains_unhealthy_business_status(capsys):
     body = {"recovery": {"dispatch_blocked": True, "reconciliation_paused": True,
                          "halt_since": NOW.isoformat(), "results": []}}
-    observability.emit_tick(body, 200)
+    # Ten minutes into the halt: past the first page, before the hourly reminder.
+    # The tick time is pinned; the age decides the severity (test_incident_20261005).
+    observability.emit_tick(body, 200, now=NOW + timedelta(minutes=10))
     event = json.loads(capsys.readouterr().out)
     assert event["business_status"] == "MANUAL_RECONCILIATION_REQUIRED"
     assert event["severity"] == "INFO" and event["reconciliation_paused"]

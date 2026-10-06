@@ -293,6 +293,35 @@ def test_operator_status_reads_actual_account_symbol_fence(monkeypatch):
     assert status["active_intent_id"] == "pending"
     assert status["execution_status"] == "AWAITING_BROKER_FEE"
     assert status["broker_fee_status"] == "PENDING"
+    assert status["needs_manual_check"] is False and status["cancel_refused_at"] is None
+
+
+def test_operator_status_shows_why_an_order_is_held_or_halted(monkeypatch):
+    """2026-10-05: nothing in `ops.py status` said a cancel had been refused."""
+    import ops
+    setup_tick(monkeypatch)
+    monkeypatch.setattr(ops, "load_runtime_config", main.load_runtime_config)
+    scope = main.account_symbol_fence_key("identity", "AAPL")
+    FAKE_DB.reference(f"{lego_outbox.DISPATCH_LOCK_PATH}/{scope}").set({
+        "inflight_run_id": "held", "inflight_chain_key": "old-chain"})
+    lego_outbox.put_intent("old-chain", "held", {
+        "status": "CANCEL_UNKNOWN", "broker_status": "PENDING",
+        "cancel_last_error_code": "CANCEL_REFUSED_NOT_OPERABLE",
+        "cancel_refused_at": "2026-10-05T17:06:07+00:00"})
+    held = ops.status_command(None)
+    assert held["execution_status"] == "CANCEL_UNKNOWN" and held["broker_status"] == "PENDING"
+    assert held["cancel_last_error_code"] == "CANCEL_REFUSED_NOT_OPERABLE"
+    assert held["cancel_refused_at"] == "2026-10-05T17:06:07+00:00"
+    assert held["needs_manual_check"] is False
+
+    lego_outbox.update_intent("old-chain", "held", {
+        "status": "MANUAL_RECONCILIATION_REQUIRED", "needs_manual_check": True,
+        "manual_since": "2026-10-05T17:09:06+00:00",
+        "cancel_last_error_code": "CANCEL_REFUSED_HOLD_EXPIRED"})
+    halted = ops.status_command(None)
+    assert halted["needs_manual_check"] is True
+    assert halted["manual_since"] == "2026-10-05T17:09:06+00:00"
+    assert halted["cancel_last_error_code"] == "CANCEL_REFUSED_HOLD_EXPIRED"
 
 
 @pytest.mark.parametrize("environment,binding,ok", [(PROD, None, False), (PROD, False, False),
