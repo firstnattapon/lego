@@ -19,7 +19,7 @@ def evidence(tmp_path):
         "จำนวนสั่ง (หุ้น)": "1", "เวลา (UTC)": "2026-09-23T00:00:00Z",
         "DNA step": 0, "market_slot_id": "slot",
         "cashflow_status": "PENDING_EXECUTION",
-        "ΔAₙ ต่อสเต็ป (USD)": 0, "ΔAₙ เงินจริง (USD)": 0,
+        "ΔAₙ ต่อสเต็ป (USD)": 0,
         "Aₙ สะสม (USD)": 0, "Eₙ ส่วนเกินสะสม (USD)": 0}}
     event = {"event": "lego_tick_completed", "correlation_id": "correlation",
              "business_status": "ROW_COMMITTED", "revision": "rev", "candidate_hash": "candidate",
@@ -353,7 +353,6 @@ def test_snapshot_flags_unexecuted_row_that_moves_model_money(tmp_path):
     row = root["webull_lego_rows"]["run"]
     row.update(cashflow_status="NO_ACTION", **{
         "ΔAₙ ต่อสเต็ป (USD)": 1.0,
-        "ΔAₙ เงินจริง (USD)": 0.0,
         "Aₙ สะสม (USD)": 1.0,
         "Eₙ ส่วนเกินสะสม (USD)": 1.0,
     })

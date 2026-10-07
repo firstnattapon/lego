@@ -25,8 +25,8 @@ import lego_state
 import webull_io
 from conftest import FAKE_DB, FakeReference
 from lego_one_row import (COLUMN_ORDER, ACTUAL_COLUMN, DELTA_COLUMN, Config,
-                          EXCESS_COLUMN, REFERENCE_COLUMN, ExecutionFill,
-                          compute_row)
+                          EXCESS_COLUMN, LEGACY_DELTA_ACTUAL_COLUMN,
+                          REFERENCE_COLUMN, ExecutionFill, compute_row)
 from lego_outbox import OUTBOX_PATH, list_actionable
 from lego_state import (BROKER_CASHFLOW_PATH, CASHFLOW_FINALIZED, CASHFLOW_NO_ACTION,
                         CASHFLOW_PENDING, EXECUTION_STATE_KEY, STATE_PATH,
@@ -711,6 +711,60 @@ def test_stale_anchor_cashflow_row_patch_replays_after_crash(monkeypatch):
     assert replay["idempotent"] is True
     assert _row(run_id)["committed"] is True
     assert _row(run_id)[ACTUAL_COLUMN] == pytest.approx(booked)
+
+
+def test_observation_committed_by_the_previous_revision_still_repairs(monkeypatch):
+    """A decision committed before the retired ΔAₙ-in-cash column was removed
+    left an observation that still lists it, always 0.0. A crash across the
+    deploy must not strand that row uncommitted."""
+    _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
+    _run(monkeypatch, SLOT_1, 330.0, holdings=9.375)
+    cfg = _cfg()
+    anchor = read_anchor(cfg)
+    snapshot = {"captured_at": "2026-07-23T19:00:05Z", "price": 332.0,
+                "holdings": 9.375}
+    row = compute_row(cfg, snapshot, anchor)
+    original_repair = lego_state._repair_pending_row
+
+    def crash_after_state(state):
+        if state and state.get("version") == 3:
+            raise OSError("crash before row patch")
+        return original_repair(state)
+
+    monkeypatch.setattr(lego_state, "_repair_pending_row", crash_after_state)
+    with pytest.raises(OSError, match="crash before row patch"):
+        commit_final_row(cfg, snapshot, anchor, row)
+    monkeypatch.setattr(lego_state, "_repair_pending_row", original_repair)
+    run_id = _state()["last_run_id"]
+    assert _row(run_id)["committed"] is False
+    assert LEGACY_DELTA_ACTUAL_COLUMN not in _state()[
+        "last_row_cashflow_observation"]["fields"]
+
+    legacy_ref = FAKE_DB.reference(
+        f"{STATE_PATH}/{chain_key(cfg)}/last_row_cashflow_observation/fields/"
+        f"{LEGACY_DELTA_ACTUAL_COLUMN}")
+    legacy_ref.set(1.0)                       # never a value a writer produced
+    with pytest.raises(ExecutionFinalizeError, match="observation"):
+        original_repair(_state())
+    assert _row(run_id)["committed"] is False
+
+    legacy_ref.set(0.0)
+    original_repair(_state())
+    assert _row(run_id)["committed"] is True
+    assert LEGACY_DELTA_ACTUAL_COLUMN not in _row(run_id)
+
+
+def test_finalized_row_never_carries_the_retired_cash_column(monkeypatch):
+    body, _ = _run(monkeypatch, SLOT_0, 320.0, holdings=0.0)
+    cfg = _cfg()
+    finalize_execution_fill(
+        cfg, body["run_id"],
+        ExecutionFill(filled_price=320.0, filled_quantity=9.375,
+                      holdings_after=9.375))
+    row = _row(body["run_id"])
+    assert row["cashflow_status"] == CASHFLOW_FINALIZED
+    assert LEGACY_DELTA_ACTUAL_COLUMN not in row
+    assert [k for k in row if k in COLUMN_ORDER] == COLUMN_ORDER
 
 
 def test_v3_decision_row_uses_frozen_excess_from_transaction_cashflow():

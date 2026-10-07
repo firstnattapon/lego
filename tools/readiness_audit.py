@@ -17,8 +17,7 @@ from pathlib import Path
 import re
 
 from lego_orders import normalize_status
-from lego_one_row import (ACTUAL_COLUMN, DELTA_ACTUAL_COLUMN, DELTA_COLUMN,
-                          EXCESS_COLUMN)
+from lego_one_row import ACTUAL_COLUMN, DELTA_COLUMN, EXCESS_COLUMN
 from tools.migration_audit import audit_export, safe_unsent
 
 
@@ -263,8 +262,7 @@ def build_report(export, logs, candidate, revision):
         if row_cashflow_status not in {"NO_ACTION", "PENDING_EXECUTION", "FINALIZED"}:
             issues["row_cashflow_status_unknown"] += 1
         if row_cashflow_status in {"NO_ACTION", "PENDING_EXECUTION"}:
-            if (number(row.get(DELTA_COLUMN)) != 0
-                    or number(row.get(DELTA_ACTUAL_COLUMN)) != 0):
+            if number(row.get(DELTA_COLUMN)) != 0:
                 issues["unexecuted_row_delta_nonzero"] += 1
             if (number(row.get(ACTUAL_COLUMN)) is None
                     or number(row.get(EXCESS_COLUMN)) is None):
