@@ -16,9 +16,10 @@ from bounded_fifo import (MATCH_PAGES_PER_CALL_V3, MIGRATION_PAGES_PER_CALL_V3,
                           SCHEMA_VERSION as FIFO_SCHEMA_VERSION, make_page,
                           page_key, validate_page)
 from dna_engine import dna_fingerprint
-from lego_one_row import (ACTUAL_COLUMN, DELTA_ACTUAL_COLUMN, DELTA_COLUMN, EXCESS_COLUMN,
-                          REFERENCE_COLUMN, Anchor, Config, ExecutionFill,
-                          finalize_recurrence, validate_row_columns)
+from lego_one_row import (ACTUAL_COLUMN, DELTA_COLUMN, EXCESS_COLUMN,
+                          LEGACY_DELTA_ACTUAL_COLUMN, REFERENCE_COLUMN, Anchor,
+                          Config, ExecutionFill, finalize_recurrence,
+                          validate_row_columns)
 from lego_orders import apply_fill, normalize_open_legs, normalize_status
 from ledger_v2 import BrokerCashflow, FUNDING_BASELINE_POLICY, SEMANTICS, decimal
 from market_clock import calendar_fingerprint, market_ordinal_for_slot_id
@@ -419,9 +420,12 @@ def _repair_pending_row(state: dict | None) -> None:
                 or not isinstance(observation.get("fields"), dict)):
             raise ExecutionFinalizeError(
                 "row cashflow observation ไม่ตรง state transaction")
-        fields = observation["fields"]
-        required = {DELTA_COLUMN, DELTA_ACTUAL_COLUMN,
-                    ACTUAL_COLUMN, EXCESS_COLUMN}
+        # An observation an older revision committed carries the retired
+        # ΔAₙ-in-cash column, always 0.0. Accept it and drop it, so a row whose
+        # patch crashed across a deploy still repairs instead of raising.
+        fields = dict(observation["fields"])
+        legacy = fields.pop(LEGACY_DELTA_ACTUAL_COLUMN, 0.0)
+        required = {DELTA_COLUMN, ACTUAL_COLUMN, EXCESS_COLUMN}
         if state.get("cashflow_semantics") == V2_CASHFLOW_SEMANTICS:
             required.update({"R_basis", "E_mark_at_observation"})
         if (set(fields) != required
@@ -429,7 +433,8 @@ def _repair_pending_row(state: dict | None) -> None:
                        or not math.isfinite(float(value))
                        for value in fields.values())
                 or float(fields[DELTA_COLUMN]) != 0.0
-                or float(fields[DELTA_ACTUAL_COLUMN]) != 0.0):
+                or type(legacy) not in (int, float)
+                or float(legacy) != 0.0):
             raise ExecutionFinalizeError(
                 "row cashflow observation มีคอลัมน์หรือค่าที่ไม่ถูกต้อง")
         ref.update({**fields, "committed": True})
@@ -451,8 +456,7 @@ def _decision_row_cashflow_patch(cfg: Config, row: dict, cashflow: dict,
         excess = actual - cfg.fix_c * math.log(acted_price / p0)
     if not math.isfinite(excess):
         raise ExecutionFinalizeError("decision excess observation ไม่ถูกต้อง")
-    patch = {DELTA_COLUMN: 0.0, DELTA_ACTUAL_COLUMN: 0.0,
-             ACTUAL_COLUMN: actual, EXCESS_COLUMN: excess}
+    patch = {DELTA_COLUMN: 0.0, ACTUAL_COLUMN: actual, EXCESS_COLUMN: excess}
     if semantics == V2_CASHFLOW_SEMANTICS:
         patch.update({"R_basis": actual - excess,
                       "E_mark_at_observation": actual - market_reference})
@@ -921,7 +925,6 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
     # and rewriting the recorded numbers is exactly the repair.
     row_patch = {
         DELTA_COLUMN: outcome["delta_actual"],
-        DELTA_ACTUAL_COLUMN: outcome.get("broker_cash_delta", outcome["delta_actual"]),
         ACTUAL_COLUMN: outcome["actual_cumulative"],
         EXCESS_COLUMN: outcome["excess"],
         "cashflow_status": CASHFLOW_FINALIZED,

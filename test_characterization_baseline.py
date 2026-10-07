@@ -43,7 +43,6 @@ EXPECTED_COLUMNS = [
     "ส่วนต่างเป้าหมาย (USD)",
     "Rₙ อ้างอิง (USD)",
     "ΔAₙ ต่อสเต็ป (USD)",
-    "ΔAₙ เงินจริง (USD)",
     "Aₙ สะสม (USD)",
     "Eₙ ส่วนเกินสะสม (USD)",
 ]
@@ -94,11 +93,11 @@ class _DomShape(HTMLParser):
 
 def test_17_column_schema_and_order_match_f8388a_baseline():
     assert COLUMN_ORDER == EXPECTED_COLUMNS
-    assert len(COLUMN_ORDER) == 18
+    assert len(COLUMN_ORDER) == 17
     encoded = json.dumps(
         COLUMN_ORDER, ensure_ascii=False, separators=(",", ":"))
     assert _sha256(encoded) == (
-        "e7a3e7dda3b7d8df10215f0ef7a80330f00e614c39ea00c1673e2d81cb906b2d"
+        "0c4ca2cc99f28c2485d729db257309472604d867d30763f2a3afb44f5a803be4"
     )
 
 
@@ -198,7 +197,6 @@ def test_representative_row_output_matches_f8388a_baseline():
         if key not in {
             "Rₙ อ้างอิง (USD)",
             "ΔAₙ ต่อสเต็ป (USD)",
-            "ΔAₙ เงินจริง (USD)",
             "Aₙ สะสม (USD)",
             "Eₙ ส่วนเกินสะสม (USD)",
         }
@@ -287,9 +285,7 @@ def test_learning_guide_embedded_contract_hashes_match_f8388a():
         "quiz": "ab7f80952b487c31c1ae25d67ec7bcf017a0a1b5c0394c6b4337ee8624cf1cea",
     }
     labels = re.findall(r"'([^']*)'", blocks["columns"])
-    assert [label.split("|", 1)[0] for label in labels] == [
-        c for c in EXPECTED_COLUMNS if c != "ΔAₙ เงินจริง (USD)"
-    ]
+    assert [label.split("|", 1)[0] for label in labels] == EXPECTED_COLUMNS
 
 
 def test_learning_guide_dom_shape_matches_f8388a():

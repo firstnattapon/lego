@@ -363,7 +363,7 @@ def test_concurrent_ticks_in_one_slot_produce_one_intent(monkeypatch, auto_submi
 
 def test_column_contract_is_untouched(monkeypatch, auto_submit):
     """Case 12 — UI. The 17 columns, their order, and the presented rounding."""
-    assert len(COLUMN_ORDER) == 18
+    assert len(COLUMN_ORDER) == 17
     assert COLUMN_ORDER[0] == "เวลา (UTC)" and COLUMN_ORDER[-1] == "Eₙ ส่วนเกินสะสม (USD)"
 
     body, _ = _run(monkeypatch, SLOT_0, 335.55, holdings=PROD_HOLDINGS)

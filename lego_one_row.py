@@ -38,13 +38,18 @@ COLUMN_ORDER = [
     "เวลา (UTC)", "สินทรัพย์", "สถานะ", "DNA step", "DNA signal",
     "ราคา Pₙ (USD)", "จำนวนถือครอง (หุ้น)", "คำสั่ง", "ฝั่ง", "เหตุผล",
     "จำนวนสั่ง (หุ้น)", "มูลค่าพอร์ต (USD)", "ส่วนต่างเป้าหมาย (USD)",
-    "Rₙ อ้างอิง (USD)", "ΔAₙ ต่อสเต็ป (USD)", "ΔAₙ เงินจริง (USD)", "Aₙ สะสม (USD)",
+    "Rₙ อ้างอิง (USD)", "ΔAₙ ต่อสเต็ป (USD)", "Aₙ สะสม (USD)",
     "Eₙ ส่วนเกินสะสม (USD)",
 ]
 
-# The cashflow columns, named off the contract itself so the worker that
-# finalizes them can never patch a column the engine stopped writing.
-REFERENCE_COLUMN, DELTA_COLUMN, DELTA_ACTUAL_COLUMN, ACTUAL_COLUMN, EXCESS_COLUMN = COLUMN_ORDER[13:18]
+# The four cashflow columns, named off the contract itself so the worker that
+# finalizes three of them can never patch a column the engine stopped writing.
+REFERENCE_COLUMN, DELTA_COLUMN, ACTUAL_COLUMN, EXCESS_COLUMN = COLUMN_ORDER[13:17]
+
+# A column the contract no longer carries. Rows and cashflow observations that
+# an earlier revision wrote may still hold it; it is tolerated on the way in and
+# never written again. Not part of COLUMN_ORDER.
+LEGACY_DELTA_ACTUAL_COLUMN = "ΔAₙ เงินจริง (USD)"
 
 
 class DNAExhausted(RuntimeError):
@@ -353,7 +358,6 @@ def compute_row(cfg: Config, snapshot: dict, anchor: Anchor | None,
         "ส่วนต่างเป้าหมาย (USD)": dec.gap,
         "Rₙ อ้างอิง (USD)": rec.R,
         "ΔAₙ ต่อสเต็ป (USD)": rec.dA,
-        "ΔAₙ เงินจริง (USD)": 0.0,
         "Aₙ สะสม (USD)": rec.A,
         "Eₙ ส่วนเกินสะสม (USD)": rec.E,
     }
@@ -392,7 +396,7 @@ def validate_row_columns(row: dict) -> None:
 
 
 def columns_presented(row: dict) -> dict:
-    money = {6, 12, 13, 14, 15, 16, 17, 18}
+    money = {6, 12, 13, 14, 15, 16, 17}
     out = {}
     for i, k in enumerate(COLUMN_ORDER, start=1):
         v = row[k]
