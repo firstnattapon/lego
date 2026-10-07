@@ -105,4 +105,9 @@ Use `ops.py migrate-market-day` for dry-run and `--apply` only after stopping ne
 orders, verifying current broker state, backing up RTDB and resolving all fences.
 The obsolete `LEGO_ORDER_TIMEOUT_SECONDS` is rejected; use
 `LEGO_STALE_ORDER_SECONDS` with an explicit `LEGO_STALE_ORDER_ACTION` instead.
+`LEGO_STALE_ORDER_ACTION` accepts `hold`, `cancel` and (UAT only) `cancel_expire`: cancel, and when the
+broker refuses and a DAY order is still non-terminal after its session closed plus one hour, release it as
+`EXPIRED` only on the proof in `order_recovery.expiry_proof_blockers`. `config.py` refuses it on PROD; no new
+variable, so existing `hold`/`cancel` policies and their release bindings are unchanged
+([audit 7 ตุลาคม](docs/AUDIT_20261007_TH.md)).
 

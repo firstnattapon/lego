@@ -1,0 +1,56 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-10-07T03:21:54.956069+00:00",
+  "base_commit": "b57a0124946b150c862c405ba2d82bb80b099314",
+  "python": "Python 3.13 (local); CI runs 3.12",
+  "local_status": "PASS",
+  "failed_checks": [],
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "note": "Candidate hash is computed by the operator from the committed clean tree (ops.py release-plan); it changes with this PR.",
+  "full_suite": {
+    "junit_sha256": "c81b2fb1dcd147421f32dad5e23b29a5b25a93bd31ced329d9d71528322ea0c7",
+    "counts": {
+      "tests": 1645,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1636
+    },
+    "baseline_before_change": {
+      "tests": 1614,
+      "passed": 1605,
+      "skipped": 9
+    },
+    "note": "skipped = emulator-only tests; CI runs them against the Firebase Database emulator."
+  },
+  "checks": [
+    {
+      "id": "py_compile",
+      "command": "python -m py_compile *.py tools/*.py",
+      "exit_code": 0
+    },
+    {
+      "id": "new_tests",
+      "command": "pytest -q test_incident_20261006.py",
+      "passed": 31
+    },
+    {
+      "id": "mutation_worker_wiring",
+      "description": "_try_expiry_release forced to return None",
+      "expected": "2 release e2e tests fail",
+      "observed": "2 failed, 17 passed (at the time 19 tests)"
+    },
+    {
+      "id": "mutation_build_clients_gate",
+      "description": "build_clients uses health.ready again",
+      "expected": "F6 build test fails",
+      "observed": "test_prod_builds_clients_to_reconcile_inside_the_margin failed"
+    }
+  ],
+  "not_verified": [
+    "any broker call (no UAT/PROD access from this environment)",
+    "pip-audit and the Firebase emulator suite (CI)",
+    "semantics of PENDING after close and of HTTP 417 (developer.webull.co.th is blocked by the egress proxy)"
+  ]
+}

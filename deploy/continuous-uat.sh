@@ -10,7 +10,10 @@ export WEBULL_ENV_OVERRIDE=UAT LEGO_MODE_OVERRIDE=trade LEGO_ACTIVE_OVERRIDE=tru
 export LEGO_SYMBOL_OVERRIDE=UBER LEGO_FIX_C_OVERRIDE=10000 LEGO_DIFF_OVERRIDE=25
 export LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_SESSION_KEY_MODE_OVERRIDE=market_day
 export LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-strategy.uat-continuous.json}"
-export LEGO_STALE_ORDER_ACTION_OVERRIDE=cancel LEGO_STALE_ORDER_SECONDS_OVERRIDE=300
+# cancel_expire: cancel, and if the broker refuses and a DAY order is still PENDING after its
+# session closed, release it only on the proof in order_recovery.expiry_proof_blockers
+# (docs/AUDIT_20261007_TH.md). UAT only: config.py refuses it on PROD.
+export LEGO_STALE_ORDER_ACTION_OVERRIDE=cancel_expire LEGO_STALE_ORDER_SECONDS_OVERRIDE=300
 export LEGO_CANCEL_CONFIRM_GRACE_SECONDS_OVERRIDE=120
 # Caps for FIX_C=10000: 15% of principal in notional, ~1.3x that in shares, one
 # order per 15-minute slot (docs/AUDIT_20261005_TH.md). The authorization above is

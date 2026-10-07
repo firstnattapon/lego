@@ -9,7 +9,8 @@ FIELDS = ("status", "broker_status", "place_attempted", "placed_at", "cancel_att
           "cancel_confirmation_deadline", "cancel_refused_at", "cancel_policy",
           "needs_manual_check", "filled_quantity", "filled_price", "filled_fee",
           "cashflow_finalized", "realized", "cancel_policy_hash",
-          "manual_since", "reconcile_evidence_sha256", "reconcile_resume")
+          "manual_since", "reconcile_evidence_sha256", "reconcile_resume",
+          "expiry_released_at", "expiry_proof_sha256")
 
 
 def enqueue(doc, old=None):

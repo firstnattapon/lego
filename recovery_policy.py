@@ -4,6 +4,13 @@ import hashlib
 import json
 
 
+# cancel_expire = cancel, and when the broker refuses it and the DAY session is over,
+# release the order only on the proof in order_recovery.expiry_proof_blockers.
+# UAT only: config.DeploymentProfile refuses it on PROD.
+ACTIONS = frozenset({"hold", "cancel", "cancel_expire"})
+CANCEL_ACTIONS = frozenset({"cancel", "cancel_expire"})
+
+
 @dataclass(frozen=True)
 class RecoveryPolicy:
     action: str = "hold"
@@ -12,8 +19,8 @@ class RecoveryPolicy:
     max_mutations: int = 1
 
     def __post_init__(self):
-        if self.action not in {"hold", "cancel"}:
-            raise ValueError("LEGO_STALE_ORDER_ACTION must be hold or cancel")
+        if self.action not in ACTIONS:
+            raise ValueError("LEGO_STALE_ORDER_ACTION must be hold, cancel or cancel_expire")
         if any(type(v) is not int or v <= 0 for v in
                (self.stale_seconds, self.grace_seconds, self.max_mutations)):
             raise ValueError("recovery durations must be positive integers")
