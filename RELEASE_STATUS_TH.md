@@ -1,5 +1,13 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 7 ตุลาคม: [audit order UAT ค้าง PENDING เกินปิดตลาด](docs/AUDIT_20261007_TH.md) — hold 8 ชั่วโมงของรอบ 6 ตุลาคม
+หมดแล้ว halt ข้าม session เพราะ UAT ไม่เคย terminal order ที่ broker ปฏิเสธ cancel (สมมติฐาน "DAY order terminal ก่อนปิดตลาด" ผิด)
+และไม่มีเครื่องมือปล่อย order non-terminal; แก้ใน `order_recovery.py` (`cancel_expire`: ปล่อยเป็น EXPIRED เฉพาะ UAT เมื่อพิสูจน์ครบ,
+`tools/resume_order_reconciliation.py --expiry-proof` ให้คนยืนยัน) และ `webull_io.py` (PROD ยังอ่าน/reconcile ได้เมื่อ token
+เหลือน้อยกว่า margin 3 วัน โดย order ใหม่ยังถูกบล็อก). ผล local และ evidence อยู่ใน `release_evidence/20261007-pr/`.
+สถานะ: **code-ready, live-evidence-pending (NO-GO)** — order ที่ค้างอยู่ต้องกู้ด้วยคนหลัง deploy (ขั้นตอนใน audit);
+fill จริงแล้ว BUY 0.86 / SELL 0.51 แต่ยังไม่มี alert delivery จริง, PROD observe หรือ edge หลังหัก fee (fee UAT ≈1.08% ต่อ order).
+
 ล่าสุด 6 ตุลาคม: [audit incident UAT หยุดเทรด 3.5 ชั่วโมง](docs/AUDIT_20261006_TH.md) — broker ปฏิเสธ cancel
 (HTTP 417 `OPENAPI_ORDER_CANNOT_OPERATE`) แต่ระบบนับเป็น "ไม่รู้ผล" แล้ว halt เงียบ; แก้ใน `order_recovery.py` (hold 8 ชั่วโมง
 แล้ว poll ต่อ) และ `observability.py` (halt ต้อง page). ผล local และ evidence ของ PR นี้อยู่ใน `release_evidence/20261006-pr/`.

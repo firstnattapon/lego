@@ -1,0 +1,166 @@
+{
+  "schema": "lego_audit_input_hashes_v1",
+  "generated_at": "2026-10-07T03:18:12.424527+00:00",
+  "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates are the numbers quoted in docs/AUDIT_20261007_TH.md.",
+  "inputs": [
+    {
+      "name": "downloaded-logs-20261007-094257.json",
+      "role": "Cloud Run logs of lego-tick-uat, 2026-10-06T13:30:05Z..20:42:07Z",
+      "bytes": 3492573,
+      "sha256": "c55e26a568cd4cf08f97a5a6b3c607f976529cf8fd341f195b4774c8f274c81e"
+    },
+    {
+      "name": "lego-firebase-default-rtdb-export.json",
+      "role": "Realtime Database export (halt set 2026-10-06T23:51:07Z; dispatch lease claimed 2026-10-07T02:41:05Z)",
+      "bytes": 117611,
+      "sha256": "b93b7c65dd6182f32ff9398d7a71297bfa6a2b3d1d7f148d1dacad751235ec81"
+    },
+    {
+      "name": "YAML.txt",
+      "role": "Cloud Run service and revision YAML (lego-tick-uat-00040-kog)",
+      "bytes": 13176,
+      "sha256": "e9752750c8c8d2868bd418f25d32bc3b054717b85d6b5d7cf83256758aa3589a"
+    },
+    {
+      "name": "webull-llms.txt",
+      "role": "Webull TH API documentation index",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    },
+    {
+      "name": "webull-llms-current.txt",
+      "role": "Webull TH API documentation index (second copy)",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    }
+  ],
+  "aggregates": {
+    "log_entries": 1688,
+    "request_entries": 433,
+    "http_non_200": 0,
+    "ticks": 433,
+    "tick_severity": {
+      "INFO": 130,
+      "WARNING": 19,
+      "ERROR": 284
+    },
+    "tick_business_status": {
+      "ROW_COMMITTED": 5,
+      "SLOT_CONSUMED": 125,
+      "TICK_DEFERRED": 2,
+      "BROKER_ORDER_FAILED": 1,
+      "ERROR": 1,
+      "WAITING_RECONCILIATION": 17,
+      "RECONCILIATION_OVERDUE": 282
+    },
+    "decision_status": {
+      "PASS_THRESHOLD": 5,
+      "PASS_SLOT_CONSUMED": 364,
+      "READY_BUY": 3,
+      "READY_SELL": 2,
+      "PASS_RECOVERY_BLOCKED": 16,
+      "PASS_MARKET_CLOSED": 43
+    },
+    "first_tick": "2026-10-06T13:30:23.129976Z",
+    "last_tick": "2026-10-06T20:42:07.316452Z",
+    "tick_duration_ms": {
+      "median": 1844,
+      "p95": 9551,
+      "max": 34293
+    },
+    "sdk_positions": {
+      "calls": 48,
+      "errors": 4
+    },
+    "sdk_order_detail": {
+      "calls": 303,
+      "errors": 1
+    },
+    "sdk_open_orders": {
+      "calls": 16,
+      "errors": 0
+    },
+    "slots_pass_recovery_blocked": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25
+    ],
+    "order_detail_reads_since_15_45_30": {
+      "ok": 298,
+      "error": 1
+    },
+    "ready_decisions": [
+      {
+        "slot": "2026-10-06:4",
+        "decision": "READY_BUY"
+      },
+      {
+        "slot": "2026-10-06:5",
+        "decision": "READY_BUY"
+      },
+      {
+        "slot": "2026-10-06:6",
+        "decision": "READY_SELL"
+      },
+      {
+        "slot": "2026-10-06:8",
+        "decision": "READY_SELL"
+      },
+      {
+        "slot": "2026-10-06:9",
+        "decision": "READY_BUY"
+      }
+    ],
+    "alert_webhook_env_in_yaml": false,
+    "outbox": [
+      {
+        "run": "e3b211b9",
+        "status": "FAILED",
+        "side": "BUY",
+        "quantity": 0.78,
+        "broker_status": null
+      },
+      {
+        "run": "099cd88d",
+        "status": "FILLED",
+        "side": "BUY",
+        "quantity": 0.86,
+        "broker_status": null
+      },
+      {
+        "run": "06154e00",
+        "status": "SUPPRESSED_STATE_CHANGED",
+        "side": "SELL",
+        "quantity": 0.41,
+        "broker_status": null
+      },
+      {
+        "run": "06071328",
+        "status": "FILLED",
+        "side": "SELL",
+        "quantity": 0.51,
+        "broker_status": null
+      },
+      {
+        "run": "56340902",
+        "status": "MANUAL_RECONCILIATION_REQUIRED",
+        "side": "BUY",
+        "quantity": 0.57,
+        "broker_status": "PENDING"
+      }
+    ]
+  }
+}

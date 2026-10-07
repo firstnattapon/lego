@@ -193,6 +193,13 @@ class DeploymentProfile:
         if environment not in ENVIRONMENT_HOSTS:
             raise ConfigurationError("environment ต้องเป็น UAT หรือ PROD")
         object.__setattr__(self, "environment", environment)
+        if environment == "PROD" and self.recovery_policy.action == "cancel_expire":
+            # Releasing an order the broker still calls PENDING rests on UAT
+            # evidence only (2026-10-06). On real money a person confirms it with
+            # tools/resume_order_reconciliation --expiry-proof instead.
+            raise ConfigurationError(
+                "LEGO_STALE_ORDER_ACTION=cancel_expire is UAT only; "
+                "PROD must use hold or cancel")
         if not self.account_id.strip():
             raise ConfigurationError("WEBULL_ACCOUNT_ID ว่างหรือไม่ได้ตั้งค่า")
         if self.database_url and not self.database_url.startswith("https://"):

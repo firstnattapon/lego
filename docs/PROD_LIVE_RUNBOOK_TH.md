@@ -23,7 +23,7 @@
 | UAT failure drills | restart กลาง order, token หาย/หมด → หยุดปลอดภัยและมี alert (G3) |
 | Alert | apply `tools/monitoring_config.py`, ตั้ง `ALERT_WEBHOOK_SECRET_OVERRIDE`, ทดสอบถึงผู้รับจริง (G4) |
 | PROD observe | ≥ 2 regular sessions: authenticated reads, quote สด, ไม่มี new-order mutation; ยืนยันสิทธิ์ market data real-time |
-| Token | operator-issued, `NORMAL`, เหลือ > 24 ชม. (runtime ไม่ส่ง order ใหม่ถ้าเหลือน้อยกว่านั้น), ตั้งแผน rotate ก่อน 15 วัน |
+| Token | operator-issued, `NORMAL`, เหลือ > 3 วัน (`LEGO_TOKEN_REFRESH_MARGIN_DAYS`: runtime ไม่ส่ง order ใหม่ถ้าเหลือน้อยกว่านั้น แต่ยังอ่านและ reconcile ได้จนหมดอายุ), หมุนก่อนวันที่ 12 ของอายุ |
 | แยกจาก UAT | account/secrets `*-prod`, service `lego-tick-prod`, RTDB แยก (`DATABASE_URL_OVERRIDE`; script ไม่บังคับให้แยก — คุณต้องตรวจเอง) |
 | ต้นทุน | วัดค่าธรรมเนียมจริงด้วย Preview Order เทียบ `LEGO_DIFF` ว่าคุ้มหรือไม่ |
 
@@ -112,7 +112,7 @@ symbol เดียว, whole shares, caps ต่ำ, window สั้น, เ�
 
 ## 7. Token rotation (ทุก ≤ 15 วัน, โดยคน)
 
-token ของ PROD ออกผ่านขั้นตอน Webull ที่รองรับ (ต้องยืนยันตัวตนในแอป) ไม่ต่ออัตโนมัติ — เตือนเมื่อเหลือ ≤ 7 วัน และ runtime หยุดส่ง order ใหม่เมื่อเหลือ ≤ 24 ชม.
+token ของ PROD ออกผ่านขั้นตอน Webull ที่รองรับ (ต้องยืนยันตัวตนในแอป) ไม่ต่ออัตโนมัติ — เตือนเมื่อเหลือ ≤ 7 วัน และ runtime หยุดส่ง order ใหม่เมื่อเหลือ ≤ 3 วัน (ไม่ใช่ 24 ชม. ตามที่เอกสารเดิมเขียน — `token_health().ready`); การอ่านและ reconcile order ที่เปิดอยู่ยังทำได้จนกว่า token จะหมดอายุ ([audit 7 ตุลาคม](AUDIT_20261007_TH.md))
 
 ```bash
 python ops.py bootstrap-auth --token-file PRIVATE_TOKEN --secret projects/lego-firebase/secrets/<token-secret>          # dry-run

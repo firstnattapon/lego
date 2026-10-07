@@ -1136,6 +1136,42 @@ def _reject_unsafe_dispatch_quote(chain_key_: str, run_id: str,
         price_drift_bps=evidence["price_drift_bps"])
 
 
+def _try_expiry_release(trade_client, cfg, intent: dict, detail, summary: dict) -> dict | None:
+    """EXPIRED zero-fill summary for a refused DAY order that is provably dead.
+
+    None keeps the existing hold, whatever the reason: not a candidate yet, a
+    broker read that failed or ran out of tick budget, or a proof that is not
+    met. The reads happen only after the session closed plus the margin, so this
+    costs nothing during trading hours.
+    """
+    import order_recovery
+    if not order_recovery.expiry_candidate(intent):
+        return None
+    try:
+        tick_runtime.require_budget(10.0)
+        open_orders = fetch_open_orders(trade_client, cfg.symbol)
+        holdings = fetch_holdings(trade_client, cfg)
+    except Exception as exc:
+        logger.info("lego expiry proof deferred run_id=%s reason=%s",
+                    intent.get("run_id"), type(exc).__name__)
+        return None
+    released, blockers = order_recovery.expiry_release(
+        intent, detail, summary, open_orders=open_orders, holdings=holdings,
+        tolerance=_holdings_drift_tolerance(typed_v2=_intent_is_v2(intent)))
+    if released is None:
+        logger.info("lego expiry proof not met run_id=%s blockers=%s",
+                    intent.get("run_id"), blockers)
+        return None
+    _record_warning(
+        "day_expiry_released",
+        "DAY order ที่ broker ยัง PENDING และปฏิเสธ cancel ถูกปล่อยเป็น EXPIRED หลังพิสูจน์ "
+        "(ไม่มี fill, ไม่อยู่ใน open orders, holdings ไม่เปลี่ยน, session จบแล้ว)",
+        {"run_id": intent.get("run_id"), "chain_key": intent.get("chain_key"),
+         "expiry_proof_sha256": released["expiry_proof_sha256"],
+         "released_by": released["expiry_released_by"]})
+    return released
+
+
 def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                                dispatch_claim: dict | None = None,
                                runtime: RuntimeConfig | None = None) -> dict:
@@ -1199,6 +1235,9 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         if evidence_conflict:
             flagged = order_recovery.mark_manual(intent, "CANCEL_EVIDENCE_INVALID", detail=detail)
             return {"run_id": run_id, "status": flagged["status"], "needs_manual_check": True}
+        released = _try_expiry_release(trade_client, cfg, intent, detail, summary)
+        if released is not None:
+            summary = released
         intent = order_recovery.handle(intent, detail, summary, dispatch_claim,
                                        lambda rid: cancel_order(trade_client, rid))
         if intent.get("needs_manual_check"):

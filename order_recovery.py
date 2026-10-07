@@ -1,6 +1,9 @@
 """Bounded cancellation under the existing money fence. No replacement orders."""
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+import hashlib
+import json
+import math
 import uuid
 import os
 
@@ -9,7 +12,8 @@ import lego_outbox as outbox
 import operator_halt
 import tick_runtime
 import transition_audit
-from recovery_policy import RecoveryPolicy
+import market_clock
+from recovery_policy import CANCEL_ACTIONS, RecoveryPolicy
 from lego_orders import (TERMINAL_STATUSES, normalize_status, canonical_order_evidence,
                          IncompleteOrderEvidence, ConflictingOrderEvidence,
                          BrokerContractAnomaly)
@@ -26,6 +30,14 @@ CANCELLABLE = {"PENDING", "SUBMITTED", "PARTIAL_FILLED", "PARTIALLY_FILLED"}
 CANCEL_REFUSED = "CANCEL_REFUSED_NOT_OPERABLE"
 CANCEL_REFUSAL_CODES = frozenset({"OPENAPI_ORDER_CANNOT_OPERATE"})
 REFUSED_HOLD_SECONDS = 8 * 3600
+# 2026-10-06: the refused order (BUY 0.57, MARKET/DAY/CORE) was still PENDING 3h51m
+# after the 20:00Z close and the 8 hour hold ended in a halt that carried into the
+# next session. A DAY order cannot trade once its session is over, so past the close
+# plus this margin a fill-less, unlisted order with unchanged holdings is released as
+# EXPIRED instead. The margin outlasts UAT's 15 minute quote delay with room to spare.
+EXPIRY_MARGIN_SECONDS = 3600
+EXPIRY_TERMINAL_REASON = "DAY_EXPIRY_PROOF"
+LIVE_STATUSES = frozenset({"PENDING", "SUBMITTED"})
 
 
 def validate_evidence(intent, detail, summary):
@@ -169,6 +181,8 @@ def handle(intent, detail, summary, claim, cancel, *, now=None):
             return mark_manual(intent, "CANCEL_EVIDENCE_INVALID", detail=detail)
     if intent.get("cancel_attempt_count"):
         if status in TERMINAL_STATUSES:
+            if summary.get("expiry_released"):
+                return intent  # released by proof, so no cancel was ever confirmed
             return outbox.update_intent(intent["chain_key"], intent["run_id"], {
                 "cancel_confirmed_at": now.isoformat(), "audit_pending": True,
             }, expected_claim_owner=intent["claim_owner"],
@@ -183,7 +197,7 @@ def handle(intent, detail, summary, claim, cancel, *, now=None):
         return mark_manual(intent, "CANCEL_POLICY_MISMATCH")
     if policy.fingerprint != intent.get("cancel_policy_hash"):
         return mark_manual(intent, "CANCEL_POLICY_MISMATCH")
-    if policy.action != "cancel" or status not in CANCELLABLE or intent.get("needs_manual_check"):
+    if policy.action not in CANCEL_ACTIONS or status not in CANCELLABLE or intent.get("needs_manual_check"):
         return intent
     try:
         age = (now - utc(intent.get("placed_at"))).total_seconds()
@@ -244,3 +258,136 @@ def read_failed(intent, *, now=None):
                                if intent.get("cancel_refused_at")
                                else "CANCEL_CONFIRMATION_OVERDUE")
     return intent
+
+
+def _session_close(placed_at):
+    """UTC close of the regular session an order was placed in, else None."""
+    placed = utc(placed_at)
+    bounds = market_clock.session_bounds(placed.astimezone(market_clock.NY).date())
+    if bounds is None or not bounds[0] <= placed < bounds[1]:
+        return None
+    return bounds[1]
+
+
+def expiry_authorized(intent):
+    """A person confirmed the proof with tools/resume_order_reconciliation --expiry-proof."""
+    resume = intent.get("reconcile_resume")
+    return (isinstance(resume, dict) and resume.get("expiry_proof_authorized") is True
+            and bool(str(resume.get("operator") or "").strip()))
+
+
+def _expiry_policy_allows(intent):
+    if expiry_authorized(intent):
+        return True
+    raw = intent.get("cancel_policy")
+    if not isinstance(raw, dict):
+        return False
+    try:
+        policy = RecoveryPolicy(**raw)
+    except (TypeError, ValueError):
+        return False
+    return (policy.action == "cancel_expire"
+            and policy.fingerprint == intent.get("cancel_policy_hash"))
+
+
+def expiry_candidate(intent, *, now=None):
+    """Cheap, read-free gate: is it worth reading the broker for the proof?"""
+    now = now or datetime.now(timezone.utc)
+    if (intent.get("needs_manual_check") or intent.get("place_attempted") is not True
+            or not intent.get("cancel_attempt_count") or not intent.get("cancel_refused_at")
+            or not _expiry_policy_allows(intent)):
+        return False
+    try:
+        close = _session_close(intent.get("placed_at"))
+    except (TypeError, ValueError):
+        return False
+    return close is not None and now >= close + timedelta(seconds=EXPIRY_MARGIN_SECONDS)
+
+
+def expiry_proof_blockers(intent, detail, summary, *, open_orders, holdings, now, tolerance):
+    """Why a refused DAY order is not yet provably dead. Empty list = proven.
+
+    Pure: every broker read is an argument. Every condition must hold together;
+    each one alone is explained by something other than "the order is gone".
+    """
+    blockers = []
+    if intent.get("place_attempted") is not True:
+        blockers.append("place_not_attempted")
+    if not intent.get("cancel_attempt_count"):
+        blockers.append("cancel_not_attempted")
+    if not intent.get("cancel_refused_at"):
+        blockers.append("cancel_not_refused")
+    payload = intent.get("order_payload")
+    leg = payload[0] if (isinstance(payload, list) and len(payload) == 1
+                         and isinstance(payload[0], dict)) else None
+    if leg is None:
+        blockers.append("payload_not_single_leg")
+    else:
+        for key, wanted in (("order_type", "MARKET"), ("time_in_force", "DAY"),
+                            ("support_trading_session", "CORE")):
+            if str(leg.get(key) or "").strip().upper() != wanted:
+                blockers.append(f"payload_{key}_not_{wanted.lower()}")
+    try:
+        close = _session_close(intent.get("placed_at"))
+    except (TypeError, ValueError):
+        close = None
+    if close is None:
+        blockers.append("placed_outside_regular_session")
+    elif now < close + timedelta(seconds=EXPIRY_MARGIN_SECONDS):
+        blockers.append("session_not_over_plus_margin")
+    evidence = None
+    try:
+        evidence = validate_evidence(intent, detail, summary)
+    except (ValueError, TypeError, ArithmeticError):
+        blockers.append("broker_evidence_invalid")
+    if evidence is not None:
+        if evidence.status in TERMINAL_STATUSES:
+            blockers.append("broker_status_terminal")  # ordinary reconciliation owns it
+        elif evidence.status not in LIVE_STATUSES:
+            blockers.append("broker_status_unrecognized")  # UNKNOWN is not "still pending"
+        if evidence.filled_quantity != 0:
+            blockers.append("filled_quantity_not_zero")
+    if open_orders is None:
+        blockers.append("open_orders_unread")
+    elif any(str(order.get("client_order_id") or "") == str(intent.get("run_id"))
+             for order in open_orders):
+        blockers.append("order_still_listed_open")
+    try:
+        before, after = float(intent["decision_holdings"]), float(holdings)
+        if not (math.isfinite(before) and math.isfinite(after) and before >= 0 and after >= 0):
+            raise ValueError("holdings must be finite and non-negative")
+        if abs(after - before) > tolerance:
+            blockers.append("holdings_changed")
+    except (KeyError, TypeError, ValueError):
+        blockers.append("holdings_unverifiable")
+    return blockers
+
+
+def expiry_release(intent, detail, summary, *, open_orders, holdings, tolerance, now=None):
+    """(summary, blockers): an EXPIRED zero-fill summary only when the proof holds.
+
+    The caller feeds it to the ordinary terminal path, so ledgers, circuit and
+    fence behave exactly as for a broker EXPIRED with no fill. broker_status keeps
+    what the broker really said (PENDING) so the release can never read as a
+    broker-confirmed expiry.
+    """
+    now = now or datetime.now(timezone.utc)
+    blockers = expiry_proof_blockers(intent, detail, summary, open_orders=open_orders,
+                                     holdings=holdings, now=now, tolerance=tolerance)
+    if blockers:
+        return None, blockers
+    broker_status = normalize_status(summary.get("status"))
+    proof = {"run_id": intent["run_id"], "broker_order_id": intent.get("broker_order_id"),
+             "broker_status": broker_status, "placed_at": intent.get("placed_at"),
+             "session_close": _session_close(intent["placed_at"]).isoformat(),
+             "margin_seconds": EXPIRY_MARGIN_SECONDS, "holdings": float(holdings),
+             "decision_holdings": float(intent["decision_holdings"]),
+             "open_order_count": len(open_orders)}
+    digest = hashlib.sha256(json.dumps(proof, sort_keys=True, separators=(",", ":"),
+                                       default=str).encode()).hexdigest()
+    resume = intent.get("reconcile_resume") if expiry_authorized(intent) else None
+    return {**summary, "status": "EXPIRED", "broker_status": broker_status,
+            "terminal_reason": EXPIRY_TERMINAL_REASON, "expiry_released": True,
+            "expiry_released_at": now.isoformat(), "expiry_proof_sha256": digest,
+            "expiry_released_by": (str(resume["operator"])[:128] if resume
+                                   else "policy:cancel_expire")}, []

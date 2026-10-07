@@ -18,7 +18,7 @@ import tick_runtime
 import auth_circuit
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from lego_one_row import Config
 from lego_orders import PROD, UAT
@@ -680,6 +680,7 @@ def token_health(now: datetime | None = None) -> dict:
         "ready": True,
         "durability_risk_only": False,
         "live_proof_supersedable": False,
+        "margin_only": False,
         "reasons": [],
     }
     if _token_check_disabled():
@@ -689,10 +690,12 @@ def token_health(now: datetime | None = None) -> dict:
     info["authentication_mode"] = "TOKEN_OR_UNVERIFIED"
     durability_reasons: list[str] = []
     supersedable_reasons: list[str] = []
+    margin_reasons: list[str] = []
 
     def fail(reason: str, *, blocks_now: bool = True,
              durability_only: bool = False,
-             live_proof_supersedable: bool = False) -> None:
+             live_proof_supersedable: bool = False,
+             margin_only: bool = False) -> None:
         """Record a reason.
 
         `blocks_now` False marks it as already forgiven for `ready`.
@@ -706,6 +709,8 @@ def token_health(now: datetime | None = None) -> dict:
         info["ok"] = False
         if blocks_now:
             info["ready"] = False
+        if margin_only:
+            margin_reasons.append(reason)
         if durability_only:
             durability_reasons.append(reason)
         if durability_only or live_proof_supersedable:
@@ -717,6 +722,11 @@ def token_health(now: datetime | None = None) -> dict:
             len(durability_reasons) == len(info["reasons"]))
         info["live_proof_supersedable"] = bool(info["reasons"]) and (
             len(supersedable_reasons) == len(info["reasons"]))
+        # Blocked only by the refresh margin: says nothing against signing today.
+        # token_can_sign_now() still has to check the expiry itself, because the
+        # margin test also fires once the token has already expired.
+        info["margin_only"] = bool(info["reasons"]) and (
+            len(margin_reasons) == len(info["reasons"]))
         return info
 
     local = read_local_token()
@@ -750,8 +760,35 @@ def token_health(now: datetime | None = None) -> dict:
     if local["status"] != "NORMAL":
         fail(f"token status={local['status']} (ต้องเป็น NORMAL)")
     if days_left <= _refresh_margin_days():
-        fail(f"token เหลืออีก {days_left:.2f} วันก่อนหมดอายุ")
+        fail(f"token เหลืออีก {days_left:.2f} วันก่อนหมดอายุ", margin_only=True)
     return seal()
+
+
+def token_can_sign_now(health: dict, now: datetime | None = None) -> bool:
+    """May a PROD client be built to read and reconcile, whatever new orders may do?
+
+    `ready` is the stricter question -- "may this token also open new orders" --
+    and it turns false three days before expiry (LEGO_TOKEN_REFRESH_MARGIN_DAYS).
+    Building clients on it alone meant that from then on an open PROD order could
+    not even be read, while new_order_token_block's own docstring promises it never
+    prevents reconciliation. A token that is hydrated from the durable secret,
+    NORMAL, and merely inside the margin still signs: build the client and let
+    new_order_token_block keep new orders shut. Anything else stays closed, and
+    verify_production_token still checks the live status and expiry afterwards.
+    """
+    if health.get("ready"):
+        return True
+    if (not health.get("margin_only") or not health.get("secret_configured")
+            or health.get("token_storage") != "SECRET_MANAGER"
+            or health.get("status") != "NORMAL"):
+        return False
+    try:
+        expiry = datetime.fromisoformat(str(health.get("expires_at")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if expiry.tzinfo is None:
+        return False
+    return expiry - (now or datetime.now(timezone.utc)) > timedelta(minutes=5)
 
 
 def new_order_token_block(health: dict, environment: str,
@@ -763,8 +800,12 @@ def new_order_token_block(health: dict, environment: str,
     """
     if environment != "PROD":
         return None
-    if (not health.get("secret_configured") or health.get("token_storage") != "SECRET_MANAGER"
-            or not health.get("ready")):
+    if not health.get("secret_configured") or health.get("token_storage") != "SECRET_MANAGER":
+        return "production requires hydrated durable token secret"
+    if not health.get("ready"):
+        if health.get("margin_only"):
+            # Reads and reconcile still run (token_can_sign_now); only new orders stop.
+            return "token inside refresh margin; new production orders blocked until it is rotated"
         return "production requires hydrated durable token secret"
     try:
         expiry = datetime.fromisoformat(str(health.get("expires_at")).replace("Z", "+00:00"))
@@ -1076,7 +1117,7 @@ def build_clients():
             health = token_health()
             if (not health.get("secret_configured")
                     or health.get("token_storage") != "SECRET_MANAGER"
-                    or not health.get("ready")):
+                    or not token_can_sign_now(health)):
                 raise WebullConfigError("PROD requires hydrated token; interactive initialization disabled")
     except Exception as exc:
         reset_clients()
