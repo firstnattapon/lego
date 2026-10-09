@@ -1,0 +1,130 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-10-09T15:13:43.761731+00:00",
+  "base_commit": "49b804068438841aa33e094210d7449b3a740715",
+  "python": "Python 3.13 (local); CI runs 3.12",
+  "local_status": "PASS",
+  "failed_checks": [],
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "note": "Candidate hash is computed by the operator from the committed clean tree (ops.py release-plan); it changes with this PR. Nothing here touched a broker, Firebase project or deployed revision.",
+  "full_suite": {
+    "junit_sha256": "43e3a55cf9c724101fba6bcf2df9064d0b20d244494888527b453e9fa996cfb4",
+    "counts": {
+      "tests": 1751,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1742
+    },
+    "baseline_before_change": {
+      "tests": 1647,
+      "passed": 1638,
+      "skipped": 9
+    },
+    "note": "skipped = emulator-only tests; CI runs them against the Firebase Database emulator."
+  },
+  "recorder_off_suite": {
+    "command": "LEGO_TRACE_LEVEL=off pytest -q --ignore=test_flight_recorder.py --ignore=test_flight_recorder_replay.py --ignore=test_trace_audit.py",
+    "junit_sha256": "66ad2d44f664b5ef33dcff816524af4857adee7c898fb735d30b20f57129b4a7",
+    "counts": {
+      "tests": 1660,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1651
+    },
+    "note": "the pre-existing behaviour does not depend on the recorder being on"
+  },
+  "checks": [
+    {
+      "id": "py_compile",
+      "command": "python -m py_compile *.py tools/*.py",
+      "exit_code": 0
+    },
+    {
+      "id": "new_tests",
+      "command": "pytest -q test_flight_recorder.py test_flight_recorder_replay.py test_trace_audit.py",
+      "tests": {
+        "test_flight_recorder.py": 33,
+        "test_flight_recorder_replay.py": 16,
+        "test_trace_audit.py": 42
+      }
+    },
+    {
+      "id": "decision_formula_parity",
+      "description": "tools/trace_audit.recompute_decision vs lego_one_row.build_decision",
+      "combinations": 2688,
+      "mismatches": 0
+    },
+    {
+      "id": "secret_scan",
+      "command": "gitleaks dir . (v8.24.3)",
+      "findings_outside_gitleaksignore": 0,
+      "note": "13 pre-existing findings in release_evidence/ are the exact fingerprints already in .gitleaksignore"
+    },
+    {
+      "id": "analyzer_on_incident_evidence",
+      "command": "python -m tools.trace_audit --logs --rtdb --yaml (private inputs, hashes in input-hashes.json)",
+      "row_mismatches": 0,
+      "fill_mismatches": 0,
+      "ledger_problems": 0,
+      "p0": 3,
+      "p1": 2
+    },
+    {
+      "id": "mutation_m1",
+      "description": "drop the SDK hook",
+      "expected": "a test fails",
+      "observed": "failed: test_flight_recorder.py::test_every_webull_exchange_is_recorded_and_the_phase_log_gains_only_metadata"
+    },
+    {
+      "id": "mutation_m2",
+      "description": "drop the decision equation",
+      "expected": "a test fails",
+      "observed": "failed: test_flight_recorder_replay.py::test_the_decision_walks_the_flow_chart_and_its_equation_recomputes"
+    },
+    {
+      "id": "mutation_m3",
+      "description": "drop the W11 diagnostics",
+      "expected": "a test fails",
+      "observed": "failed: test_flight_recorder_replay.py::test_an_unmet_expiry_proof_names_the_condition_in_trace_intent_and_warning[9.0-None-blockers0-facts0]"
+    },
+    {
+      "id": "mutation_m4",
+      "description": "analyzer rounds instead of flooring",
+      "expected": "a test fails",
+      "observed": "failed: test_trace_audit.py::test_the_decision_mirror_matches_the_production_decision_everywhere"
+    },
+    {
+      "id": "mutation_m5",
+      "description": "recorder errors propagate",
+      "expected": "a test fails",
+      "observed": "failed: test_flight_recorder.py::test_recorder_errors_are_swallowed_and_counted"
+    },
+    {
+      "id": "mutation_m6",
+      "description": "unguarded checkpoint in the broker path",
+      "expected": "a test fails",
+      "observed": "failed: test_flight_recorder.py::test_a_recorder_failure_never_changes_what_the_broker_call_returns_or_raises"
+    },
+    {
+      "id": "mutation_m7",
+      "description": "stale blockers survive the release",
+      "expected": "a test fails",
+      "observed": "failed: test_flight_recorder_replay.py::test_blockers_from_an_earlier_tick_do_not_outlive_the_release"
+    }
+  ],
+  "defects_found_by_this_verification": [
+    "the checkpoint call in the broker path (webull_io.get_response) was unguarded and replaced the broker's own exception when the recorder failed: guarded, test_a_recorder_failure_never_changes_what_the_broker_call_returns_or_raises",
+    "blockers from an earlier tick stayed on the intent after the proof finally passed: cleared on release, test_blockers_from_an_earlier_tick_do_not_outlive_the_release",
+    "the boot environment snapshot did not exclude LEGO_RELEASE_AUTHORIZATION: excluded, asserted in test_envelope_identifies_the_deployment_and_the_first_record_carries_boot_env"
+  ],
+  "not_verified": [
+    "any broker call (no UAT/PROD access from this environment)",
+    "the recorder against a real Realtime Database: write latency, size per day and the 3 second time-box are estimates",
+    "pip-audit, the Firebase emulator suite and Python 3.12 (CI)",
+    "which expiry-proof condition kept the 2026-10-08 order from being released (no log or database record exists for 21:00Z-23:22Z)",
+    "semantics of PENDING after close and of HTTP 417 (developer.webull.co.th is blocked by the egress proxy)"
+  ]
+}

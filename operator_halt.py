@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from firebase_admin import db
 
+import flight_recorder as fr
 from lego_outbox import DISPATCH_LOCK_PATH, account_symbol_fence_key
 from security_text import redact_sensitive_text
 
@@ -111,6 +112,8 @@ def set_halt(identity: str, symbol: str, *, operator: str, reason: str,
 
     written = _ref(scope).transaction(txn) or {}
     halt = dict(written.get(KEY) or {})
+    fr.node("H00", "HALT", ok=False, operator=operator, reason=reason,
+            halt_id=halt.get("halt_id"))
     repair_audit(identity, symbol)
     return {"dry_run": False, "scope": scope,
             "halt_id": halt.get("halt_id"),

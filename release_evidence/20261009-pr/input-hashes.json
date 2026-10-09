@@ -1,0 +1,434 @@
+{
+  "schema": "lego_audit_input_hashes_v1",
+  "generated_at": "2026-10-09T15:11:17.556377+00:00",
+  "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates are the numbers quoted in docs/AUDIT_20261009_TH.md and are reproducible with: python -m tools.trace_audit --logs ... --rtdb ... --yaml ...",
+  "inputs": [
+    {
+      "name": "downloaded-logs-20261009-202020.json",
+      "role": "Cloud Run logs of lego-tick-uat, 2026-10-07T13:30:08Z..2026-10-08T20:30:05Z",
+      "bytes": 9807463,
+      "sha256": "4da1a5aaf452364541b3a1c5e038dc6844c31e523d446175dbb2f17b3046910c"
+    },
+    {
+      "name": "lego-firebase-default-rtdb-export.json",
+      "role": "Realtime Database export (halt set 2026-10-08T23:22:07Z; dispatch lease claimed 2026-10-09T13:22:05Z)",
+      "bytes": 219812,
+      "sha256": "203c1d1973e8a97078a56d2d51e4a7c9c6f1f0857c57558ed853b614f3edfd04"
+    },
+    {
+      "name": "YAML.txt",
+      "role": "Cloud Run service and revision YAML (lego-tick-uat-00042-mey)",
+      "bytes": 13192,
+      "sha256": "2c7087023937251b96e29e9f4eff55eb0d24c79ec8fa34baaffd957be3bfcdeb"
+    },
+    {
+      "name": "webull-llms.txt",
+      "role": "Webull TH API documentation index",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    },
+    {
+      "name": "webull-llms-current.txt",
+      "role": "Webull TH API documentation index (second copy)",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    }
+  ],
+  "aggregates": {
+    "log_entries": 4751,
+    "request_entries": 1860,
+    "http_non_200": 0,
+    "ticks": 1860,
+    "instances": 1,
+    "first_tick": "2026-10-07T13:30:30Z",
+    "last_tick": "2026-10-08T20:29:06Z",
+    "tick_interval_seconds": 60.0,
+    "tick_gaps_over_180s": 0,
+    "tick_severity": {
+      "INFO": 1537,
+      "ERROR": 298,
+      "WARNING": 25
+    },
+    "tick_business_status": {
+      "MARKET_CLOSED": 1050,
+      "SLOT_CONSUMED": 461,
+      "RECONCILIATION_OVERDUE": 298,
+      "ROW_COMMITTED": 26,
+      "WAITING_RECONCILIATION": 20,
+      "TICK_DEFERRED": 5
+    },
+    "decision_status": {
+      "READY_BUY": 8,
+      "PASS_SLOT_CONSUMED": 728,
+      "PASS_THRESHOLD": 24,
+      "READY_SELL": 2,
+      "PASS_MARKET_CLOSED": 1080,
+      "PASS_RECOVERY_BLOCKED": 18
+    },
+    "tick_duration_ms": {
+      "n": 1860,
+      "p50": 844.8,
+      "p95": 2892.8,
+      "max": 33559.0
+    },
+    "ticks_over_70pct_of_budget": 2,
+    "operations": {
+      "sdk_order_detail": {
+        "calls": 326,
+        "errors": 1
+      },
+      "sdk_positions": {
+        "calls": 88,
+        "errors": 8
+      },
+      "sdk_snapshot": {
+        "calls": 75,
+        "errors": 0
+      },
+      "sdk_instrument": {
+        "calls": 53,
+        "errors": 1
+      },
+      "sdk_sdk_request": {
+        "calls": 26,
+        "errors": 0
+      },
+      "sdk_open_orders": {
+        "calls": 24,
+        "errors": 1
+      },
+      "sdk_accounts": {
+        "calls": 13,
+        "errors": 0
+      },
+      "sdk_preview": {
+        "calls": 10,
+        "errors": 0
+      },
+      "sdk_balance": {
+        "calls": 8,
+        "errors": 0
+      },
+      "sdk_place": {
+        "calls": 6,
+        "errors": 0
+      },
+      "place": {
+        "calls": 6,
+        "errors": 0
+      },
+      "sdk_cancel": {
+        "calls": 1,
+        "errors": 1
+      },
+      "cancel": {
+        "calls": 1,
+        "errors": 1
+      }
+    },
+    "sdk_text_errors": [
+      {
+        "route": "/trading/assets/positions/list",
+        "code": "GATEWAY_TIMEOUT",
+        "http": 504,
+        "n": 8
+      },
+      {
+        "route": "/trading/orders/cancel",
+        "code": "OPENAPI_ORDER_CANNOT_OPERATE",
+        "http": 417,
+        "n": 1
+      }
+    ],
+    "order_detail_reads_since_2026_10_08T15_16_18Z": {
+      "ok": 314,
+      "error": 0
+    },
+    "slots_pass_recovery_blocked": [
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25
+    ],
+    "rows": {
+      "n": 52,
+      "versions": [
+        1,
+        52
+      ],
+      "steps": [
+        546,
+        597
+      ],
+      "committed": 52,
+      "status": {
+        "PASS_THRESHOLD": 24,
+        "PASS_RECOVERY_BLOCKED": 18,
+        "READY_BUY": 8,
+        "READY_SELL": 2
+      },
+      "cashflow_status": {
+        "NO_ACTION": 42,
+        "PENDING_EXECUTION": 5,
+        "FINALIZED": 5
+      }
+    },
+    "equation_check": {
+      "fix_c": 10000.0,
+      "diff": 25.0,
+      "diff_allowed_by_rows": [
+        24.348304000001008,
+        27.327839999999924
+      ],
+      "p0": 69.08,
+      "quantity_rules": {
+        "floor_v2": 34
+      },
+      "row_mismatches": 0,
+      "fill_mismatches": 0,
+      "ledger_problems": [],
+      "net_position_change": 1.0
+    },
+    "fills": [
+      {
+        "seq": 1,
+        "run": "7f863ae6",
+        "side": "BUY",
+        "quantity": 1.11,
+        "price": 68.6,
+        "fee": 0.81,
+        "at": "2026-10-07T13:46:11Z",
+        "realized_delta": 0
+      },
+      {
+        "seq": 2,
+        "run": "fe374f63",
+        "side": "BUY",
+        "quantity": 0.49,
+        "price": 68.59,
+        "fee": 0.36,
+        "at": "2026-10-07T14:01:08Z",
+        "realized_delta": 0
+      },
+      {
+        "seq": 3,
+        "run": "ec242e71",
+        "side": "BUY",
+        "quantity": 0.56,
+        "price": 68.51,
+        "fee": 0.41,
+        "at": "2026-10-07T14:32:07Z",
+        "realized_delta": 0
+      },
+      {
+        "seq": 4,
+        "run": "c084ecde",
+        "side": "SELL",
+        "quantity": 0.42,
+        "price": 68.67,
+        "fee": 0.32,
+        "at": "2026-10-07T19:01:08Z",
+        "realized_delta": -0.597086
+      },
+      {
+        "seq": 5,
+        "run": "57e06bfa",
+        "side": "SELL",
+        "quantity": 0.74,
+        "price": 68.82,
+        "fee": 0.56,
+        "at": "2026-10-08T14:01:16Z",
+        "realized_delta": -0.936948
+      }
+    ],
+    "economics": {
+      "n": 5,
+      "fees_total": 2.46,
+      "notional_total": 227.8889,
+      "fee_pct": {
+        "min": 1.0637,
+        "median": 1.0711,
+        "max": 1.1095
+      },
+      "round_trip_fee_pct": 2.1423,
+      "cumulative_realized": -1.5340346938775493
+    },
+    "outbox": [
+      {
+        "run": "e22e1ce8",
+        "slot": "2026-10-07:0",
+        "status": "SUPPRESSED_STATE_CHANGED",
+        "side": "BUY",
+        "quantity": 0.8,
+        "broker_status": null,
+        "terminal_reason": "dispatch blocked: quote_age_limit"
+      },
+      {
+        "run": "7f863ae6",
+        "slot": "2026-10-07:1",
+        "status": "FILLED",
+        "side": "BUY",
+        "quantity": 1.11,
+        "broker_status": null,
+        "terminal_reason": null
+      },
+      {
+        "run": "fe374f63",
+        "slot": "2026-10-07:2",
+        "status": "FILLED",
+        "side": "BUY",
+        "quantity": 0.49,
+        "broker_status": null,
+        "terminal_reason": null
+      },
+      {
+        "run": "ec242e71",
+        "slot": "2026-10-07:4",
+        "status": "FILLED",
+        "side": "BUY",
+        "quantity": 0.56,
+        "broker_status": null,
+        "terminal_reason": null
+      },
+      {
+        "run": "c084ecde",
+        "slot": "2026-10-07:22",
+        "status": "FILLED",
+        "side": "SELL",
+        "quantity": 0.42,
+        "broker_status": null,
+        "terminal_reason": null
+      },
+      {
+        "run": "c32688ea",
+        "slot": "2026-10-08:0",
+        "status": "SUPPRESSED_STATE_CHANGED",
+        "side": "BUY",
+        "quantity": 0.39,
+        "broker_status": null,
+        "terminal_reason": "dispatch blocked: quote_age_limit"
+      },
+      {
+        "run": "520bf089",
+        "slot": "2026-10-08:1",
+        "status": "SUPPRESSED_STATE_CHANGED",
+        "side": "BUY",
+        "quantity": 1.08,
+        "broker_status": null,
+        "terminal_reason": "dispatch blocked: quantity_would_overshoot"
+      },
+      {
+        "run": "57e06bfa",
+        "slot": "2026-10-08:2",
+        "status": "FILLED",
+        "side": "SELL",
+        "quantity": 0.74,
+        "broker_status": null,
+        "terminal_reason": null
+      },
+      {
+        "run": "3f3f5914",
+        "slot": "2026-10-08:3",
+        "status": "SUPPRESSED_STATE_CHANGED",
+        "side": "BUY",
+        "quantity": 0.41,
+        "broker_status": null,
+        "terminal_reason": "dispatch blocked: side_changed_or_pass"
+      },
+      {
+        "run": "d3859ea2",
+        "slot": "2026-10-08:7",
+        "status": "MANUAL_RECONCILIATION_REQUIRED",
+        "side": "BUY",
+        "quantity": 0.77,
+        "broker_status": "PENDING",
+        "terminal_reason": null
+      }
+    ],
+    "operator_halt_audit_events": 1,
+    "service": {
+      "revision": "lego-tick-uat-00042-mey",
+      "generation": "42",
+      "timeout_s": 45.0,
+      "concurrency": 1.0,
+      "cpu": "0.3333",
+      "memory": "512Mi",
+      "max_scale": 1.0,
+      "git_commit": "49b804068438841aa33e094210d7449b3a740715",
+      "candidate_hash": "6cef2e194aee7b052cd207529158b90f195d2f004684c5f896bd6e5102c9a169",
+      "trading_window_end": "2026-10-20T20:00:00Z",
+      "stale_order_action": "cancel_expire",
+      "caps": {
+        "quantity": "30",
+        "notional_usd": "1500",
+        "session_orders": "26"
+      }
+    },
+    "alert_webhook_env_in_yaml": false,
+    "candidate_hash_reproduced_from_49b8040": {
+      "backend_only": "6cef2e194aee7b052cd207529158b90f195d2f004684c5f896bd6e5102c9a169",
+      "with_reader_checkout": "8f35f61d6962a35173fb308d55a25e5ae71c264744e631bf23c1e0a131b227d4",
+      "deployed_matches": "backend_only"
+    },
+    "findings": [
+      {
+        "level": "P0",
+        "code": "ORDER_UNRESOLVED"
+      },
+      {
+        "level": "P0",
+        "code": "EXPIRY_PROOF_UNKNOWN"
+      },
+      {
+        "level": "P0",
+        "code": "OPERATOR_HALT"
+      },
+      {
+        "level": "P1",
+        "code": "FEE_DRAG"
+      },
+      {
+        "level": "P1",
+        "code": "ALERTING_NOT_CONFIGURED"
+      },
+      {
+        "level": "P2",
+        "code": "TICKS_DEFERRED"
+      },
+      {
+        "level": "P2",
+        "code": "TICK_NEAR_BUDGET"
+      },
+      {
+        "level": "P2",
+        "code": "WEBULL_SDK_ERRORS"
+      },
+      {
+        "level": "P2",
+        "code": "WEBULL_SDK_ERRORS"
+      },
+      {
+        "level": "INFO",
+        "code": "NO_TRACES"
+      },
+      {
+        "level": "INFO",
+        "code": "UAT_ONLY"
+      }
+    ]
+  }
+}

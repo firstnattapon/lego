@@ -129,6 +129,15 @@ FAKE_DB = FakeDB()
 
 
 @pytest.fixture(autouse=True)
+def _flight_recorder_isolated():
+    """Dedup memory and counters are module state; they must not leak between tests."""
+    import flight_recorder
+    flight_recorder.reset_state()
+    yield
+    flight_recorder.reset_state()
+
+
+@pytest.fixture(autouse=True)
 def _runtime_identity_test_default(monkeypatch):
     """HTTP pipeline tests use an opaque, non-production account identity."""
     # A developer's configured receiver must never receive test notifications.

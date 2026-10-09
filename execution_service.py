@@ -2,6 +2,7 @@
 
 import logging
 import tick_runtime
+import flight_recorder as fr
 from lego_outbox import acknowledge_audit
 import math
 import os
@@ -206,6 +207,7 @@ def _record_warning(kind: str, message: str, extra: dict | None = None) -> None:
     in 0.3s. Diagnosing this took a CSV export of the row table. One log line per
     warning ends that — `kind` is greppable and `extra` carries blocked_by.
     """
+    fr.warning(kind, message, extra)
     try:
         ref = db.reference(f"{WARNINGS_PATH}/{kind}")
         now = _iso(datetime.now(UTC))
@@ -431,6 +433,7 @@ def _persist_error(chain_key_: str, run_id: str, status: str, exc: Exception,
     from webull_io import broker_error_details
     err = _error_text(exc)
     details = broker_error_details(exc)
+    fr.error("persist_error:" + status, exc)
     _persist(chain_key_, run_id,
              {"status": status, "last_error": err[:500],
               "broker_error": details, **(extra or {})}, claim=claim)
@@ -853,6 +856,7 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
             and not intent.get("cashflow_finalized")):
         try:
             finalized = _finalize_model_ledger(trade_client, cfg, intent, summary)
+            fr.fill_equation(cfg, intent, summary, finalized)
         except FillNotConfirmed as exc:
             return _defer_fill_confirmation(intent, summary, exc)
         except RealizedMathError as exc:
@@ -950,6 +954,13 @@ def _stop(chain_key_: str, run_id: str, status: str, extra: dict | None = None,
     """Close an unsent intent and leave a repairable execution audit."""
     _persist(chain_key_, run_id, {"status": status, **(extra or {})},
              claim=claim)
+    fr.node("W21" if status == "SUPPRESSED_STATE_CHANGED" else "W20", status, ok=False,
+            run_id=run_id, reason=(extra or {}).get("terminal_reason"),
+            **fr.pick(extra, "reasons", "price_drift_bps", "quote_age_seconds",
+                      "decision_age_seconds", "dispatch_check_phase", "overshoot_quantity",
+                      "overshoot_notional_usd", "dispatch_safe_quantity", "intent_quantity",
+                      "holdings_drift", "dispatch_holdings", "max_price_drift_bps",
+                      "max_quote_age_seconds"))
     return {"run_id": run_id, "status": status, **reported}
 
 
@@ -1136,17 +1147,23 @@ def _reject_unsafe_dispatch_quote(chain_key_: str, run_id: str,
         price_drift_bps=evidence["price_drift_bps"])
 
 
-def _try_expiry_release(trade_client, cfg, intent: dict, detail, summary: dict) -> dict | None:
+def _try_expiry_release(trade_client, cfg, intent: dict, detail, summary: dict) -> tuple[dict | None, dict]:
     """EXPIRED zero-fill summary for a refused DAY order that is provably dead.
 
     None keeps the existing hold, whatever the reason: not a candidate yet, a
     broker read that failed or ran out of tick budget, or a proof that is not
     met. The reads happen only after the session closed plus the margin, so this
     costs nothing during trading hours.
+
+    Returns (summary | None, diagnostics). The diagnostics say WHY the order was not
+    released: they are merged into the persisted summary (codes and time only, because
+    order_audit is publicly readable) and recorded in full on the private trace (W11).
+    2026-10-08 this reason lived in a logger.info that Cloud Logging never received.
     """
     import order_recovery
     if not order_recovery.expiry_candidate(intent):
-        return None
+        return None, {}
+    checked_at = _iso(datetime.now(UTC))
     try:
         tick_runtime.require_budget(10.0)
         open_orders = fetch_open_orders(trade_client, cfg.symbol)
@@ -1154,14 +1171,33 @@ def _try_expiry_release(trade_client, cfg, intent: dict, detail, summary: dict) 
     except Exception as exc:
         logger.info("lego expiry proof deferred run_id=%s reason=%s",
                     intent.get("run_id"), type(exc).__name__)
-        return None
+        blockers = ["reads_failed:" + type(exc).__name__]
+        fr.node("W11", blockers[0], ok=False, run_id=intent.get("run_id"),
+                reason=_error_text(exc)[:200])
+        _record_warning(
+            "expiry_proof_pending", "DAY-expiry proof อ่าน broker ไม่สำเร็จ — hold ต่อ",
+            {"run_id": intent.get("run_id"), "chain_key": intent.get("chain_key"),
+             "blockers": blockers})
+        return None, {"expiry_proof_checked_at": checked_at, "expiry_proof_blockers": blockers}
     released, blockers = order_recovery.expiry_release(
         intent, detail, summary, open_orders=open_orders, holdings=holdings,
         tolerance=_holdings_drift_tolerance(typed_v2=_intent_is_v2(intent)))
     if released is None:
         logger.info("lego expiry proof not met run_id=%s blockers=%s",
                     intent.get("run_id"), blockers)
-        return None
+        listed = any(str(o.get("client_order_id") or "") == str(intent.get("run_id"))
+                     for o in open_orders if isinstance(o, dict))
+        fr.node("W11", ",".join(blockers)[:60], ok=False, run_id=intent.get("run_id"),
+                blockers=blockers, open_orders=len(open_orders), listed=listed,
+                holdings=holdings, decision_holdings=intent.get("decision_holdings"),
+                tolerance=_holdings_drift_tolerance(typed_v2=_intent_is_v2(intent)))
+        _record_warning(
+            "expiry_proof_pending", "DAY-expiry proof ยังไม่ผ่าน — hold ต่อ",
+            {"run_id": intent.get("run_id"), "chain_key": intent.get("chain_key"),
+             "blockers": blockers})
+        return None, {"expiry_proof_checked_at": checked_at, "expiry_proof_blockers": blockers}
+    fr.node("W11", "released", run_id=intent.get("run_id"), open_orders=len(open_orders),
+            holdings=holdings, decision_holdings=intent.get("decision_holdings"))
     _record_warning(
         "day_expiry_released",
         "DAY order ที่ broker ยัง PENDING และปฏิเสธ cancel ถูกปล่อยเป็น EXPIRED หลังพิสูจน์ "
@@ -1169,7 +1205,8 @@ def _try_expiry_release(trade_client, cfg, intent: dict, detail, summary: dict) 
         {"run_id": intent.get("run_id"), "chain_key": intent.get("chain_key"),
          "expiry_proof_sha256": released["expiry_proof_sha256"],
          "released_by": released["expiry_released_by"]})
-    return released
+    # The proof passed: say so, so blockers from earlier ticks do not outlive the release.
+    return released, {"expiry_proof_checked_at": checked_at, "expiry_proof_blockers": []}
 
 
 def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
@@ -1222,6 +1259,10 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                     raise RuntimeError("broker order history still UNKNOWN")
             if runtime is not None and not evidence_conflict:
                 validate_order_detail_identity(detail, client_order_id=run_id, symbol=cfg.symbol)
+            fr.node("W10", normalize_status(summary.get("status")), run_id=run_id,
+                    intent_status=status,
+                    **fr.pick(summary, "filled_quantity", "filled_price", "filled_fee",
+                              "broker_fee_status", "total_quantity", "broker_order_id"))
         except (order_recovery.ConflictingOrderEvidence, order_recovery.BrokerContractAnomaly) as exc:
             flagged = order_recovery.mark_manual(
                 intent, type(exc).__name__, detail=detail)
@@ -1230,19 +1271,30 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             # Everything inside this try is 'can we reach and read the broker?'.
             # The realized and model ledgers are applied outside it so their
             # failures are not reported as an unresolved order.
+            fr.error("reconcile_read", exc, "W10")
             intent = order_recovery.read_failed(intent)
             return _persist_reconcile_failure(intent, exc)
         if evidence_conflict:
             flagged = order_recovery.mark_manual(intent, "CANCEL_EVIDENCE_INVALID", detail=detail)
             return {"run_id": run_id, "status": flagged["status"], "needs_manual_check": True}
-        released = _try_expiry_release(trade_client, cfg, intent, detail, summary)
+        released, expiry_diag = _try_expiry_release(trade_client, cfg, intent, detail, summary)
         if released is not None:
-            summary = released
+            summary = {**released, **expiry_diag}
+        elif expiry_diag:
+            summary = {**summary, **expiry_diag}
         intent = order_recovery.handle(intent, detail, summary, dispatch_claim,
                                        lambda rid: cancel_order(trade_client, rid))
+        fr.node("W12", intent.get("status"), run_id=run_id,
+                **fr.pick(intent, "cancel_attempt_count", "cancel_last_error_code",
+                          "cancel_refused_at", "cancel_confirmation_deadline",
+                          "needs_manual_check"))
         if intent.get("needs_manual_check"):
             return {"run_id": run_id, "status": intent["status"], "needs_manual_check": True}
         result = _finish_with_realized(trade_client, cfg, intent, summary)
+        fr.node("W13", result.get("status"), run_id=run_id,
+                **fr.pick(result, "cashflow_finalized", "realized", "filled_quantity",
+                          "filled_price", "broker_fee_status", "terminal_reason",
+                          "reconciliation_overdue", "expiry_released"))
         if intent.get("needs_manual_check"):
             result["needs_manual_check"] = True
         return result
@@ -1297,6 +1349,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             {"pagination_complete": False},
             claim=intent,
         )
+    fr.node("W20", "open_orders", run_id=run_id, open_orders=len(open_orders))
     import open_order_blocker
     if open_orders or (dispatch_claim or {}).get("broker_open_order_blocker"):
         observed_at = datetime.now(UTC)
@@ -1370,6 +1423,11 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             ck, run_id, "NOT_PLACED", exc,
             {"terminal_reason": "invalid dispatch provenance"},
             claim=intent)
+    fr.node("W21", "ok" if quote_safety.get("ok") else "blocked", ok=bool(quote_safety.get("ok")),
+            run_id=run_id, phase="pre_preview",
+            **fr.pick(quote_safety, "reasons", "price_drift_bps", "quote_age_seconds",
+                      "decision_age_seconds", "overshoot_quantity", "dispatch_safe_quantity",
+                      "intent_quantity"))
     if not quote_safety["ok"]:
         return _reject_unsafe_dispatch_quote(
             ck, run_id, quote_safety, phase="pre_preview", claim=intent)
@@ -1460,6 +1518,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                               if str(intent["side"]).upper() == "BUY" else None),
             )
             preview_ok = True
+            fr.node("W22", "previewed", run_id=run_id, preview=preview_result, funding=funding)
             update_intent(ck, run_id, {
                 "order_payload": order,
                 "payload_hash": canonical_payload_hash(order),
@@ -1482,7 +1541,10 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 else runtime.deployment.release_is_authorized
             ),
         )
+        fr.node("W23", "passed", run_id=run_id)
     except Exception as exc:
+        fr.node("W23", "failed", ok=False, run_id=run_id)
+        fr.error("dispatch_gate", exc, "W23")
         return _persist_error(ck, run_id, "NOT_PLACED", exc, claim=intent)
 
     # Preview is a network call and can take long enough for both price and
@@ -1550,6 +1612,11 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             {"terminal_reason": "invalid dispatch provenance",
              "dispatch_check_phase": "post_preview"},
             claim=intent)
+    fr.node("W21", "ok" if final_quote_safety.get("ok") else "blocked",
+            ok=bool(final_quote_safety.get("ok")), run_id=run_id, phase="post_preview",
+            **fr.pick(final_quote_safety, "reasons", "price_drift_bps", "quote_age_seconds",
+                      "decision_age_seconds", "overshoot_quantity", "dispatch_safe_quantity",
+                      "intent_quantity"))
     if not final_quote_safety["ok"]:
         return _reject_unsafe_dispatch_quote(
             ck, run_id, final_quote_safety, phase="post_preview",
@@ -1638,6 +1705,9 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                     now=datetime.now(UTC)))
             _persist(ck, run_id, {"execution_limit_check": evidence},
                      claim=intent)
+            fr.node("W24", "reserved", run_id=run_id,
+                    **fr.pick(evidence, "session_key", "reservation_count",
+                              "estimated_notional_usd", "quantity"))
             # Reservation and audit persistence are network operations too.
             limits.check(intent["quantity"], final_fresh["price"], now=datetime.now(UTC))
             final_deadline = _dispatch_quote_safety(
@@ -1669,6 +1739,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
     # Carry the committed document into result handling so fill/quantity checks
     # cannot silently skip an order placed in this same invocation.
     intent = started
+    fr.node("W25", "marker", run_id=run_id)
     _mirror_order_audit(ck, run_id, started)
     transition_audit.replay(ck, run_id)
     if runtime is not None:
@@ -1694,6 +1765,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         tick_runtime.require_budget(5.0)
         with tick_runtime.phase("place", witness="PLACING_UNKNOWN"):
             place_res = place_market_order(trade_client, order)
+            fr.node("W25", "placed", run_id=run_id)
         if runtime is not None:
             acknowledgement = validate_place_response(place_res, run_id)
             # Keep the broker ID even when the immediately following detail read
@@ -1705,9 +1777,12 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         summary = _poll_order_status(trade_client, run_id, place_res,
                                      expected_symbol=cfg.symbol if runtime is not None else None,
                                      intent=intent)
+        fr.node("W25", normalize_status(summary.get("status")), run_id=run_id,
+                **fr.pick(summary, "filled_quantity", "filled_price"))
     except Exception as exc:
         # Same open question as a failed reconcile — "does this order exist?" —
         # so it draws on the same bounded budget.
+        fr.error("place", exc, "W25")
         return _persist_reconcile_failure(intent, exc)
     return _finish_with_realized(trade_client, cfg, intent, summary)
 
@@ -1761,6 +1836,7 @@ def _run_order_worker(cfg, limit: int = 3,
         dispatch_scope, worker_id,
         lease_seconds=120 if runtime is not None else None)
     if dispatch_claim is None:
+        fr.node("W00", "lease_busy", ok=False, candidates=len(candidates))
         logger.info("lego_order_worker chain dispatch lease busy chain_key=%s", ck)
         return {"processed": 0, "actionable": len(candidates),
                 "expired_unsent": expired, "dispatch_locked": True,
@@ -1826,6 +1902,9 @@ def _run_order_worker(cfg, limit: int = 3,
                             "inflight_chain_key", "fenced_run_id", "fenced_at"):
                     dispatch_claim.pop(key, None)
             elif inflight_status in OUTBOX_TERMINAL or inflight.get("needs_manual_check"):
+                fr.node("W00", "blocked_manual", ok=False, run_id=inflight_run_id,
+                        status=inflight_status, manual_since=inflight.get("manual_since"),
+                        needs_manual_check=inflight.get("needs_manual_check"))
                 # Queue-terminal can still mean broker ambiguity or a broken
                 # strategy ledger. Keep the fence until a human reconciles it.
                 return {
@@ -1855,6 +1934,8 @@ def _run_order_worker(cfg, limit: int = 3,
                                 "results": []}
                 candidates = [inflight]
 
+        fr.node("W00", "claimed", candidates=len(candidates), expired_unsent=expired,
+                inflight_run_id=dispatch_claim.get("inflight_run_id"))
         if not candidates:
             # The account+symbol fence must be inspected even when the current
             # config chain is idle: it may point at an unresolved intent from a

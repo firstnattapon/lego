@@ -92,6 +92,17 @@ Health ใช้ business status และ severity ไม่ใช้ HTTP 200 
 
 Private path `webull_lego_execution_transitions/{chain}/{run}/r_{revision}` เป็น immutable event. State transaction เก็บ pending event แล้ว replay ด้วย transaction ที่ห้ามทับข้อมูลเดิม ก่อน mutation ถัดไป. Event มี intent/transition revision, candidate, deployment revision, release binding และ state fields ที่อนุญาต. Mirror failure ไม่ทิ้ง pending; backlog เต็มหยุดเพื่อซ่อม. Rules ปฏิเสธ public/reader access; Admin SDK ยังต้องคุม IAM แยก. ไม่บันทึก credentials หรือ raw broker payload ใน telemetry.
 
+## Flight recorder และ audit digest
+
+ทุก tick ที่น่าสนใจ (Place/Cancel, Webull error, commit แถว, order ที่ยังไม่จบ, halt, deferral, tick แรกของ instance) ถูกบันทึกเป็นเอกสาร private หนึ่งใบที่
+`webull_lego_trace/{chain}/{วัน}/{HHMMSS}_{tick}`: เส้นทางผัง LEGO (`path`), สมการ (`D08` ตัดสินใจ, `W13` ตอน fill), ทุก exchange กับ Webull (route, HTTP status, `X-Request-Id`, request/response ที่ sanitize+project, error code),
+outbox transition, warning และ exception ที่ดักได้ — Cloud Logging ยังไม่มี payload (เพิ่มแค่ `request_id`/`http_status`/`error_code` ใน `lego_operation` ของ `sdk_*`).
+เหตุผลที่ DAY-expiry proof ไม่ผ่านอยู่บน intent (`expiry_proof_blockers`, `expiry_proof_checked_at`), ใน `ops.py status`, tick log `execution[]` และ trace `W11`.
+ตั้งค่า (ไม่บังคับ): `LEGO_TRACE_LEVEL` = `notable` (default) | `all` | `off`; `LEGO_TRACE_BODIES` = `full` | `min`; `LEGO_TRACE_RETENTION_DAYS` = 14. อ่านผัง schema และข้อจำกัดใน [FLIGHT_RECORDER_TH.md](FLIGHT_RECORDER_TH.md).
+
+audit รอบถัดไปเริ่มจากคำสั่งเดียว (read-only, ไม่เรียก broker): `python -m tools.trace_audit --logs <logs.json> --rtdb <export.json> --yaml <service.yaml> --repo .`
+หรือดูสดบนเครื่องที่มีสิทธิ์ Firebase: `python -m tools.trace_audit --live --follow`
+
 ## รายงานรายวัน
 
 ```bash

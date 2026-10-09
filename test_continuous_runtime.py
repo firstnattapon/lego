@@ -324,6 +324,23 @@ def test_operator_status_shows_why_an_order_is_held_or_halted(monkeypatch):
     assert halted["cancel_last_error_code"] == "CANCEL_REFUSED_HOLD_EXPIRED"
 
 
+def test_operator_status_names_the_expiry_proof_condition_that_is_not_met(monkeypatch):
+    """2026-10-08: the proof stayed unmet for 2h22m and no surface said which condition."""
+    import ops
+    setup_tick(monkeypatch)
+    monkeypatch.setattr(ops, "load_runtime_config", main.load_runtime_config)
+    scope = main.account_symbol_fence_key("identity", "AAPL")
+    FAKE_DB.reference(f"{lego_outbox.DISPATCH_LOCK_PATH}/{scope}").set({
+        "inflight_run_id": "held", "inflight_chain_key": "old-chain"})
+    lego_outbox.put_intent("old-chain", "held", {
+        "status": "CANCEL_UNKNOWN", "broker_status": "PENDING",
+        "expiry_proof_blockers": ["order_still_listed_open", "holdings_changed"],
+        "expiry_proof_checked_at": "2026-10-08T21:30:07+00:00"})
+    held = ops.status_command(None)
+    assert held["expiry_proof_blockers"] == ["order_still_listed_open", "holdings_changed"]
+    assert held["expiry_proof_checked_at"] == "2026-10-08T21:30:07+00:00"
+
+
 @pytest.mark.parametrize("environment,binding,ok", [(PROD, None, False), (PROD, False, False),
                                                     (PROD, True, True), (UAT, False, False), (UAT, None, True)])
 def test_preflight_requires_explicit_production_release_binding(environment, binding, ok):

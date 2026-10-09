@@ -1,5 +1,12 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 9 ตุลาคม: [audit order UAT ค้าง PENDING ซ้ำ](docs/AUDIT_20261009_TH.md) — รอบที่ 3 ใน 4 session; `cancel_expire` ไม่ปล่อย order 21:00–23:22Z
+**โดยไม่มีหลักฐานว่า proof ติดเงื่อนไขไหน** (เหตุผลหายใน `logger.info` ที่ Cloud Logging ไม่รับ) จึงเพิ่ม [flight recorder](docs/FLIGHT_RECORDER_TH.md)
+(`flight_recorder.py`: ผัง LEGO + สมการ + คำตอบ Webull + ทุกการกระทำ ต่อ tick ใน RTDB private; `webull_io.py`/`tick_runtime.py`: request id, HTTP status, error code)
+และ `tools/trace_audit.py` (digest ของ logs + RTDB + YAML + repo, คำนวณสมการซ้ำ) — ไม่แตะ recovery/halt/ledger/fence. สมการของ 52 แถวและ 5 fills ที่ export มาคำนวณซ้ำตรงทั้งหมด.
+สถานะ: **code-ready, live-evidence-pending (NO-GO)** — สาเหตุจริงที่ proof ไม่ผ่านยังไม่ทราบ (หาได้ด้วย dry run ในขั้นตอนกู้ order ของ audit); order ที่ค้างและ halt ต้องกู้ด้วยคน;
+ยังไม่มี alert delivery จริง, PROD observe หรือ edge หลังหัก fee (fee UAT ≈1.07% ต่อ order, realized −1.534 USD). ผล local และ evidence อยู่ใน `release_evidence/20261009-pr/`.
+
 ล่าสุด 7 ตุลาคม: [audit order UAT ค้าง PENDING เกินปิดตลาด](docs/AUDIT_20261007_TH.md) — hold 8 ชั่วโมงของรอบ 6 ตุลาคม
 หมดแล้ว halt ข้าม session เพราะ UAT ไม่เคย terminal order ที่ broker ปฏิเสธ cancel (สมมติฐาน "DAY order terminal ก่อนปิดตลาด" ผิด)
 และไม่มีเครื่องมือปล่อย order non-terminal; แก้ใน `order_recovery.py` (`cancel_expire`: ปล่อยเป็น EXPIRED เฉพาะ UAT เมื่อพิสูจน์ครบ,
