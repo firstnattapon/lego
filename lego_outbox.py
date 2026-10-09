@@ -7,6 +7,7 @@ import uuid
 from transition_audit import enqueue as enqueue_transition
 from datetime import datetime, timedelta, timezone
 from firebase_admin import db
+import flight_recorder as fr
 
 from lego_orders import normalize_status as _normalize_status
 
@@ -274,10 +275,12 @@ def update_intent(chain_key: str, run_id: str, fields: dict, *,
     if (expected_claim_owner is None) != (expected_claim_generation is None):
         raise ValueError("claim owner and generation must be supplied together")
     ref = db.reference(f"{OUTBOX_PATH}/{chain_key}/{run_id}")
+    prior: dict = {}
 
     def txn(current):
         current = dict(current or {})
         before = dict(current)
+        prior["doc"] = before
         if expected_claim_owner is not None:
             active_until = _parse_utc(current.get("claim_until"))
             if (current.get("claim_owner") != expected_claim_owner
@@ -323,7 +326,9 @@ def update_intent(chain_key: str, run_id: str, fields: dict, *,
             current["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         return enqueue_transition(current, before)
 
-    return ref.transaction(txn) or {}
+    result = ref.transaction(txn) or {}
+    fr.transition_from(chain_key, run_id, prior.get("doc"), result, fields)
+    return result
 
 
 def acknowledge_audit(chain_key: str, run_id: str, revision: int) -> bool:

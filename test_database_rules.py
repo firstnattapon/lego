@@ -33,6 +33,9 @@ PRIVATE_PATHS = frozenset({
     "webull_lego_broker_cashflow",
     "webull_lego_errors",
     "webull_lego_alert_delivery",
+    "webull_lego_trace",
+    "webull_lego_trace_days",
+    "webull_lego_heartbeat",
 })
 
 

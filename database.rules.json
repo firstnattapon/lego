@@ -79,6 +79,18 @@
     "webull_lego_execution_transitions": {
       ".read": false,
       ".write": false
+    },
+    "webull_lego_trace": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_trace_days": {
+      ".read": false,
+      ".write": false
+    },
+    "webull_lego_heartbeat": {
+      ".read": false,
+      ".write": false
     }
   }
 }

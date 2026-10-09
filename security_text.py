@@ -36,16 +36,80 @@ def redact_sensitive_text(value) -> str:
     return text
 
 
+def _secret_names() -> set:
+    """Normalized key names whose values are never kept, whatever they contain."""
+    names = {re.sub(r"[^a-z0-9]", "", key.lower()) for key in _SECRET_FIELDS}
+    names.update({"accountid", "accountnumber", "accountno", "appid",
+                  "appsecret", "appkey", "accesstoken", "refreshtoken",
+                  "name", "fullname", "email", "phone", "address"})
+    return names
+
+
+# RTDB rejects keys with these characters (and control characters).
+_BAD_KEY_CHARS = re.compile(r"[.$#\[\]/\x00-\x1f\x7f]")
+
+
+def trace_clean(value, *, max_nodes: int = 300, max_str: int = 300, max_depth: int = 8):
+    """Bounded, redacted, RTDB-key-safe COPY of ``value`` for the private flight recorder.
+
+    Same secret rules as :func:`broker_diagnostic_json` (credential and identity keys
+    are replaced, free text goes through :func:`redact_sensitive_text`), but the result
+    stays a nested structure so the trace can be read and queried as data. Keys are made
+    legal for Realtime Database; ``None`` stays ``None`` (RTDB drops it); non-finite
+    numbers become text; nothing is ever modified in place.
+    """
+    names = _secret_names()
+    budget = [max_nodes]
+
+    def safe_key(raw, used):
+        text = _BAD_KEY_CHARS.sub("_", redact_sensitive_text(str(raw))[:100]) or "_"
+        candidate, n = text, 1
+        while candidate in used:
+            n += 1
+            candidate = f"{text}~{n}"
+        return candidate
+
+    def clean(item, depth):
+        budget[0] -= 1
+        if budget[0] < 0 or depth > max_depth:
+            return "<truncated>"
+        if isinstance(item, dict):
+            result = {}
+            for key, val in item.items():
+                if budget[0] <= 0:
+                    result["_truncated"] = True
+                    break
+                name = re.sub(r"[^a-z0-9]", "", str(key).lower())
+                result[safe_key(key, result)] = (
+                    _REDACTED if name in names else clean(val, depth + 1))
+            return result
+        if isinstance(item, (list, tuple)):
+            result = []
+            for val in item:
+                if budget[0] <= 0:
+                    result.append("<truncated>")
+                    break
+                result.append(clean(val, depth + 1))
+            return result
+        if item is None or isinstance(item, (bool, int)):
+            return item
+        if isinstance(item, float):
+            return item if item == item and item not in (float("inf"), float("-inf")) else str(item)
+        if isinstance(item, (bytes, bytearray)):
+            return f"<bytes {len(item)}>"
+        text = redact_sensitive_text(item)
+        return text if len(text) <= max_str else text[:max_str] + "…"
+
+    return clean(value, 0)
+
+
 def broker_diagnostic_json(value) -> str:
     """Bounded, redacted JSON for PRIVATE diagnostics, never a public mirror.
 
     JSON text also preserves unusual broker keys without RTDB key restrictions.
     Do not rely on redaction to make arbitrary broker extensions public-safe.
     """
-    secret_names = {re.sub(r"[^a-z0-9]", "", key.lower()) for key in _SECRET_FIELDS}
-    secret_names.update({"accountid", "accountnumber", "accountno", "appid",
-                         "appsecret", "appkey", "accesstoken", "refreshtoken",
-                         "name", "fullname", "email", "phone", "address"})
+    secret_names = _secret_names()
     budget = [160]
 
     def clean(item, depth=0):

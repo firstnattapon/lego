@@ -8,6 +8,7 @@ import uuid
 import os
 
 from firebase_admin import db
+import flight_recorder as fr
 import lego_outbox as outbox
 import operator_halt
 import tick_runtime
@@ -108,6 +109,9 @@ def fence_owned(intent, claim, now):
 def mark_manual(intent, reason, *, detail=None):
     import hashlib
     from security_text import broker_diagnostic_json
+    fr.node("H00", "MANUAL", ok=False, run_id=intent.get("run_id"), reason=reason,
+            **fr.pick(intent, "status", "broker_status", "cancel_attempt_count",
+                      "cancel_refused_at", "cancel_confirmation_deadline"))
     diagnostic = broker_diagnostic_json(detail) if detail is not None else None
     updated = outbox.update_intent(intent["chain_key"], intent["run_id"], {
         "status": "MANUAL_RECONCILIATION_REQUIRED",

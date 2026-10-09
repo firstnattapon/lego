@@ -2,6 +2,7 @@
 
 import logging
 import tick_runtime
+import flight_recorder as fr
 import math
 import os
 import time
@@ -161,7 +162,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         market_category()
         env = environment_label()
         runtime_identity = runtime_identity_fingerprint()
+        fr.node("D00", mode, env=env, symbol=cfg.symbol, fix_c=cfg.fix_c, diff=cfg.diff,
+                slot_seconds=os.environ.get("LEGO_SLOT_SECONDS"), typed_v2=runtime is not None,
+                identity=str(runtime_identity)[:12])
     except (KeyError, MarketClockError, ValueError) as exc:
+        fr.node("D00", "CONFIG_ERROR", ok=False, error=_error_text(exc, with_type=False))
         return {"status": "CONFIG_ERROR", "committed": False,
                 "pipeline_status": "CONFIG_ERROR",
                 "error": _error_text(exc, with_type=False)}, 500
@@ -172,8 +177,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         state = read_chain_state(cfg)
         _announce_identity_adoption(
             verify_runtime_identity(state, runtime_identity), runtime_identity)
-        _recover_pending_order_intents(cfg, runtime_identity, state=state)
+        recovered = _recover_pending_order_intents(cfg, runtime_identity, state=state)
+        fr.node("D01", recovered=recovered,
+                **fr.pick(state, "version", "dna_step", "slot_id", "market_ordinal"))
     except RuntimeIdentityError as exc:
+        fr.node("D01", "IDENTITY_ERROR", ok=False, error=_error_text(exc, with_type=False))
         return {"status": "CONFIG_ERROR", "committed": False,
                 "pipeline_status": "CONFIG_ERROR",
                 "error": _error_text(exc, with_type=False)}, 500
@@ -181,6 +189,7 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
     # One calendar for every path: the same session rules the ordinal uses, so a
     # holiday or early close also blocks a degraded (clock-less) commit.
     if not is_regular_session(decision_time):
+        fr.node("D02", "MARKET_CLOSED")
         return {"status": "PASS_MARKET_CLOSED", "committed": False,
                 "pipeline_status": "MARKET_CLOSED"}, 200
 
@@ -196,6 +205,8 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                     cfg, existing_slot.slot_id,
                     runtime_identity=runtime_identity, state=state)
                 if consumed is not None:
+                    fr.node("D03", "PASS_SLOT_CONSUMED", slot=existing_slot.slot_id,
+                            run_id=consumed.get("last_run_id"), step=consumed.get("dna_step"))
                     return {
                         "status": "PASS_SLOT_CONSUMED", "committed": False,
                         "pipeline_status": "SLOT_CONSUMED",
@@ -228,6 +239,10 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 # an already committed order at the broker boundary.
                 cfg = replace(cfg, quantity_increment=max(1, capability.lot_size),
                               decimal_precision=0)
+        fr.node("D04", precision=cfg.decimal_precision, increment=cfg.quantity_increment,
+                fractionable=getattr(capability, "fractionable", None),
+                lot_size=getattr(capability, "lot_size", None),
+                allow_fractional=None if runtime is None else runtime.deployment.allow_fractional)
         # Before the model is touched: if this revision's accounting is behind
         # the chain's, nothing it computes afterwards is worth writing. Existing
         # execution ledgers are retained; only pre-execution ledgers reset.
@@ -262,6 +277,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             effective_step, alignment_error = legacy_step, None
             clock_error = str(exc)
 
+        fr.node("D05", mode, slot=None if slot is None else slot.slot_id,
+                market_ordinal=None if slot is None else slot.market_ordinal,
+                legacy_step=legacy_step, effective_step=effective_step,
+                alignment_error=alignment_error, clock_error=clock_error,
+                anchor_version=getattr(anchor, "version", None))
         # The token dies of old age silently: nothing in the SDK renews it, and
         # recovery needs a human to approve 2FA within 300 seconds. build_clients
         # refreshes it while it is still valid; this reports what is left so the
@@ -279,6 +299,7 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 if k in ("token_dir", "ephemeral_token_dir", "status",
                          "expires_at", "days_left") and v is not None})
         snapshot = fetch_snapshot(trade_client, data_client, cfg)
+        fr.node("D06", **fr.pick(snapshot, "price", "holdings", "captured_at", "quote_time"))
         # Reaching this line is live proof that the token can sign a trade
         # request: fetch_snapshot goes through account_v2.get_account_position on
         # the very same authenticated ApiClient that place_order will use, and any
@@ -293,6 +314,8 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 or os.environ.get(
                     "LEGO_ALLOW_ZERO_HOLDINGS", "false").lower() != "true"):
             check_holdings_continuity(anchor, float(snapshot["holdings"]))
+        fr.node("D07", "ok", prev_holdings=getattr(anchor, "prev_holdings", None),
+                **fr.pick(snapshot, "holdings"))
         if slot:
             slot_id = slot.slot_id
         else:
@@ -301,6 +324,7 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             slot_id = fallback_slot_id(snapshot["captured_at"])
             mode = f"{mode}:degraded"
         row = compute_row(cfg, snapshot, anchor, dna_step=effective_step)
+        fr.decision_equation(cfg, snapshot, anchor, row, effective_step)
 
         # The deployed v2 entrypoint supplies the typed runtime and therefore
         # has one explicit gate. Calling this legacy handler directly keeps the
@@ -388,11 +412,14 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                         "minimum_notional_usd_if_authoritative": str(capability.minimum_notional_usd_if_authoritative) if capability.minimum_notional_usd_if_authoritative is not None else None,
                         "capability_source": str(capability.capability_source),
                     }
+        fr.decision_gates(auto, outbox_blocked, circuit, fence, stop, preflight, row)
         result = commit_final_row(
             cfg, snapshot, anchor, row, slot_id=slot_id, clock_mode=mode,
             market_ordinal=None if slot is None else slot.market_ordinal,
             runtime_identity=runtime_identity,
             pending_intent=pending_intent)
+        fr.node("D10", "committed" if result.get("committed") else "idempotent",
+                **fr.pick(result, "run_id", "version", "committed", "idempotent"), slot_id=slot_id)
 
         if preflight is None:
             pass                                    # nothing to submit this slot
@@ -401,8 +428,10 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 put_intent(chain_key(cfg), result["run_id"], pending_intent)
                 mark_order_intent_materialized(
                     cfg, result["run_id"], runtime_identity=runtime_identity)
+                fr.node("D11", "created", run_id=result["run_id"])
             except Exception as exc:
                 outbox_error = _error_text(exc)
+                fr.node("D11", "outbox_error", ok=False, run_id=result["run_id"], error=outbox_error)
                 _record_warning(
                     "outbox_recovery",
                     "committed row ยัง materialize เข้า outbox ไม่สำเร็จ — "
@@ -425,6 +454,8 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             if preflight["hint"]:
                 extra["hint"] = preflight["hint"]
             _record_warning(preflight["warning_kind"], message, extra)
+            fr.node("D11", "blocked", ok=False, run_id=result["run_id"], message=message,
+                    blocked_by=preflight["blocked_by"])
 
         out = {
             "status": row["สถานะ"], "committed": result["committed"],
@@ -492,25 +523,32 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         return out, 200
 
     except RuntimeIdentityError as exc:
+        fr.node("D01", "IDENTITY_ERROR", ok=False, error=_error_text(exc, with_type=False))
         return {"status": "CONFIG_ERROR", "committed": False,
                 "pipeline_status": "CONFIG_ERROR",
                 "error": _error_text(exc, with_type=False)}, 500
     except SlotAlreadyConsumed as exc:
+        fr.node("D10", "SLOT_CONSUMED", ok=False, note=str(exc))
         return {"status": "PASS_SLOT_CONSUMED", "committed": False,
                 "pipeline_status": "SLOT_CONSUMED", "note": str(exc)}, 200
     except StaleAnchorError as exc:
+        fr.node("D10", "STALE_ANCHOR", ok=False, note=str(exc))
         return {"status": "STALE_ANCHOR", "committed": False,
                 "pipeline_status": "STALE_ANCHOR", "note": str(exc)}, 409
     except CalendarDriftError as exc:
+        fr.node("D05", "CALENDAR_DRIFT", ok=False, note=str(exc))
         return {"status": "CALENDAR_DRIFT", "committed": False,
                 "pipeline_status": "CALENDAR_DRIFT", "note": str(exc)}, 409
     except OrdinalRegression as exc:
+        fr.node("D05", "ORDINAL_REGRESSION", ok=False, note=str(exc))
         return {"status": "ORDINAL_REGRESSION", "committed": False,
                 "pipeline_status": "ORDINAL_REGRESSION", "note": str(exc)}, 409
     except DNADriftError as exc:
+        fr.node("D08", "DNA_DRIFT", ok=False, note=str(exc))
         return {"status": "DNA_DRIFT", "committed": False,
                 "pipeline_status": "DNA_DRIFT", "note": str(exc)}, 409
     except CashflowSemanticsDowngrade as exc:
+        fr.node("D01", "CASHFLOW_SEMANTICS_DOWNGRADE", ok=False, note=str(exc))
         # 409 for the same reason as the drift guards: the request is fine, the
         # chain is fine, and this deployment is the thing that must not proceed.
         return {"status": "CASHFLOW_SEMANTICS_DOWNGRADE", "committed": False,
@@ -519,9 +557,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 "hint": "ตรวจว่า Cloud Run revision ไหนยังรับ traffic อยู่ "
                         "และ scheduler ยิงไปที่ URL ของ revision ใด"}, 409
     except HoldingsAnomaly as exc:
+        fr.node("D07", "HOLDINGS_ANOMALY", ok=False, note=str(exc))
         return {"status": "HOLDINGS_ANOMALY", "committed": False,
                 "pipeline_status": "HOLDINGS_ANOMALY", "note": str(exc)}, 409
     except DNAExhausted as exc:
+        fr.node("D08", "DNA_EXHAUSTED", ok=False, note=str(exc))
         # The DNA finishing is an expected end state, not a fault: bypass:100 on
         # a 30m grid lasts about eight trading days. Without this clause it fell
         # through to the generic handler and answered 500 on every slot forever,
@@ -533,10 +573,12 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 "hint": "ต่ออายุด้วย LEGO_DNA_CODE ที่ยาวขึ้น (chain ใหม่) "
                         "หรือหยุด scheduler ของ chain นี้"}, 200
     except tick_runtime.TickDeadlineExceeded:
+        fr.node("T00", "tick_deadline", ok=False)
         # Decision persistence is idempotent; broker mutations have a separate
         # durable witness in the worker. Resume from the committed state.
         return {"pipeline_status": "TICK_DEFERRED", "deferred_reason": "tick_deadline"}, 200
     except Exception as exc:
+        fr.error("run_decision", exc)
         from webull_io import is_auth_blocked
         if is_auth_blocked(exc):
             return {"status": "AUTH_BACKOFF", "committed": False,

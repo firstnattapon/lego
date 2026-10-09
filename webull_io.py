@@ -16,6 +16,7 @@ import traceback
 import uuid
 import tick_runtime
 import auth_circuit
+import flight_recorder
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from datetime import datetime, timedelta, timezone
@@ -918,6 +919,47 @@ def _token_check_disabled() -> bool:
             and time.monotonic() - verified_at < _client_cache_ttl())
 
 
+_MUTATING_OPERATIONS = frozenset({"place", "cancel"})
+_OPAQUE_ACTIONS = ("/auth/", "/openapi/config")
+
+
+def _observe_exchange(operation: str, request, started: float, *, response=None, exc=None) -> None:
+    """Tell the open ``sdk_*`` phase and the flight recorder what Webull answered.
+
+    Metadata only goes to Cloud Logging (request id, HTTP status, error code). The
+    sanitized exchange goes to the private trace. Nothing here may change the call.
+    """
+    try:
+        action = request.get_action_name()
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        payload = info = code = None
+        if exc is not None:
+            status = _http_status(exc)
+            code = str(getattr(exc, "error_code", "") or "").strip()
+            request_id = getattr(exc, "request_id", None)
+            message = getattr(exc, "error_msg", None) or getattr(exc, "message", None) or exc
+            info = {"code": code or type(exc).__name__, "http": status,
+                    "msg": str(message)[:240], "type": type(exc).__name__}
+        else:
+            status = getattr(response, "status_code", None)
+            headers = getattr(response, "headers", None)
+            request_id = headers.get("X-Request-Id") if hasattr(headers, "get") else None
+            if not any(marker in str(action) for marker in _OPAQUE_ACTIONS):
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+        tick_runtime.annotate(request_id=request_id, http_status=status, error_code=code)
+        flight_recorder.webull_exchange(
+            operation, action, getattr(request, "get_method", lambda: "")(), elapsed_ms,
+            status=status, request_id=request_id,
+            query=getattr(request, "get_query_params", lambda: None)(),
+            body=getattr(request, "get_body_params", lambda: None)(),
+            payload=payload, error_info=info)
+    except Exception:
+        pass
+
+
 def _bounded_api_class(base):
     """Use SDK request timeout setters; keep signing and retry policy untouched."""
     class BoundedApiClient(base):
@@ -944,14 +986,26 @@ def _bounded_api_class(base):
                 "/trading/orders/open-orders/list": "open_orders",
                 "/trading/instruments/stocks/profiles/list": "instrument",
             }.get(action, "sdk_request")
+            started = time.monotonic()
             try:
                 with tick_runtime.phase("sdk_" + operation):
-                    response = super().get_response(request)
+                    try:
+                        response = super().get_response(request)
+                    except Exception as sdk_exc:
+                        _observe_exchange(operation, request, started, exc=sdk_exc)
+                        raise
+                    _observe_exchange(operation, request, started, response=response)
             except Exception as exc:
                 if operation != "sdk_request":
                     exc._lego_operation = operation
                 _record_auth_failure(exc)
                 raise
+            finally:
+                if operation in _MUTATING_OPERATIONS:
+                    try:  # keep the evidence if the instance dies next; never change the outcome
+                        flight_recorder.checkpoint()
+                    except Exception:
+                        pass
             if action == "/openapi/config" and response.status_code == 200:
                 payload = response.json()
                 enabled = payload.get("token_check_enabled") if isinstance(payload, dict) else None

@@ -8,6 +8,7 @@ import traceback
 import uuid
 import tick_runtime
 import auth_circuit
+import flight_recorder
 from observability import emit_tick
 from datetime import datetime, timedelta, timezone
 
@@ -324,6 +325,12 @@ def lego_tick(request):
         emit_tick(body, code, request=request)
         from alerting import notify_tick
         notify_tick(body)
+        # Last, after the tick's own log line and alert: the forensic trace is best
+        # effort, time-boxed and skipped when the tick has little budget left.
+        try:
+            flight_recorder.finish(body, code, request=request)
+        except Exception:
+            pass
         return body, code
 
 
@@ -367,6 +374,14 @@ def _run_tick(request):
             "error": _error_text(exc, with_type=False),
             "error_type": type(exc).__name__,
         }, 500
+
+    try:  # who this tick belongs to, for the flight recorder; never alters the tick
+        flight_recorder.bind(
+            chain_key=chain_key(cfg), symbol=cfg.symbol,
+            env=runtime.deployment.environment, mode=runtime.operator.mode,
+            active=runtime.operator.active)
+    except Exception:
+        pass
 
     from webull_io import auth_circuit_key
     auth_circuit.guard(auth_circuit_key())
@@ -426,6 +441,10 @@ def _run_tick(request):
                     runtime_identity, cfg.symbol))
         except Exception as exc:
             archive = {"status": "ARCHIVE_DEFERRED", "error": _error_text(exc)}
+        try:  # trace retention rides on the same housekeeping budget
+            flight_recorder.prune(chain_key(cfg))
+        except Exception:
+            pass
 
     dispatch_deferred = (bool(dispatch and dispatch.get("deferred_reason"))
                          or any(item.get("deferred_reason") == "tick_deadline"
