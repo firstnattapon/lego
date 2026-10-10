@@ -34,7 +34,7 @@ import math
 import os
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
 from dna_engine import decode_dna
 from execution_limits import ExecutionLimitError, ExecutionLimits
@@ -324,8 +324,52 @@ def recommend_limits(principal, reference_price=None, *, profile: str = "UAT",
     return result
 
 
-def assess(inp: ReleaseInputs, *, now: datetime | None = None) -> dict:
-    items = findings(inp, now=now)
+def parse_fee_pct(value) -> Decimal:
+    """A measured broker fee, percent of notional per order (0 <= fee < 100)."""
+    try:
+        fee = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        raise ValueError("--fee-pct must be a number: percent of notional per order") from None
+    if not fee.is_finite() or fee < 0 or fee >= 100:
+        raise ValueError("--fee-pct must be at least 0 and below 100 (percent of notional per order)")
+    return fee
+
+
+def operator_findings(inp: ReleaseInputs, *, fee_pct: Decimal | None,
+                      alert_configured: bool) -> list[dict]:
+    """Facts only the operator can supply when planning a real-money release.
+
+    They are not configuration, so ``findings`` (which the runtime and ``ops.py status``
+    also call) never sees them; ``ops.py release-plan`` passes them to ``assess(extra=)``.
+    Production that can trade only, and never a BLOCK: nothing here can prove a profit or a
+    loss, so it must not decide whether a release may go out. Open follow-up 4 of
+    docs/AUDIT_20261006_TH.md; why the fee is a cost and not a test: docs/AUDIT_20261010_TH.md.
+    """
+    if not (inp.production and inp.trading):
+        return []
+    out = []
+    if fee_pct is None:
+        out.append({"id": "fee_unmeasured", "severity": WARN, "static": True, "message": (
+            "no measured production fee. Run Preview Order for a representative size and pass "
+            "--fee-pct (estimated_transaction_fee / estimated_cost x 100). UAT charged 1.07% per "
+            "order; the strategy pays the fee on every order whatever the price does, and a few "
+            "UAT sessions cannot show an edge after fees")})
+    else:
+        cost = (fee_pct / 100 * inp.diff).quantize(Decimal("0.0001"))
+        out.append({"id": "fee_measured", "severity": INFO, "static": True, "message": (
+            f"measured fee {_plain(fee_pct)}% of notional: every order costs at least {_plain(cost)} "
+            f"USD at DIFF {_plain(inp.diff)} (fee x DIFF) and about {_plain(fee_pct * 2)}% round "
+            "trip. This is a cost to weigh, not a profit test")})
+    if not alert_configured:
+        out.append({"id": "alert_unset", "severity": WARN, "static": True, "message": (
+            "no ALERT_WEBHOOK_SECRET_OVERRIDE in this deployment: halts, release expiry and token "
+            "expiry then reach a person only through the Cloud Monitoring policies of "
+            "tools/monitoring_config.py. Apply them and test delivery before real money (gate G4)")})
+    return out
+
+
+def assess(inp: ReleaseInputs, *, now: datetime | None = None, extra=()) -> dict:
+    items = findings(inp, now=now) + list(extra)
     limits, _ = _parse_limits(inp.limits)
     result = {
         "ok": not any(f["severity"] == BLOCK for f in items),

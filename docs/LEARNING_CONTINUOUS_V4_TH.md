@@ -26,7 +26,7 @@ DNA เป็น gate array 0/1 มีความยาวจำกัด. Mark
 | ค่า | ความหมายตาม implementation |
 |---|---|
 | `V = holdings × P` | มูลค่าหุ้นจาก snapshot |
-| `gap = FIX_C − V` | ค่าบวกต้องเพิ่มหุ้น ค่าลบต้องลดหุ้น |
+| `gap = V − FIX_C` | ค่าบวก = ถือเกินเป้า → ขาย (`READY_SELL` เมื่อ gap > DIFF); ค่าลบ = ถือขาด → ซื้อ (`READY_BUY` เมื่อ gap < −DIFF); คอลัมน์ "ส่วนต่างเป้าหมาย" เก็บค่านี้ (`lego_one_row.build_decision`; เอกสารรุ่นก่อนเขียนกลับเครื่องหมาย) |
 | DNA signal 0 | PASS_DNA_ZERO |
 | `abs(gap) <= DIFF` | PASS_THRESHOLD |
 | Quantity | สร้างจาก gap/price ตาม precision และ lot/fractional guards ปัจจุบัน |

@@ -1185,7 +1185,14 @@ def build_clients():
     try:
         if environment_label() == PROD:
             verify_production_token(api)
-        trade, data = TradeClient(api), DataClient(api)
+        # Each constructor only asks the broker whether token checking is on (and,
+        # when it is, verifies the stored token): repeating it changes nothing at
+        # the broker. 2026-10-09 18:45 a single 5 s read timeout on that call failed
+        # the whole slot-boundary tick (HTTP 503) while every other read in this
+        # module already survives one transient error. One bounded retry, only for
+        # errors is_transient_exception() accepts; auth and config errors still raise.
+        trade, data = _retry_transient(
+            lambda: (TradeClient(api), DataClient(api)), attempts=2, base_delay=1.0)
         _AUTH_PROFILE = (cache_key, time.monotonic(),
                          getattr(api, "_lego_token_check_enabled", None))
         ensure_token_fresh(api)

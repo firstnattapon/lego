@@ -1,0 +1,648 @@
+{
+  "schema": "lego_audit_input_hashes_v1",
+  "generated_at": "2026-10-10T04:33:34.834373+00:00",
+  "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates are the numbers quoted in docs/AUDIT_20261010_TH.md and are reproducible with: python -m tools.trace_audit --logs ... --rtdb ... --yaml ... (trace_audit's own repo comparison is omitted here: it ran on a working tree with uncommitted changes, so it is not a candidate check; the candidate below was rebuilt from a clean checkout of the deployed commit).",
+  "inputs": [
+    {
+      "name": "downloaded-logs-20261010-100241.json",
+      "role": "Cloud Run logs of lego-tick-uat, revision lego-tick-uat-00043-tux, 2026-10-09T15:24Z..20:34Z",
+      "bytes": 1633037,
+      "sha256": "cf389eaa4f184dc500e0b1e1f941796be9c7ec714dc36eafca76cce81de898f4"
+    },
+    {
+      "name": "lego-firebase-default-rtdb-export.json",
+      "role": "Realtime Database export (state version 19, finalized_seq 5)",
+      "bytes": 511571,
+      "sha256": "80af1da2e162d19c88275df34cdddcc1f29ff76de2ffdb1022d9c437d7178f4c"
+    },
+    {
+      "name": "YAML.txt",
+      "role": "Cloud Run service and revision YAML (lego-tick-uat-00043-tux)",
+      "bytes": 13192,
+      "sha256": "a654b81fd4d26f366cb3be1cba10c1f92a5c39ff63ec8db17a81df2fa32dafd0"
+    },
+    {
+      "name": "webull-llms.txt",
+      "role": "Webull TH API documentation index",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    },
+    {
+      "name": "webull-llms-current.txt",
+      "role": "Webull TH API documentation index (second copy; identical)",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    }
+  ],
+  "aggregates": {
+    "as_of": "2026-10-10T03:00:06Z",
+    "logs": {
+      "entries": 814,
+      "ticks": {
+        "n": 311,
+        "first": "2026-10-09T15:24:35Z",
+        "last": "2026-10-09T20:34:06Z",
+        "interval_s": 60.0,
+        "by_severity": {
+          "INFO": 306,
+          "WARNING": 3,
+          "ERROR": 2
+        },
+        "by_http": {
+          "200": 310,
+          "503": 1
+        },
+        "by_pipeline": {
+          "TICK_OK": 309,
+          "TICK_DEFERRED": 1,
+          "TICK_DECISION_ERROR": 1
+        },
+        "by_business": {
+          "SLOT_CONSUMED": 255,
+          "MARKET_CLOSED": 35,
+          "ROW_COMMITTED": 16,
+          "WAITING_RECONCILIATION": 2,
+          "TICK_DEFERRED": 1,
+          "BROKER_ORDER_FAILED": 1,
+          "ERROR": 1
+        },
+        "duration_ms": {
+          "n": 311,
+          "p50": 765.3,
+          "p95": 3987.5,
+          "max": 30696.0
+        },
+        "slowest": [
+          {
+            "at": "2026-10-09T15:24:35Z",
+            "tick": "c0d673db",
+            "ms": 30695.991,
+            "business": "TICK_DEFERRED"
+          },
+          {
+            "at": "2026-10-09T16:45:27Z",
+            "tick": "cf7beae3",
+            "ms": 22512.415,
+            "business": "WAITING_RECONCILIATION"
+          },
+          {
+            "at": "2026-10-09T15:30:27Z",
+            "tick": "d2a9e8e8",
+            "ms": 22496.831,
+            "business": "ROW_COMMITTED"
+          },
+          {
+            "at": "2026-10-09T17:30:22Z",
+            "tick": "edef7736",
+            "ms": 17294.129,
+            "business": "WAITING_RECONCILIATION"
+          },
+          {
+            "at": "2026-10-09T17:45:22Z",
+            "tick": "00a4658a",
+            "ms": 17172.96,
+            "business": "ROW_COMMITTED"
+          }
+        ],
+        "near_budget": 0,
+        "gaps": [],
+        "gap_count": 0,
+        "error_runs": [
+          {
+            "from": "2026-10-09T15:25:09Z",
+            "to": "2026-10-09T15:25:09Z",
+            "n": 1,
+            "pipeline": {
+              "TICK_OK": 1
+            },
+            "types": {}
+          },
+          {
+            "from": "2026-10-09T18:45:12Z",
+            "to": "2026-10-09T18:45:12Z",
+            "n": 1,
+            "pipeline": {
+              "TICK_DECISION_ERROR": 1
+            },
+            "types": {
+              "ClientException": 1
+            }
+          }
+        ],
+        "halt_since": null,
+        "paused": 0,
+        "environment": {
+          "UAT": 311
+        },
+        "mode": {
+          "trade": 311
+        }
+      },
+      "http": {
+        "n": 311,
+        "by_status": {
+          "200": 310,
+          "503": 1
+        },
+        "latency_s": {
+          "n": 311,
+          "p50": 0.77,
+          "p95": 4.09,
+          "max": 30.7
+        }
+      },
+      "instances": {
+        "0010dd860783": 814
+      },
+      "revisions": {
+        "lego-tick-uat-00043-tux": 814
+      },
+      "webull": {
+        "operations": {
+          "sdk_positions": {
+            "n": 39,
+            "errors": 1,
+            "ms": {
+              "n": 39,
+              "p50": 891.2,
+              "p95": 4055.7,
+              "max": 6813.3
+            },
+            "codes": {
+              "GATEWAY_TIMEOUT": 1
+            },
+            "http": {
+              "504": 1
+            },
+            "request_ids": [
+              "434e395f-abe4-47e6-afc0-562a6c8edfff"
+            ]
+          },
+          "sdk_snapshot": {
+            "n": 33,
+            "errors": 0,
+            "ms": {
+              "n": 33,
+              "p50": 828.5,
+              "p95": 1051.7,
+              "max": 1878.5
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_instrument": {
+            "n": 19,
+            "errors": 0,
+            "ms": {
+              "n": 19,
+              "p50": 1141.3,
+              "p95": 1773.3,
+              "max": 3988.3
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_open_orders": {
+            "n": 14,
+            "errors": 0,
+            "ms": {
+              "n": 14,
+              "p50": 816.3,
+              "p95": 1698.7,
+              "max": 1955.1
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_sdk_request": {
+            "n": 10,
+            "errors": 1,
+            "ms": {
+              "n": 10,
+              "p50": 990.5,
+              "p95": 5404.3,
+              "max": 5404.3
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_order_detail": {
+            "n": 10,
+            "errors": 1,
+            "ms": {
+              "n": 10,
+              "p50": 968.3,
+              "p95": 6387.9,
+              "max": 6387.9
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "ledger_persistence": {
+            "n": 9,
+            "errors": 1,
+            "ms": {
+              "n": 9,
+              "p50": 1547.2,
+              "p95": 2102.4,
+              "max": 2102.4
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_preview": {
+            "n": 7,
+            "errors": 0,
+            "ms": {
+              "n": 7,
+              "p50": 1269.3,
+              "p95": 1558.4,
+              "max": 1558.4
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "reserve_attempt": {
+            "n": 6,
+            "errors": 0,
+            "ms": {
+              "n": 6,
+              "p50": 56.3,
+              "p95": 62.9,
+              "max": 62.9
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "place_witness": {
+            "n": 6,
+            "errors": 0,
+            "ms": {
+              "n": 6,
+              "p50": 56.2,
+              "p95": 667.0,
+              "max": 667.0
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_place": {
+            "n": 6,
+            "errors": 0,
+            "ms": {
+              "n": 6,
+              "p50": 740.8,
+              "p95": 1254.1,
+              "max": 1254.1
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "place": {
+            "n": 6,
+            "errors": 0,
+            "ms": {
+              "n": 6,
+              "p50": 821.5,
+              "p95": 1341.2,
+              "max": 1341.2
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "order_detail": {
+            "n": 6,
+            "errors": 0,
+            "ms": {
+              "n": 6,
+              "p50": 451.7,
+              "p95": 9447.0,
+              "max": 9447.0
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_accounts": {
+            "n": 4,
+            "errors": 0,
+            "ms": {
+              "n": 4,
+              "p50": 842.5,
+              "p95": 940.1,
+              "max": 940.1
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_balance": {
+            "n": 3,
+            "errors": 0,
+            "ms": {
+              "n": 3,
+              "p50": 945.9,
+              "p95": 1102.5,
+              "max": 1102.5
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          }
+        },
+        "errors": [
+          {
+            "op": null,
+            "code": "SDK.HTTPERROR",
+            "http": null,
+            "n": 1,
+            "first": "2026-10-09T18:45:12Z",
+            "last": "2026-10-09T18:45:12Z",
+            "request_ids": []
+          }
+        ],
+        "sdk_errors": [
+          {
+            "route": "/trading/assets/positions/list",
+            "code": "GATEWAY_TIMEOUT",
+            "http": 504,
+            "n": 1,
+            "first": "2026-10-09T16:45:13Z",
+            "last": "2026-10-09T16:45:13Z",
+            "request_ids": [
+              "434e395f-abe4-47e6-afc0-562a6c8edfff"
+            ]
+          }
+        ]
+      }
+    },
+    "rtdb_collections": {
+      "webull_lego_broker_cashflow": 1,
+      "webull_lego_errors": 1,
+      "webull_lego_execution_transitions": 1,
+      "webull_lego_heartbeat": 1,
+      "webull_lego_order_audit": 7,
+      "webull_lego_order_dispatch_locks": 1,
+      "webull_lego_order_outbox": 1,
+      "webull_lego_realized": 1,
+      "webull_lego_realized_lot_pages": 1,
+      "webull_lego_rows": 19,
+      "webull_lego_state": 1,
+      "webull_lego_trace": 1
+    },
+    "chain": {
+      "state": {
+        "updated_at": "2026-10-09T19:45:07Z",
+        "version": 19,
+        "dna_step": 623,
+        "slot_id": "2026-10-09:25",
+        "semantics": "execution_terminal_funding_v3",
+        "clock_mode": "market",
+        "holdings": 140.4528,
+        "p0": 71.4959
+      },
+      "rows": {
+        "n": 19,
+        "fix_c": 10000.0,
+        "diff": {
+          "given": 25.0,
+          "lower": 23.09972000000198,
+          "upper": 27.482500000000073,
+          "source": "config",
+          "used": 25.0
+        },
+        "p0": 71.4959,
+        "rules": {
+          "floor_v2": 19
+        },
+        "gated": {},
+        "mismatch": {
+          "count": 0,
+          "items": []
+        },
+        "versions": {
+          "first": 1,
+          "last": 19,
+          "contiguous": true
+        },
+        "steps": {
+          "first": 605,
+          "last": 623,
+          "gaps": [],
+          "increasing": true
+        },
+        "uncommitted": 0,
+        "cashflow_status": {
+          "NO_ACTION": 12,
+          "FINALIZED": 5,
+          "PENDING_EXECUTION": 2
+        },
+        "status_counts": {
+          "PASS_THRESHOLD": 12,
+          "READY_SELL": 4,
+          "READY_BUY": 3
+        }
+      },
+      "fills": {
+        "n": 5,
+        "mismatch": {
+          "count": 0,
+          "items": []
+        },
+        "fills": [
+          {
+            "seq": 1,
+            "run": "93602c2f",
+            "at": "2026-10-09T15:30:26Z",
+            "reference_gap": 0.0
+          },
+          {
+            "seq": 2,
+            "run": "3df55d68",
+            "at": "2026-10-09T16:46:08Z",
+            "reference_gap": 0.0
+          },
+          {
+            "seq": 3,
+            "run": "c735eb1b",
+            "at": "2026-10-09T17:31:08Z",
+            "reference_gap": 0.0
+          },
+          {
+            "seq": 4,
+            "run": "3d328d8e",
+            "at": "2026-10-09T17:45:21Z",
+            "reference_gap": 0.0
+          },
+          {
+            "seq": 5,
+            "run": "822e07bc",
+            "at": "2026-10-09T18:15:20Z",
+            "reference_gap": 0.0
+          }
+        ],
+        "finalized_seq": 5,
+        "applied_seq": 5
+      },
+      "ledger": {
+        "applied": 5,
+        "finalized_seq": 5,
+        "net_position_change": -4.5,
+        "cumulative_realized": -1.336600000000002,
+        "problems": []
+      },
+      "economics": {
+        "n": 5,
+        "fees_total": 5.54,
+        "notional_total": 516.8742,
+        "fee_pct": {
+          "min": 1.0541,
+          "median": 1.0714,
+          "max": 1.1031
+        },
+        "round_trip_fee_pct": 2.1427,
+        "cumulative_realized": -1.336600000000002,
+        "note": "realized_delta nets the fees of both legs, so cumulative_realized is already after fees",
+        "order_size": {
+          "median_notional": 32.66,
+          "breakeven_notional": 214.27,
+          "below_breakeven": 4,
+          "note": "breakeven = 2 x median fee x FIX_C: the order size whose best case pays back its own fee"
+        },
+        "extrapolation": {
+          "sessions": 1,
+          "orders_per_session": 5.0,
+          "fee_per_session": 5.54,
+          "annual_fee_pct_of_fix_c": 4.41,
+          "note": "extrapolated from 1 session(s) at the median fee x 252 sessions; a rate needs more than a few days"
+        }
+      },
+      "orders": {
+        "n": 7,
+        "by_status": {
+          "FILLED": 5,
+          "FAILED": 1,
+          "SUPPRESSED_STATE_CHANGED": 1
+        },
+        "unresolved": [],
+        "halts": [],
+        "halt_audit": []
+      },
+      "failed_without_reason": [
+        {
+          "side": "SELL",
+          "qty": 5.08,
+          "status": "FAILED",
+          "placed_at": "2026-10-09T15:24:24Z",
+          "reason_missing": true
+        }
+      ]
+    },
+    "deploy": {
+      "service": {
+        "revision": "lego-tick-uat-00043-tux",
+        "generation": "43",
+        "timeout_s": 45.0,
+        "concurrency": 1.0,
+        "cpu": "0.3333",
+        "memory": "512Mi",
+        "max_scale": 1.0,
+        "min_scale": null
+      },
+      "env": {
+        "LEGO_ACTIVE": "true",
+        "LEGO_ALLOW_FRACTIONAL": "true",
+        "LEGO_CANCEL_CONFIRM_GRACE_SECONDS": "120",
+        "LEGO_CANDIDATE_HASH": "2b24e3d4dcc31b221394ba707781d60d9c94179a66c7cf60e7ae8e1f6a6fcc7a",
+        "LEGO_DIFF": "25",
+        "LEGO_DNA_BUNDLE": "strategy.uat-continuous.json",
+        "LEGO_DNA_CLOCK_MODE": "market",
+        "LEGO_FIX_C": "10000",
+        "LEGO_GIT_COMMIT": "14e136f8eaf0af441687845c8021e2b5a10af49e",
+        "LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER": "1",
+        "LEGO_MAX_ORDER_NOTIONAL_USD": "1500",
+        "LEGO_MAX_ORDER_QUANTITY": "30",
+        "LEGO_MAX_SESSION_ORDERS": "26",
+        "LEGO_MODE": "trade",
+        "LEGO_RELEASE_AUTHORIZATION": "<set>",
+        "LEGO_SESSION_KEY_MODE": "market_day",
+        "LEGO_STALE_ORDER_ACTION": "cancel_expire",
+        "LEGO_STALE_ORDER_SECONDS": "300",
+        "LEGO_SYMBOL": "UBER",
+        "LEGO_TRACE_PROJECT_ID": "lego-firebase",
+        "LEGO_TRADING_WINDOW_END": "2026-10-23T20:00:00Z",
+        "WEBULL_ENV": "UAT"
+      },
+      "secret_env": [
+        "WEBULL_ACCOUNT_ID",
+        "WEBULL_APP_KEY",
+        "WEBULL_APP_SECRET"
+      ],
+      "alert_webhook_configured": false,
+      "git_commit": "14e136f8eaf0af441687845c8021e2b5a10af49e",
+      "candidate_hash": "2b24e3d4dcc31b221394ba707781d60d9c94179a66c7cf60e7ae8e1f6a6fcc7a",
+      "window_end": "2026-10-23T20:00:00Z",
+      "window_days_left": 13.71,
+      "revision_in_logs": true
+    },
+    "findings": [
+      {
+        "level": "P1",
+        "code": "ORDER_FAILED_REASON_UNKNOWN"
+      },
+      {
+        "level": "P1",
+        "code": "FEE_DRAG"
+      },
+      {
+        "level": "P1",
+        "code": "ALERTING_NOT_CONFIGURED"
+      },
+      {
+        "level": "P2",
+        "code": "TICKS_DEFERRED"
+      },
+      {
+        "level": "P2",
+        "code": "WEBULL_ERRORS"
+      },
+      {
+        "level": "P2",
+        "code": "WEBULL_SDK_ERRORS"
+      },
+      {
+        "level": "INFO",
+        "code": "CANDIDATE_NOT_COMPARED"
+      },
+      {
+        "level": "INFO",
+        "code": "UAT_ONLY"
+      }
+    ],
+    "independent_recomputation": {
+      "note": "re-derived from the raw export and logs without tools.trace_audit",
+      "rows": 19,
+      "row_equation_mismatches": 0,
+      "delta_a_chain_final_a": -36.9277,
+      "cash_of_fills": 317.7326,
+      "broker_cashflow_sum": 317.7326,
+      "fifo_realized": -1.3366,
+      "position_before": 144.9528,
+      "position_after": 140.4528,
+      "sum_of_fills": -4.5,
+      "request_tick_pairs": 311,
+      "commit_events": 19
+    }
+  }
+}

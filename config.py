@@ -326,6 +326,15 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         recovery_policy=recovery_policy,
         prod_live_ack=env.get("LEGO_PROD_LIVE_ACK", "").strip(),
     )
+    if deployment.environment == "PROD" and env.get("WEBULL_API_DEBUG", "").strip():
+        # The SDK reads this variable itself: set, it writes every request and response
+        # body (positions, balances, orders) to the log. UAT may debug that way; a real
+        # account's data does not go to Cloud Logging. Checked on every tick, so setting
+        # it on a running PROD service stops it rather than leaking. Open follow-up 4 of
+        # docs/AUDIT_20261006_TH.md.
+        raise ConfigurationError(
+            "WEBULL_API_DEBUG must be unset when WEBULL_ENV=PROD: the SDK then logs "
+            "full request and response bodies")
     return RuntimeConfig(operator=operator, deployment=deployment)
 
 

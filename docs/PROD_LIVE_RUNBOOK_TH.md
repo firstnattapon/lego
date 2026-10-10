@@ -24,8 +24,8 @@
 | Alert | apply `tools/monitoring_config.py`, ตั้ง `ALERT_WEBHOOK_SECRET_OVERRIDE`, ทดสอบถึงผู้รับจริง (G4) |
 | PROD observe | ≥ 2 regular sessions: authenticated reads, quote สด, ไม่มี new-order mutation; ยืนยันสิทธิ์ market data real-time |
 | Token | operator-issued, `NORMAL`, เหลือ > 3 วัน (`LEGO_TOKEN_REFRESH_MARGIN_DAYS`: runtime ไม่ส่ง order ใหม่ถ้าเหลือน้อยกว่านั้น แต่ยังอ่านและ reconcile ได้จนหมดอายุ), หมุนก่อนวันที่ 12 ของอายุ |
-| แยกจาก UAT | account/secrets `*-prod`, service `lego-tick-prod`, RTDB แยก (`DATABASE_URL_OVERRIDE`; script ไม่บังคับให้แยก — คุณต้องตรวจเอง) |
-| ต้นทุน | วัดค่าธรรมเนียมจริงด้วย Preview Order เทียบ `LEGO_DIFF` ว่าคุ้มหรือไม่ |
+| แยกจาก UAT | account/secrets `*-prod`, service `lego-tick-prod`, **RTDB แยก**: script บังคับให้ระบุ `DATABASE_URL_OVERRIDE` สำหรับ PROD ทุกโหมด (ไม่ auto-discover แล้ว) และ rules ของ DB นั้นต้องปิดอ่านสาธารณะ พิสูจน์ด้วย `curl` ตามหัวข้อ 2b |
+| ต้นทุน | วัด fee จริงด้วย Preview Order หลายขนาด (`estimated_transaction_fee ÷ estimated_cost`) แล้วส่งให้ `release-plan --fee-pct` (ไม่ส่ง = WARN `fee_unmeasured`). fee เป็น**ต้นทุนล้วน**: กลยุทธ์ถือ ≈FIX_C ดอลลาร์คงที่ ไม่มี edge ในตัวเมื่อราคาเป็น random walk — ตารางและข้อสรุปใน [AUDIT_20261010](AUDIT_20261010_TH.md) หัวข้อ "ต้นทุน" (fee 0.15% ที่ DIFF 25 ได้ผลสุทธิ ≈ 0 ในโลกที่ดีที่สุด); การตัดสินใจเปิดเป็นของเจ้าของบัญชี ไม่ใช่ gate ของโค้ด |
 
 ## 1. เลือกวิธี funding (ตัดสินใจก่อนวางแผน)
 
@@ -46,7 +46,8 @@ B คือ order ก้อนเดียวที่ใหญ่ที่ส�
 cp deploy/prod-canary.env.example private-prod.env   # กรอก LEGO_SYMBOL, LEGO_FIX_C, LEGO_DNA_BUNDLE ด้วยตัวเอง
 gcloud secrets versions access latest --secret=webull-account-id-prod --project=lego-firebase | \
   python ops.py release-plan --env-file private-prod.env --account-id-stdin \
-      --window-sessions 5 --reference-price <ราคาล่าสุด> --recommended-limits --enforce > private-plan.json
+      --window-sessions 5 --reference-price <ราคาล่าสุด> --recommended-limits --fee-pct <fee% ที่วัดด้วย Preview> \
+      --enforce > private-plan.json
 # release funding (วิธี B รอบแรก): เพิ่ม --initial-funding
 ```
 
@@ -57,6 +58,30 @@ gcloud secrets versions access latest --secret=webull-account-id-prod --project=
 - PROD เริ่มด้วย whole shares (`LEGO_ALLOW_FRACTIONAL=false`) — `true` บน PROD เป็น WARN ให้ทบทวนอย่างชัดเจน
 - candidate hash คำนวณจาก checkout ที่ commit แล้วและสะอาด (script ปฏิเสธ working tree ที่ไม่สะอาด)
 
+## 2b. ฐานข้อมูล PROD (ต้องทำก่อน deploy)
+
+RTDB เก็บจำนวนถือครอง ทุก order และ P&L. `database.rules.json` (ของ UAT) เปิด `.read` สาธารณะที่ 5 node (`rows`, `state`, `order_audit`,
+`order_audit_archive`, `warnings`) เพื่อให้ dashboard UAT อ่านได้ — **ห้ามใช้ rules นี้กับ PROD** และ script ไม่เลือก DB ให้ PROD อีกแล้ว
+(เดิม auto-discover `-default-rtdb` ซึ่งเป็น DB ที่ UAT ใช้อยู่; ดู finding F6 ใน [AUDIT_20261010](AUDIT_20261010_TH.md))
+
+1. สร้าง RTDB instance แยกสำหรับ PROD (ไม่ใช่ `*-default-rtdb` ที่ UAT ใช้) แล้ว `export DATABASE_URL_OVERRIDE=https://<instance-prod>.firebasedatabase.app`
+   — ไม่ตั้งค่านี้ script จะ `exit 1` ก่อนเรียก cloud ใด ๆ ทั้งโหมด observe และ trade
+2. ใช้ [`database.rules.prod.json`](../database.rules.prod.json) กับ instance นั้น: เหมือน `database.rules.json` ทุกประการ ยกเว้น `.read:false` ทุก node
+   (`test_audit_20261010.py` กัน drift: สองไฟล์ต้องต่างกันเฉพาะ `.read`). Cloud Run เขียนผ่าน Admin SDK ซึ่งไม่ผ่าน rules จึงทำงานเหมือนเดิม
+   แต่ dashboard สาธารณะแบบ UAT จะอ่านไม่ได้ (ตั้งใจ — ถ้าต้องการ dashboard PROD ให้เพิ่มการอ่านแบบ authenticated เองแล้วตรวจข้อ 3 ซ้ำ)
+   - ขั้น 8 ของ script รัน `firebase deploy --only database` ซึ่งลง `database.rules.json` ให้**เฉพาะ default instance** ของ project (= DB ของ UAT):
+     มันไม่ลง rules PROD ให้ instance แยก และห้ามเอา rules PROD ไปทับ default instance. ใช้วิธี multi-instance ของ Firebase CLI
+     (deploy target ต่อ instance) หรือวาง rules ผ่าน console — ผู้เขียนทดสอบพฤติกรรม CLI นี้แบบออฟไลน์ไม่ได้ จึง**ไม่ผูกเข้า script** และใช้ข้อ 3 เป็น gate แทน
+3. พิสูจน์ด้วยตัวเองก่อนเปิด PROD (ต้องได้ `Permission denied`; ได้ข้อมูลกลับมา = rules ผิด หยุด):
+
+   ```bash
+   curl -s "$DATABASE_URL_OVERRIDE/webull_lego_rows.json?shallow=true"
+   curl -s "$DATABASE_URL_OVERRIDE/webull_lego_state.json?shallow=true"
+   ```
+
+4. ทำซ้ำข้อ 3 หลังทุก deploy (หัวข้อ 4): ขั้น 8 ลง `database.rules.json` (อ่านสาธารณะ) ทุกครั้ง ถ้า `firebase.json` ของคุณถูกแก้ให้ชี้ instance PROD
+   rules สาธารณะจะไปทับ rules PROD โดยไม่มีอะไรเตือน
+
 ## 3. Deploy
 
 ทำ**นอกเวลา regular session เท่านั้น** (09:30–16:00 New York) — script ปฏิเสธระหว่าง session เพราะ smoke tick ท้าย script เป็น tick ปกติ
@@ -65,6 +90,9 @@ gcloud secrets versions access latest --secret=webull-account-id-prod --project=
 export WEBULL_ENV_OVERRIDE=PROD LEGO_MODE_OVERRIDE=trade LEGO_ACTIVE_OVERRIDE=true
 export WEBULL_TOKEN_SECRET_OVERRIDE=projects/lego-firebase/secrets/<token-secret>
 export ALERT_WEBHOOK_SECRET_OVERRIDE=<secret ที่เก็บ URL ปลายทาง>
+export DATABASE_URL_OVERRIDE=https://<instance-prod>.firebasedatabase.app   # บังคับสำหรับ PROD ทุกโหมด (หัวข้อ 2b); ขาด = script exit 1
+export LEGO_FEE_PCT_OVERRIDE=<fee% ที่วัดด้วย Preview>                       # ไม่บังคับ; ส่งต่อให้ release-plan --fee-pct (ขาด = WARN fee_unmeasured)
+# ห้ามตั้ง WEBULL_API_DEBUG: บน PROD runtime ปฏิเสธด้วย CONFIG_ERROR (SDK จะ log header/body ของทุก request)
 # ค่าจาก private-plan.json -> deploy_env: EXPECTED_CANDIDATE_HASH, LEGO_RELEASE_AUTHORIZATION_OVERRIDE,
 # LEGO_TRADING_WINDOW_END_OVERRIDE, LEGO_MAX_*_OVERRIDE, LEGO_SYMBOL_OVERRIDE, LEGO_FIX_C_OVERRIDE, LEGO_DNA_BUNDLE_OVERRIDE ฯลฯ
 export LEGO_FUNDING_MODE_OVERRIDE=initial-funding   # เฉพาะ release funding ของวิธี B (release-plan --initial-funding พิมพ์ไว้ใน deploy_env)
@@ -88,6 +116,9 @@ python tools/verify_deployment.py --service private-service.json --scheduler pri
     --function private-function.json --candidate HASH --revision REVISION --image REGISTRY/IMAGE@sha256:DIGEST
 ```
 
+- ทำซ้ำ `curl` ของหัวข้อ 2b ข้อ 3 กับ `DATABASE_URL_OVERRIDE` — ต้องยังได้ `Permission denied`
+- `release-plan` แสดง WARN `alert_unset` เมื่อไม่มี `ALERT_WEBHOOK_SECRET_OVERRIDE`; ถ้าใช้ Monitoring policy (`tools/monitoring_config.py`) แทน webhook
+  ให้ยืนยันว่า policy ส่งถึงคนจริงด้วย drill (G4) — คำเตือนนี้ไม่รู้เรื่อง policy จึงไม่หายเอง
 - `verify_deployment` ตรวจ `production_mode`: observe/inactive หรือ trade/active ที่มี ack, authorization และ caps ครบ — ไม่ได้ตรวจว่าค่าถูกต้องต่อบัญชี
 - `business_status=RELEASE_UNAUTHORIZED` (severity ERROR, `operational_health.orders_blocked_by_release=true`) = deployment เป็น trade/active แต่ไม่ส่ง order เพราะ release authorization หรือ `LEGO_PROD_LIVE_ACK` ไม่ตรงกับ release (มักเกิดจากการแก้ env ของ function ภายหลัง) — `python ops.py check` แสดง `release_authorized`, `prod_live_gate_open`, `new_orders_authorized`; แก้ด้วยการ deploy ใหม่ผ่าน script ไม่ใช่แก้ env ทีละค่า
 - เฝ้า tick แรกของ session ถัดไปด้วยตัวเอง: `business_status`, `release_expiring`, order แรกและ fill ตรงกับ caps ที่อนุมัติ

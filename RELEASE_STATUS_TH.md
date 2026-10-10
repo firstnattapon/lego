@@ -1,5 +1,15 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 10 ตุลาคม: [audit UAT session แรกหลัง flight recorder](docs/AUDIT_20261010_TH.md) — revision `00043-tux` เทรดครบ 19 slot, fill 5 ครั้ง; ledger, สมการ (คำนวณซ้ำอิสระ),
+cash ของ fills และ lineage ของ log (311 request ↔ 311 tick, 19 แถว ↔ 19 commit event) ตรงทั้งหมด และไม่มี order ค้าง PENDING รอบนี้. ที่เหลือ: order `44142ee4…` ถูก broker `FAILED` โดยไม่ให้เหตุผล
+(`tools.readiness_audit` fail `snapshot_integrity` — ส่งหลักฐานให้ Webull ตามเอกสาร), ไม่มี alert channel, และ **ต้นทุน**: fee UAT 1.07% ต่อ order กินผลตอบแทน — กลยุทธ์ถือ ≈FIX_C ดอลลาร์คงที่ จึงไม่มี edge ในตัว
+เมื่อราคาเป็น random walk; ที่ความผันผวนที่วัดได้ (≈17%/ปี) กำไรก่อน fee ในโลกที่ดีที่สุดเพียง ≈0.8% ของ FIX_C ต่อปี. แก้ใน source (ไม่แตะ recovery/halt/ledger/fence/สูตรตัดสินใจ):
+retry หนึ่งครั้งตอนสร้าง SDK client (503 ที่ 18:45), เก็บส่วนท้ายของ tick ที่ส่ง order ใน flight recorder, กัน `WEBULL_API_DEBUG` บน PROD, PROD ต้องระบุ `DATABASE_URL_OVERRIDE` (+ `database.rules.prod.json`),
+`release-plan --fee-pct` และ WARN เฉพาะ PROD live (fee ยังไม่วัด, ไม่มี webhook), `trace_audit` แสดงขนาด order เทียบ fee และชี้ order ที่ FAILED ไม่มีเหตุผล.
+สถานะ: **code-ready, live-evidence-pending (NO-GO เงินจริง)** — UAT ทำงานต่อได้จน window สิ้นสุด **2026-10-23T20:00Z**; PR นี้เปลี่ยน candidate hash จึงต้อง `release-plan` + `continuous-uat.sh` ใหม่
+**ก่อน 2026-10-21T20:00Z** (ต่ออายุ window และได้ผลแก้); เงินจริงยังต้อง alert ถึงคนจริง, PROD observe ≥2 session + quote real-time, token ที่คนหมุน, DB/rules แยก, fee PROD ที่วัดแล้ว และการตัดสินใจเชิงเศรษฐศาสตร์ของเจ้าของ.
+ผล local และ evidence อยู่ใน `release_evidence/20261010-pr/`.
+
 ล่าสุด 9 ตุลาคม: [audit order UAT ค้าง PENDING ซ้ำ](docs/AUDIT_20261009_TH.md) — รอบที่ 3 ใน 4 session; `cancel_expire` ไม่ปล่อย order 21:00–23:22Z
 **โดยไม่มีหลักฐานว่า proof ติดเงื่อนไขไหน** (เหตุผลหายใน `logger.info` ที่ Cloud Logging ไม่รับ) จึงเพิ่ม [flight recorder](docs/FLIGHT_RECORDER_TH.md)
 (`flight_recorder.py`: ผัง LEGO + สมการ + คำตอบ Webull + ทุกการกระทำ ต่อ tick ใน RTDB private; `webull_io.py`/`tick_runtime.py`: request id, HTTP status, error code)

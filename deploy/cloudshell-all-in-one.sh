@@ -73,6 +73,9 @@ readonly SESSION_MODE="${LEGO_SESSION_KEY_MODE_OVERRIDE:-release_window}"
 readonly PROD_LIVE_ACK="${LEGO_PROD_LIVE_ACK:-}"
 readonly FUNDING_MODE="${LEGO_FUNDING_MODE_OVERRIDE:-prefunded}"
 readonly ALERT_WEBHOOK_SECRET="${ALERT_WEBHOOK_SECRET_OVERRIDE:-}"
+# Measured broker fee, percent of notional per order (python ops.py release-plan --fee-pct).
+# Only read by the release judgement below; it is not part of the release binding.
+readonly FEE_PCT="${LEGO_FEE_PCT_OVERRIDE:-}"
 [[ "${ENVIRONMENT}" == UAT || "${ENVIRONMENT}" == PROD ]] || exit 1
 if [[ "${FUNDING_MODE}" != prefunded && "${FUNDING_MODE}" != initial-funding ]]; then
     echo "LEGO_FUNDING_MODE_OVERRIDE must be prefunded or initial-funding." >&2
@@ -90,6 +93,15 @@ if [[ "${ENVIRONMENT}" == PROD ]]; then
         PROD_LIVE=true
     else
         echo "Production rollout must be observe/inactive, or trade/active (real money) with LEGO_PROD_LIVE_ACK." >&2
+        exit 1
+    fi
+    # Real positions and orders are written to this database. Auto-discovery (section 6)
+    # picks the project's "-default-rtdb", which is the database UAT already uses, and
+    # database.rules.json lets anyone read the rows, state and order audit stored there.
+    # Naming the database is a decision, never a default (open follow-up 4 of
+    # docs/AUDIT_20261006_TH.md); the decision is checked before any cloud call.
+    if [[ -z "${DATABASE_URL_OVERRIDE}" ]]; then
+        echo "Production requires an explicit DATABASE_URL_OVERRIDE: a Realtime Database separate from UAT whose rules deny public reads (docs/PROD_LIVE_RUNBOOK_TH.md). It is never auto-discovered." >&2
         exit 1
     fi
 fi
@@ -678,6 +690,9 @@ if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
     if [[ "${FUNDING_MODE}" == initial-funding ]]; then
         PLAN_ARGS+=(--initial-funding)
     fi
+    if [[ -n "${FEE_PCT}" ]]; then
+        PLAN_ARGS+=(--fee-pct "${FEE_PCT}")
+    fi
     PLAN_JSON="$(
         gcloud secrets versions access latest \
             --secret="${ACCOUNT_ID_SECRET}" \
@@ -693,6 +708,7 @@ if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
             LEGO_STALE_ORDER_ACTION="${STALE_ACTION}" LEGO_STALE_ORDER_SECONDS="${STALE_SECONDS}" \
             LEGO_CANCEL_CONFIRM_GRACE_SECONDS="${CANCEL_GRACE}" \
             LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER=1 LEGO_SESSION_KEY_MODE="${SESSION_MODE}" \
+            ALERT_WEBHOOK_SECRET_OVERRIDE="${ALERT_WEBHOOK_SECRET}" \
             python3 ops.py release-plan "${PLAN_ARGS[@]}"
     )" || PLAN_STATUS=$?
     [[ -n "${PLAN_JSON}" ]] || fail "release-plan produced no report (status ${PLAN_STATUS})"
