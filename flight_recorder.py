@@ -23,7 +23,8 @@ Hard rules (each one is pinned by a test):
   * everything is sanitized with ``security_text`` (credentials, account identity) and
     bounded (per event, per tick, per day);
   * the final write happens after the tick's own log line and response are ready, is
-    time-boxed, and is skipped when the tick has little budget left;
+    time-boxed, and is skipped when the tick has little budget left (a tick that sent or
+    cancelled an order keeps its tail down to one second);
   * ``LEGO_TRACE_LEVEL=off`` is a full kill switch.
 
 Environment (read at call time):
@@ -64,6 +65,12 @@ MAX_EVENT_BYTES = 6144
 MAX_TICK_BYTES = 98304
 MAX_EVENTS = 200
 FLUSH_MIN_BUDGET_SECONDS = 12.0
+# A tick that sent or cancelled an order keeps its tail even when it ran long. The write is
+# time-boxed to FLUSH_TIMEBOX_SECONDS and the tick deadline (35 s) sits 10 s inside Cloud
+# Run's 45 s limit, so one second left is enough (worst case ~38 s). 2026-10-09 15:24 the one
+# tick that overran lost exactly the part after Place: the order-detail error and the
+# deferral that explained the order which then FAILED.
+FLUSH_MIN_BUDGET_MUTATION_SECONDS = 1.0
 FLUSH_TIMEBOX_SECONDS = 3.0
 PRUNE_MIN_BUDGET_SECONDS = 10.0
 PRUNE_EVERY_SECONDS = 3600.0
@@ -905,7 +912,7 @@ def finish(body: dict, code, request=None) -> dict | None:
             _write(chain, trace.started.strftime("%Y-%m-%d"), None, None,
                    _heartbeat(trace, pipe, biz, code, None))
         return result
-    if not _budget_ok():
+    if not _budget_ok(mutation="mutation" in reasons):
         _STATS["skipped_budget"] += 1
         result["skipped"] = "budget"
         return result
@@ -929,9 +936,10 @@ def finish(body: dict, code, request=None) -> dict | None:
     return result
 
 
-def _budget_ok() -> bool:
+def _budget_ok(mutation: bool = False) -> bool:
     left = _remaining()
-    return left is None or left >= FLUSH_MIN_BUDGET_SECONDS
+    floor = FLUSH_MIN_BUDGET_MUTATION_SECONDS if mutation else FLUSH_MIN_BUDGET_SECONDS
+    return left is None or left >= floor
 
 
 @_safe

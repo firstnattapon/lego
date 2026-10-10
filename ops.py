@@ -110,9 +110,15 @@ def release_plan_command(args, *, now=None) -> dict:
     import release_horizon as horizon
     from decimal import Decimal
     now = now or datetime.now(timezone.utc)
+    fee_pct = None
+    if getattr(args, "fee_pct", None) not in (None, ""):
+        fee_pct = horizon.parse_fee_pct(args.fee_pct)       # a typo stops the plan; it never skips the check
     env = dict(_read_env_file(args.env_file)) if args.env_file else {}
     env.update({key: value for key, value in os.environ.items()
                 if key.startswith(("LEGO_", "WEBULL_")) or key == "FIREBASE_DB_URL"})
+    # Deployment-time only (not part of the release binding): the secret that carries the webhook.
+    alert_configured = bool((env.get("ALERT_WEBHOOK_SECRET_OVERRIDE")
+                             or os.environ.get("ALERT_WEBHOOK_SECRET_OVERRIDE", "")).strip())
     if args.account_id_stdin:           # the deploy script pipes the secret in; never echoed
         env["WEBULL_ACCOUNT_ID"] = sys.stdin.read().strip()
     if args.window_sessions is not None:
@@ -146,7 +152,9 @@ def release_plan_command(args, *, now=None) -> dict:
     binding = runtime.deployment.expected_release_binding
     inputs = horizon.inputs_from_runtime(
         runtime, initial_funding=args.initial_funding, reference_price=price)
-    assessment = horizon.assess(inputs, now=now)
+    assessment = horizon.assess(
+        inputs, now=now,
+        extra=horizon.operator_findings(inputs, fee_pct=fee_pct, alert_configured=alert_configured))
     limits = runtime.deployment.execution_limits
     funding = "initial-funding" if args.initial_funding else "prefunded"
     acks = horizon.prod_live_acks(inputs, binding) if (
@@ -200,6 +208,12 @@ def release_plan_command(args, *, now=None) -> dict:
     }
     if acks:
         result["prod_live_acks"] = acks
+    if fee_pct is not None:
+        result["fee_check"] = {
+            "fee_pct": format(fee_pct.normalize(), "f"),
+            "min_cost_per_order_usd": format(
+                (fee_pct / 100 * inputs.diff).quantize(Decimal("0.0001")), "f"),
+            "note": "a cost to weigh, not a profit test (docs/AUDIT_20261010_TH.md)"}
     if args.enforce:
         result["blocked"] = not assessment["ok"]
     return result
@@ -408,6 +422,9 @@ def parser() -> argparse.ArgumentParser:
     plan.add_argument("--env-file", help="KEY=VALUE policy (e.g. deploy/uat-continuous.env.example); "
                                          "LEGO_*/WEBULL_* in the process environment override it")
     plan.add_argument("--reference-price", help="recent price, used for the quantity cap")
+    plan.add_argument("--fee-pct", metavar="PCT",
+                      help="measured broker fee per order, percent of notional "
+                           "(Preview Order estimated_transaction_fee / estimated_cost x 100)")
     plan.add_argument("--recommended-limits", action="store_true",
                       help="use the principal-proportional caps (needs --reference-price)")
     plan.add_argument("--initial-funding", action="store_true",

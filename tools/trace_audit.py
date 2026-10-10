@@ -378,7 +378,10 @@ def check_ledger(state, realized, fills_report) -> dict:
             "cumulative_realized": num((realized or {}).get("cumulative_realized")), "problems": problems}
 
 
-def economics(realized) -> dict:
+TRADING_DAYS_PER_YEAR = 252
+
+
+def economics(realized, *, fix_c=None, sessions=None) -> dict:
     applied = (realized or {}).get("applied_fills") or {}
     items = [v for v in applied.values() if isinstance(v, dict)]
     out = []
@@ -392,12 +395,37 @@ def economics(realized) -> dict:
         return {"n": 0}
     pcts = [o["fee_pct"] for o in out]
     median = statistics.median(pcts)
-    return {"n": len(out), "fees_total": round(sum(o["fee"] for o in out), 6),
-            "notional_total": round(sum(o["notional"] for o in out), 4),
-            "fee_pct": {"min": round(min(pcts), 4), "median": round(median, 4), "max": round(max(pcts), 4)},
-            "round_trip_fee_pct": round(2 * median, 4),
-            "cumulative_realized": num((realized or {}).get("cumulative_realized")),
-            "note": "realized_delta nets the fees of both legs, so cumulative_realized is already after fees"}
+    result = {"n": len(out), "fees_total": round(sum(o["fee"] for o in out), 6),
+              "notional_total": round(sum(o["notional"] for o in out), 4),
+              "fee_pct": {"min": round(min(pcts), 4), "median": round(median, 4), "max": round(max(pcts), 4)},
+              "round_trip_fee_pct": round(2 * median, 4),
+              "cumulative_realized": num((realized or {}).get("cumulative_realized")),
+              "note": "realized_delta nets the fees of both legs, so cumulative_realized is already after fees"}
+    if fix_c:
+        # What an order has to be worth before the fee can be earned back at all. A constant-dollar
+        # strategy gains about size^2 / (2 x FIX_C) from an order whose price then returns to where
+        # the previous order left it (the best case), and pays fee x size, so the sizes meet at
+        # 2 x fee x FIX_C. Below it an order loses even then; above it nothing is guaranteed: with
+        # prices that do not come back the strategy earns no more than holding FIX_C dollars and the
+        # fee is a pure cost (docs/AUDIT_20261010_TH.md).
+        notionals = [o["notional"] for o in out]
+        breakeven = 2.0 * (median / 100.0) * fix_c
+        result["order_size"] = {
+            "median_notional": round(statistics.median(notionals), 2),
+            "breakeven_notional": round(breakeven, 2),
+            "below_breakeven": sum(1 for size in notionals if size < breakeven),
+            "note": "breakeven = 2 x median fee x FIX_C: the order size whose best case pays back its own fee"}
+        if sessions:
+            per_session = len(out) / sessions
+            fee_usd = statistics.median(o["fee"] for o in out)
+            result["extrapolation"] = {
+                "sessions": sessions, "orders_per_session": round(per_session, 2),
+                "fee_per_session": round(sum(o["fee"] for o in out) / sessions, 4),
+                "annual_fee_pct_of_fix_c": round(
+                    100.0 * fee_usd * per_session * TRADING_DAYS_PER_YEAR / fix_c, 2),
+                "note": f"extrapolated from {sessions} session(s) at the median fee x {TRADING_DAYS_PER_YEAR} "
+                        "sessions; a rate needs more than a few days"}
+    return result
 
 
 # --------------------------------------------------------------------------------- Cloud Logging
@@ -587,6 +615,8 @@ def _intent_view(doc, as_of):
         "age_h": None if not (created and as_of) else round((as_of - created).total_seconds() / 3600.0, 2),
         "unresolved": doc.get("status") not in TERMINAL_INTENT or bool(doc.get("needs_manual_check")),
         "decision_holdings": doc.get("decision_holdings"),
+        "reason_missing": doc.get("broker_reason_missing") is True,
+        "terminal_reason": doc.get("terminal_reason"),
     }
 
 
@@ -628,8 +658,12 @@ def analyze_orders(db, chain, as_of, run=None) -> dict:
                 audit.append({"at": event.get("at"), "action": event.get("action"), "operator": event.get("operator"),
                               "reason": event.get("reason"), "halt": short(event.get("halt_id"))})
     audit.sort(key=lambda e: e["at"] or "")
+    # A broker-terminal failure that carries no reason is evidence tools.readiness_audit refuses
+    # (snapshot_integrity), so this digest names it too instead of staying silent.
+    failed_without_reason = [v for v in views
+                             if v["status"] in {"FAILED", "REJECTED"} and v["reason_missing"]]
     return {"n": len(views), "by_status": counted(v["status"] for v in views), "unresolved": unresolved,
-            "halts": halts, "halt_audit": audit}
+            "failed_without_reason": failed_without_reason, "halts": halts, "halt_audit": audit}
 
 
 # ------------------------------------------------------------------------ RTDB: the flight recorder
@@ -894,6 +928,7 @@ def analyze_rtdb(db, *, diff=None, fix_c=None, as_of=None, run=None, since=None)
         p0 = num(state.get("p0"))
         rows_report = check_rows(rows, fix_c=fix_c, diff=diff, p0=p0)
         fixed = rows_report.get("fix_c")
+        sessions = len({str(r.get("market_slot_id")).split(":")[0] for r in rows if r.get("market_slot_id")})
         fills_report = check_fills(state, rows, intents, realized, fix_c=fixed, p0=p0)
         result["chains"].append({
             "chain": short(chain, 14),
@@ -901,7 +936,8 @@ def analyze_rtdb(db, *, diff=None, fix_c=None, as_of=None, run=None, since=None)
                       "slot_id": state.get("slot_id"), "semantics": state.get("cashflow_semantics"),
                       "clock_mode": state.get("clock_mode"), "holdings": state.get("prev_holdings"), "p0": p0},
             "rows": rows_report, "fills": fills_report, "ledger": check_ledger(state, realized, fills_report),
-            "economics": economics(realized), "orders": analyze_orders(db, chain, as_of, run),
+            "economics": economics(realized, fix_c=fixed, sessions=sessions or None),
+            "orders": analyze_orders(db, chain, as_of, run),
         })
     result["traces"] = analyze_traces(db, run=run, since=since)
     return result
@@ -965,6 +1001,13 @@ def build_findings(report) -> list[dict]:
                 add("P0", "EXPIRY_PROOF_UNKNOWN", f"order {o['run']}: cancel_expire is configured but nothing recorded WHICH "
                     "proof condition fails (no intent.expiry_proof_blockers, no W11 trace). Deploy a build with the flight "
                     "recorder and run tools.resume_order_reconciliation --expiry-proof (read-only dry run)")
+        for o in chain["orders"].get("failed_without_reason", []):
+            add("P1", "ORDER_FAILED_REASON_UNKNOWN",
+                f"order {o['run']} ({o['side']} {o['qty']}) ended {o['status']} at the broker (id…{o['broker_id']}, placed "
+                f"{o['placed_at']}) and the broker gave no reason; tools.readiness_audit fails snapshot_integrity on it until "
+                "Webull explains. Send the broker order id and the place / order-detail request ids from the flight "
+                "recorder (the 'wb' events of that tick) to Webull",
+                {"chain": chain["chain"], "broker_id": o["broker_id"]})
         for h in chain["orders"]["halts"]:
             blocked = (chain["rows"].get("gated") or {}).get("PASS_RECOVERY_BLOCKED", 0)
             add("P0", "OPERATOR_HALT", f"operator halt {h['halt']} ({h['reason']}) set {h['set_at']} by {h['set_by']}; "
@@ -984,8 +1027,12 @@ def build_findings(report) -> list[dict]:
             add("P1", "ROWS_UNCOMMITTED", f"{rows_report['uncommitted']} rows are not committed")
         eco = chain["economics"]
         if eco.get("n") and eco["fee_pct"]["median"] >= 0.3:
+            size = eco.get("order_size")
+            sized = (f"; median order {size['median_notional']} USD against a best-case break-even of "
+                     f"{size['breakeven_notional']} USD (2 x fee x FIX_C), {size['below_breakeven']}/{eco['n']} orders below it"
+                     if size else "")
             add("P1", "FEE_DRAG", f"median fee {eco['fee_pct']['median']}% per order, ~{eco['round_trip_fee_pct']}% per round trip; "
-                f"realized after fees {eco['cumulative_realized']} over {eco['n']} fills (UAT fees are not PROD fees: gate G6 "
+                f"realized after fees {eco['cumulative_realized']} over {eco['n']} fills{sized} (UAT fees are not PROD fees: gate G6 "
                 "needs a measured PROD fee before real money)")
     ticks = logs.get("ticks") or {}
     errors = (ticks.get("by_severity") or {}).get("ERROR", 0)
@@ -1129,7 +1176,17 @@ def render(report: dict) -> str:
             if eco.get("n"):
                 out.append(f"  economics: {eco['n']} fills, notional {eco['notional_total']}, fees {eco['fees_total']}, fee/order % "
                            f"{eco['fee_pct']}, round trip ≈ {eco['round_trip_fee_pct']}%, realized (after fees) {eco['cumulative_realized']}")
+                size, extrapolation = eco.get("order_size"), eco.get("extrapolation")
+                if size:
+                    out.append(f"  order size: median {size['median_notional']} USD vs best-case break-even {size['breakeven_notional']} USD "
+                               f"({size['below_breakeven']}/{eco['n']} below); {size['note']}")
+                if extrapolation:
+                    out.append(f"  fee run rate: {extrapolation['orders_per_session']} orders and {extrapolation['fee_per_session']} USD "
+                               f"per session ≈ {extrapolation['annual_fee_pct_of_fix_c']}% of FIX_C a year; {extrapolation['note']}")
             out.append(f"  orders: {orders['n']} intents {_kv(orders['by_status'])}")
+            for o in orders.get("failed_without_reason", []):
+                out.append(f"  FAILED WITHOUT REASON {o['run']} {o['side']} {o['qty']} {o['status']} id…{o['broker_id']} "
+                           f"placed {o['placed_at']}: {o['terminal_reason']}")
             for o in orders["unresolved"]:
                 out.append(f"  UNRESOLVED {o['run']} {o['side']} {o['qty']} {o['status']} broker={o['broker_status']} id…{o['broker_id']} "
                            f"created {o['created_at']} placed {o['placed_at']} age {o['age_h']} h")
