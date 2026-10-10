@@ -1,0 +1,37 @@
+sigma_annual=0.15  paths=1500  slots/year=6552  FIX_C=10000  seed=20261010
+
+world median-flat: buy-and-hold    +87.3 USD/yr (39.8)
+  fee  0.00% of notional per order
+    DIFF     25: net     +83.8 (39.3) USD/yr   orders  1648.7/yr
+    DIFF    100: net     +83.8 (39.3) USD/yr   orders   181.9/yr
+    DIFF    300: net     +83.2 (39.3) USD/yr   orders    23.0/yr
+  fee  0.15% of notional per order
+    DIFF     25: net      -4.7 (39.3) USD/yr   orders  1648.7/yr
+    DIFF    100: net     +53.6 (39.3) USD/yr   orders   181.9/yr
+    DIFF    300: net     +72.5 (39.3) USD/yr   orders    23.0/yr
+  fee  0.50% of notional per order
+    DIFF     25: net    -211.2 (39.3) USD/yr   orders  1648.7/yr
+    DIFF    100: net     -17.0 (39.3) USD/yr   orders   181.9/yr
+    DIFF    300: net     +47.5 (39.3) USD/yr   orders    23.0/yr
+  fee  1.07% of notional per order
+    DIFF     25: net    -547.4 (39.3) USD/yr   orders  1648.7/yr
+    DIFF    100: net    -131.9 (39.3) USD/yr   orders   181.9/yr
+    DIFF    300: net      +6.8 (39.3) USD/yr   orders    23.0/yr
+
+world martingale: buy-and-hold    -25.5 USD/yr (39.4)
+  fee  0.00% of notional per order
+    DIFF     25: net     -28.7 (39.3) USD/yr   orders  1648.8/yr
+    DIFF    100: net     -28.8 (39.3) USD/yr   orders   181.6/yr
+    DIFF    300: net     -28.8 (39.3) USD/yr   orders    23.1/yr
+  fee  0.15% of notional per order
+    DIFF     25: net    -117.2 (39.3) USD/yr   orders  1648.8/yr
+    DIFF    100: net     -59.0 (39.3) USD/yr   orders   181.6/yr
+    DIFF    300: net     -39.6 (39.3) USD/yr   orders    23.1/yr
+  fee  0.50% of notional per order
+    DIFF     25: net    -323.7 (39.3) USD/yr   orders  1648.8/yr
+    DIFF    100: net    -129.5 (39.3) USD/yr   orders   181.6/yr
+    DIFF    300: net     -64.7 (39.3) USD/yr   orders    23.1/yr
+  fee  1.07% of notional per order
+    DIFF     25: net    -659.9 (39.3) USD/yr   orders  1648.8/yr
+    DIFF    100: net    -244.2 (39.3) USD/yr   orders   181.6/yr
+    DIFF    300: net    -105.6 (39.3) USD/yr   orders    23.1/yr

@@ -1,0 +1,225 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-10-10T04:35:45.565855+00:00",
+  "base_commit": "14e136f8eaf0af441687845c8021e2b5a10af49e",
+  "python": "Python 3.12.3 (the version CI runs), numpy 2.4.6 as pinned in requirements.txt",
+  "local_status": "PASS",
+  "failed_checks": [],
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "note": "Candidate hash is computed by the operator from the committed clean tree (ops.py release-plan); it changes with this PR, so UAT needs a new release before 2026-10-21T20:00Z to get these fixes and a renewed window. Nothing here touched a broker, Firebase project or deployed revision.",
+  "full_suite": {
+    "command": "pytest -q",
+    "junit_sha256": "ee4ff60ff3442ef9bc65fc56715b32c01f8bdcdbff0e164023cd224da9c1468f",
+    "counts": {
+      "tests": 1799,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1790
+    },
+    "baseline_before_change": {
+      "tests": 1751,
+      "passed": 1742,
+      "skipped": 9,
+      "junit_sha256": "4bcb552d03136a937ec35c7d901575dc42e687f4c34a9b6c82c5ab34670defca"
+    },
+    "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +48 tests, no existing test changed."
+  },
+  "recorder_off_suite": {
+    "command": "LEGO_TRACE_LEVEL=off pytest -q --ignore=test_flight_recorder.py --ignore=test_flight_recorder_replay.py --ignore=test_trace_audit.py --ignore=test_audit_20261010.py",
+    "junit_sha256": "8492fa6cc40c48adb79b436cb2cf7233ab519e9507a4898a0b1c82f4d39ce3b6",
+    "counts": {
+      "tests": 1660,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1651
+    },
+    "note": "the pre-existing behaviour does not depend on the recorder being on"
+  },
+  "checks": [
+    {
+      "id": "py_compile",
+      "command": "python -m py_compile *.py tools/*.py",
+      "exit_code": 0
+    },
+    {
+      "id": "shell_syntax",
+      "command": "bash -n deploy/*.sh",
+      "exit_code": 0
+    },
+    {
+      "id": "new_tests",
+      "command": "pytest -q test_audit_20261010.py",
+      "tests": {
+        "C1_client_handshake_retry": 5,
+        "C2_recorder_tail": 4,
+        "C3_prod_debug_guard": 5,
+        "T1_prod_database_and_rules": 5,
+        "T2_release_plan_operator_findings": 22,
+        "T3_trace_audit": 7,
+        "total": 48
+      }
+    },
+    {
+      "id": "release_plan_cli",
+      "command": "python ops.py release-plan --env-file <deploy/prod-canary.env.example with UBER / 10000 / strategy.uat-continuous.json> --account-id-stdin --window-sessions 5 --reference-price 72 --recommended-limits [...]",
+      "runs": [
+        {
+          "args": "(none)",
+          "exit_code": 0,
+          "blocking": [],
+          "warnings": [
+            "fee_unmeasured",
+            "alert_unset"
+          ]
+        },
+        {
+          "args": "--fee-pct 0.15",
+          "exit_code": 0,
+          "blocking": [],
+          "warnings": [
+            "alert_unset"
+          ],
+          "info": [
+            "fee_measured"
+          ],
+          "fee_check": {
+            "fee_pct": "0.15",
+            "min_cost_per_order_usd": "0.0375"
+          }
+        },
+        {
+          "args": "--fee-pct abc",
+          "exit_code": 1,
+          "result": "ValueError: --fee-pct must be a number; no plan is printed"
+        },
+        {
+          "args": "--fee-pct 0.15 with WEBULL_API_DEBUG=sdk",
+          "exit_code": 1,
+          "result": "ConfigurationError: WEBULL_API_DEBUG must be unset when WEBULL_ENV=PROD; no plan, no ack"
+        },
+        {
+          "args": "--fee-pct 0.15 with ALERT_WEBHOOK_SECRET_OVERRIDE set",
+          "exit_code": 0,
+          "blocking": [],
+          "warnings": []
+        }
+      ]
+    },
+    {
+      "id": "analyzer_on_incident_evidence",
+      "command": "python -m tools.trace_audit --logs --rtdb --yaml (private inputs, hashes in input-hashes.json)",
+      "row_mismatches": 0,
+      "fill_mismatches": 0,
+      "ledger_problems": 0,
+      "p0": 0,
+      "p1": 3,
+      "p2": 3,
+      "info": 2,
+      "p1_codes": [
+        "ORDER_FAILED_REASON_UNKNOWN",
+        "FEE_DRAG",
+        "ALERTING_NOT_CONFIGURED"
+      ]
+    },
+    {
+      "id": "readiness_audit_on_incident_evidence",
+      "command": "python -m tools.readiness_audit --export --logs --candidate 2b24e3d4dcc31b221394ba707781d60d9c94179a66c7cf60e7ae8e1f6a6fcc7a --revision lego-tick-uat-00043-tux",
+      "exit_code": 1,
+      "status": "BLOCKED",
+      "pass": 6,
+      "fail": 1,
+      "blocked": 7,
+      "fail_criterion": "snapshot_integrity (broker_rejection_reason_missing x1: the broker FAILED an order and gave no reason; not fixable in code)",
+      "output": "readiness-audit.json"
+    },
+    {
+      "id": "independent_recomputation",
+      "description": "rows, A chain, cash, FIFO, position and log lineage re-derived from the raw export and logs without tools.trace_audit",
+      "rows": 19,
+      "row_equation_mismatches": 0,
+      "request_tick_pairs": 311,
+      "commit_events": 19,
+      "cash_of_fills": 317.7326,
+      "broker_cashflow_sum": 317.7326,
+      "fifo_realized": -1.3366,
+      "position_before": 144.9528,
+      "position_after": 140.4528,
+      "sum_of_fills": -4.5
+    },
+    {
+      "id": "fee_drag_simulation",
+      "command": "python release_evidence/20261010-pr/fee-drag-sim.py 0.15  (and 0.35)",
+      "note": "numpy only, seeded (20261010); the two output files are the tables quoted in docs/AUDIT_20261010_TH.md",
+      "outputs": [
+        "fee-drag-sim-sigma15.txt",
+        "fee-drag-sim-sigma35.txt"
+      ]
+    },
+    {
+      "id": "mutation_C1",
+      "description": "drop the bounded retry around TradeClient/DataClient",
+      "expected": "a test fails",
+      "failed_tests": 3,
+      "observed": "failed: test_audit_20261010.py::test_a_transient_error_while_building_the_clients_is_retried_once"
+    },
+    {
+      "id": "mutation_C2",
+      "description": "the recorder keeps the 12 s floor for ticks that sent an order",
+      "expected": "a test fails",
+      "failed_tests": 1,
+      "observed": "failed: test_audit_20261010.py::test_a_tick_that_moved_money_keeps_its_tail_with_three_seconds_left"
+    },
+    {
+      "id": "mutation_C3",
+      "description": "PROD accepts WEBULL_API_DEBUG",
+      "expected": "a test fails",
+      "failed_tests": 4,
+      "observed": "failed: test_audit_20261010.py::test_a_tick_with_the_debug_switch_on_production_answers_config_error"
+    },
+    {
+      "id": "mutation_T1a",
+      "description": "the deploy script lets PROD fall back to auto-discovery",
+      "expected": "a test fails",
+      "failed_tests": 2,
+      "observed": "failed: test_audit_20261010.py::test_production_live_without_a_named_database_is_refused_before_any_cloud_call"
+    },
+    {
+      "id": "mutation_T1b",
+      "description": "one public read in database.rules.prod.json",
+      "expected": "a test fails",
+      "failed_tests": 1,
+      "observed": "failed: test_audit_20261010.py::test_the_production_rules_differ_from_the_standard_rules_only_in_read_access"
+    },
+    {
+      "id": "mutation_T2",
+      "description": "operator_findings returns nothing",
+      "expected": "a test fails",
+      "failed_tests": 4,
+      "observed": "failed: test_audit_20261010.py::test_a_measured_fee_is_reported_as_a_cost_and_still_does_not_gate"
+    },
+    {
+      "id": "mutation_T3",
+      "description": "trace_audit never reports a FAILED order without a reason",
+      "expected": "a test fails",
+      "failed_tests": 1,
+      "observed": "failed: test_audit_20261010.py::test_a_failed_order_with_no_reason_is_a_finding_that_names_it"
+    }
+  ],
+  "defects_found_by_this_verification": [
+    "the planned gate 'BLOCK when DIFF < 2 x fee x FIX_C' was wrong: the simulation shows a net gain at 0.15% fee in a median-flat world (the gate would have blocked it) and a loss at every DIFF in a martingale world (the gate would have reassured). Replaced by a measured-fee report and a WARN; the formula is kept only as a per-order best case in trace_audit",
+    "tools.readiness_audit fails snapshot_integrity on an order the broker FAILED without a reason, which tools.trace_audit did not report: trace_audit now emits ORDER_FAILED_REASON_UNKNOWN (P1)",
+    "docs/LEARNING_CONTINUOUS_V4_TH.md said gap = FIX_C - V; the code (lego_one_row.build_decision) and every stored row use V - FIX_C (positive = overweight = SELL): corrected",
+    "the flight recorder skipped the tail of a tick that sent an order whenever the tick used more than 23 of its 35 seconds: the one tick that did so on 2026-10-09 lost exactly the part after Place"
+  ],
+  "not_verified": [
+    "any broker call (no UAT/PROD access from this environment); developer.webull.co.th is blocked by the egress proxy, so the Webull contract is the one the repository holds",
+    "why the broker FAILED the 2026-10-09 15:24 SELL 5.08 and where the 'read timeout=5.0' in the 18:45 error comes from (offline the SDK sends connect/read 5.0/10.0)",
+    "that 'firebase deploy --only database' reaches a separate RTDB instance, and the Firebase CLI's multi-instance targets: the runbook makes the curl 'Permission denied' check the gate instead",
+    "the production fee, PROD market-data entitlement and PROD alert delivery (gates G4-G6)",
+    "the Firebase emulator suite (9 tests skipped locally), gitleaks and pip-audit (CI)",
+    "profit after fees: a few UAT sessions cannot show an edge, and the strategy has none of its own when the price is a random walk (simulation in the audit)"
+  ]
+}
