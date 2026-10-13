@@ -110,4 +110,9 @@ broker refuses and a DAY order is still non-terminal after its session closed pl
 `EXPIRED` only on the proof in `order_recovery.expiry_proof_blockers`. `config.py` refuses it on PROD; no new
 variable, so existing `hold`/`cancel` policies and their release bindings are unchanged
 ([audit 7 ตุลาคม](docs/AUDIT_20261007_TH.md)).
+On UAT the same policy also releases an order the broker keeps listing: still `PENDING` with nothing filled
+(order detail and the single open-orders row agree), cancel refused, holdings unchanged and at least
+`order_recovery.UAT_STUCK_PENDING_SECONDS` (30 minutes) after Place -- during the session, not at the close --
+and the dispatch guards then ignore that row while the broker still shows it `PENDING` / unfilled
+([audit 13 ตุลาคม](docs/AUDIT_20261013_TH.md)). Still no new variable; PROD is unaffected.
 

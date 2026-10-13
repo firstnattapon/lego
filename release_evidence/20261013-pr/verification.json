@@ -1,0 +1,162 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-10-13T04:40:10.736417+00:00",
+  "base_commit": "51462e28ac238f7e2823bd03f973874ece3462ae",
+  "python": "Python 3.12.3 (the version CI runs), numpy 2.4.6 as pinned in requirements.txt",
+  "local_status": "PASS",
+  "failed_checks": [],
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "note": "Candidate hash is computed by the operator from the committed clean tree (ops.py release-plan); it changes with this PR, so UAT needs a new release before 2026-10-21T20:00Z to get this fix and a renewed window. Nothing here touched a broker, Firebase project or deployed revision.",
+  "full_suite": {
+    "command": "pytest -q",
+    "junit_sha256": "f276983e369394080ffd6a0d439692737a646aae888f9798c81c1e1065be5504",
+    "counts": {
+      "tests": 1870,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1861
+    },
+    "baseline_before_change": {
+      "tests": 1799,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1790,
+      "junit_sha256": "85ee04a2a9bdfc3fa9280763eff8beed2752a330ac9ef1701860c1fb8f888da6"
+    },
+    "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +71 tests; one existing test adjusted (test_incident_20261006::test_before_the_margin_nothing_is_even_read: 29 minutes instead of 20:59Z; the PROD half of that guarantee is pinned in test_incident_20261012.py)."
+  },
+  "checks": [
+    {
+      "id": "py_compile",
+      "command": "python -m py_compile *.py tools/*.py",
+      "exit_code": 0
+    },
+    {
+      "id": "shell_syntax",
+      "command": "bash -n deploy/*.sh",
+      "exit_code": 0
+    },
+    {
+      "id": "new_tests",
+      "command": "pytest -q test_incident_20261012.py test_incident_20261012_dispatch.py",
+      "tests": {
+        "test_incident_20261012.py": 47,
+        "test_incident_20261012_dispatch.py": 24,
+        "total": 71
+      }
+    },
+    {
+      "id": "trace_audit_on_this_evidence",
+      "command": "python -m tools.trace_audit --logs ... --rtdb ... --yaml ...",
+      "result": "3 P0 (ORDER_UNRESOLVED, EXPIRY_PROOF_BLOCKED, OPERATOR_HALT) / 1 P1 (ALERTING_NOT_CONFIGURED) / 3 P2 / 0 equation or ledger mismatches; evidence predates the fix, so the P0s remain"
+    },
+    {
+      "id": "readiness_audit_on_this_evidence",
+      "output": "release_evidence/20261013-pr/readiness-audit.json",
+      "result": "BLOCKED: snapshot_integrity FAIL and money_fences_resolved FAIL (the held order and halt), 5 PASS, 7 BLOCKED (external evidence); real_money_ready false"
+    }
+  ],
+  "mutation": {
+    "command": "scratchpad tool: revert one change, run the three suites, restore",
+    "suites": [
+      "test_incident_20261012.py",
+      "test_incident_20261012_dispatch.py",
+      "test_incident_20261006.py"
+    ],
+    "total": 15,
+    "caught": 15,
+    "results": [
+      {
+        "mutation": "M1 dispatch guards ignore nothing (splitter returns all rows as blocking)",
+        "file": "execution_service.py",
+        "caught": true
+      },
+      {
+        "mutation": "M2 the worker never passes the UAT flag to the proof",
+        "file": "execution_service.py",
+        "caught": true
+      },
+      {
+        "mutation": "M3 the pre-Preview guard no longer filters released orders",
+        "file": "execution_service.py",
+        "caught": true
+      },
+      {
+        "mutation": "M4 the post-Preview guard no longer filters released orders",
+        "file": "execution_service.py",
+        "caught": true
+      },
+      {
+        "mutation": "M5 the splitter also ignores on PROD",
+        "file": "execution_service.py",
+        "caught": true
+      },
+      {
+        "mutation": "M6 any listing is accepted by the UAT rule",
+        "file": "order_recovery.py",
+        "caught": true
+      },
+      {
+        "mutation": "M7 the 30 minute age is not required",
+        "file": "order_recovery.py",
+        "caught": true
+      },
+      {
+        "mutation": "M8 a released row is ignored whatever its fill",
+        "file": "order_recovery.py",
+        "caught": true
+      },
+      {
+        "mutation": "M9 the cheap gate ignores the flag requirement",
+        "file": "order_recovery.py",
+        "caught": true
+      },
+      {
+        "mutation": "M10 the proof always takes the UAT path when asked (basis never session_over)",
+        "file": "order_recovery.py",
+        "caught": true
+      },
+      {
+        "mutation": "M11 the listed row's size / symbol / side are not compared",
+        "file": "order_recovery.py",
+        "caught": true
+      },
+      {
+        "mutation": "M12 a released order is ignored whatever its basis",
+        "file": "order_recovery.py",
+        "caught": true
+      },
+      {
+        "mutation": "M13 the resume tool never passes the environment",
+        "file": "tools/resume_order_reconciliation.py",
+        "caught": true
+      },
+      {
+        "mutation": "M14 SUBMITTED is accepted for the in-session release",
+        "file": "order_recovery.py",
+        "caught": true
+      },
+      {
+        "mutation": "M15 trace_audit does not report the release",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      }
+    ]
+  },
+  "defects_found_by_this_verification": [
+    "the first design (release our own fence only) would not have restored trading: both dispatch guards (before and after Preview) stop every order with SUPPRESSED_ACTIVE_ORDER while the broker lists any open order for the symbol, and UAT keeps listing the released one. Found in the second audit pass, before implementation; fixed by _split_released_stuck at both guards and pinned by test_incident_20261012_dispatch.py",
+    "the first version of the UAT rule reported a new blocker code for a listing that did not qualify; test_flight_recorder_replay expected order_still_listed_open, which operators and docs already use - kept the original code (the unmet row is on the W11 trace instead)",
+    "test_incident_20261006::test_before_the_margin_nothing_is_even_read encoded the old 'no broker read before close + 1h' rule; the UAT rule changes that on purpose, so the test now uses a 29 minute age and the PROD half moved to test_incident_20261012.py",
+    "execution_service.py has mixed CRLF/LF line endings; the editing tool normalized the whole file and turned a 76 line change into a 2,000 line diff - restored and re-applied line by line so every untouched line is byte-identical"
+  ],
+  "not_verified": [
+    "any broker call (no UAT/PROD access from this environment); developer.webull.co.th is blocked, so the Webull contract is the one the repository holds",
+    "why the UAT broker keeps an order PENDING and listed open, whether it ever clears one overnight (no broker read after 22:07Z), and whether a released order can fill later - the rule rests on 4 stuck orders and the position continuity of 3 of them",
+    "the extra broker reads (open orders + positions, positions p50 2.6-3.6 s) between 30 minutes and the release, against the 45 s tick budget - require_budget(10) guards them but live timing is not measured",
+    "the 9 Firebase-emulator tests, gitleaks and pip-audit (CI runs them; requirements.txt is unchanged)",
+    "alert delivery, PROD observe, PROD fee, token rotation (gates G4-G6)"
+  ]
+}

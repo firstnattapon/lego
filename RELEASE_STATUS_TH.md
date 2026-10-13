@@ -1,5 +1,16 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 13 ตุลาคม: [audit order UAT ค้าง PENDING *และยัง list เป็น open* ซ้ำ](docs/AUDIT_20261013_TH.md) — revision `00044-nac` (main@51462e2), session 12 ต.ค.: สมการ/ledger/lineage ตรงทั้ง 26 แถว
+(439 tick ↔ 439 request, คำนวณซ้ำด้วยเลขคณิตธรรมดา 0 mismatch) แต่ BUY 1.37 ค้าง `PENDING`, cancel ถูก 417, **เสีย 23 จาก 26 slot** แล้ว halt ข้าม session (รอบที่ 4 ใน 6 session).
+**ต้นเหตุที่ `cancel_expire` ไม่ปล่อย order ทราบแล้ว**: flight recorder (21:00Z และ 22:07Z) แสดง `order_detail`=PENDING filled 0 และ `open-orders/list` ยังคืน order นี้ ⇒ `order_still_listed_open` — UAT ไม่เอา order ที่ค้างออกจาก open list.
+แก้ใน source (เฉพาะ UAT; PROD และทางที่คนยืนยันบน PROD ได้ proof เดิม): `order_recovery.py` ปล่อยเป็น `EXPIRED` zero-fill เมื่อ order ยัง `PENDING` filled 0 ทั้งใน order detail และ open orders (แถวเดียว ขนาดตรง) holdings ไม่ขยับ
+และอายุ ≥ 30 นาทีนับจาก Place ระหว่าง session (ไม่ต้องรอปิดตลาด) · `execution_service.py` guard ตอน dispatch ทั้งก่อนและหลัง Preview **ข้าม order ที่ปล่อยแล้ว** ตราบที่ broker ยังบอก PENDING filled 0 (ตรวจรอบสองพบว่าปล่อย fence อย่างเดียวไม่ทำให้เทรดต่อ:
+`SUPPRESSED_ACTIVE_ORDER` จะบล็อกต่อ) · `tools/resume_order_reconciliation.py` กู้ order ที่ halt อยู่แล้ว (`basis` อยู่ใน confirmation) · ฟิลด์ `expiry_basis` · `trace_audit` finding `UAT_STUCK_PENDING_RELEASED`.
+ไม่แตะสูตรตัดสินใจ/ledger/fence/halt/`max_mutations=1`. เทสต์ 1,861 passed / 9 skipped (+71), mutation ถูกจับ 15/15. ความเสี่ยงที่เหลือ: zombie ที่ปล่อยแล้วอาจ fill ทีหลัง (ledger ระบุที่มาไม่ได้; ไม่เคยเห็นใน 3 ตัวก่อนหน้า) — บอกใน audit.
+สถานะ: **code-ready, live-evidence-pending (NO-GO เงินจริง)** — order ที่ halt อยู่ต้องกู้ด้วยคน (ขั้นตอนใน audit รวมทางลัดวันนี้ที่ไม่ต้อง deploy); PR นี้เปลี่ยน candidate hash จึงต้อง `release-plan` + `continuous-uat.sh` ใหม่ **ก่อน 2026-10-21T20:00Z**;
+เงินจริงยังต้อง alert ถึงคนจริง (ERROR 392 tick + halt ไม่ถึงใคร), PROD observe ≥2 session + quote real-time, token ที่คนหมุน, DB/rules แยก, fee PROD ที่วัดแล้ว (UAT 1.07% ต่อ order) และการตัดสินใจเชิงเศรษฐศาสตร์ของเจ้าของ.
+ผล local และ evidence อยู่ใน `release_evidence/20261013-pr/`.
+
 ล่าสุด 10 ตุลาคม: [audit UAT session แรกหลัง flight recorder](docs/AUDIT_20261010_TH.md) — revision `00043-tux` เทรดครบ 19 slot, fill 5 ครั้ง; ledger, สมการ (คำนวณซ้ำอิสระ),
 cash ของ fills และ lineage ของ log (311 request ↔ 311 tick, 19 แถว ↔ 19 commit event) ตรงทั้งหมด และไม่มี order ค้าง PENDING รอบนี้. ที่เหลือ: order `44142ee4…` ถูก broker `FAILED` โดยไม่ให้เหตุผล
 (`tools.readiness_audit` fail `snapshot_integrity` — ส่งหลักฐานให้ Webull ตามเอกสาร), ไม่มี alert channel, และ **ต้นทุน**: fee UAT 1.07% ต่อ order กินผลตอบแทน — กลยุทธ์ถือ ≈FIX_C ดอลลาร์คงที่ จึงไม่มี edge ในตัว
