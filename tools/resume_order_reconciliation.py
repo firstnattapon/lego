@@ -160,7 +160,8 @@ def main():
         cfg = webull_io.load_config()
         tolerance = execution_service._holdings_drift_tolerance(
             typed_v2=execution_service._intent_is_v2(intent))
-        uat = webull_io.environment_label() == "UAT"
+        # environment_label() returns the display label ("Test (UAT)"), never the bare "UAT".
+        uat = webull_io.environment_label() == webull_io.UAT
 
         def replan(current):
             return expiry_plan(

@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import lego_orders
 import main
 import order_recovery as recovery
 from conftest import FAKE_DB
@@ -364,7 +365,7 @@ def test_the_broker_moving_holdings_or_being_unreadable_keeps_the_hold(monkeypat
 
 def test_on_prod_nothing_is_read_before_the_margin_and_a_listed_order_is_never_released(monkeypatch):
     run_id, pending, _ = _zombie(monkeypatch, "cancel_expire")
-    monkeypatch.setattr(main, "environment_label", lambda: "PROD")
+    monkeypatch.setattr(main, "environment_label", lambda: lego_orders.PROD)   # real label
     _clock(monkeypatch, PLACED_E2E + timedelta(minutes=45))
     _stub_broker(monkeypatch, holdings_after=8.0, detail=pending)
     monkeypatch.setattr(main, "fetch_open_orders", lambda *_: pytest.fail("PROD read before the margin"))
@@ -459,7 +460,7 @@ def test_the_worker_reproves_a_confirmed_order_and_prod_never_accepts_the_uat_ba
                                                             NEXT_OPEN, tolerance,
                                                             uat_stuck_pending=True))
     # ... but the same re-armed order on a PROD environment is judged by the original proof.
-    monkeypatch.setattr(main, "environment_label", lambda: "PROD")
+    monkeypatch.setattr(main, "environment_label", lambda: lego_orders.PROD)   # real label
     _stub_broker(monkeypatch, holdings_after=8.0, detail=pending)
     _list_open(monkeypatch, _listed(run_id, pending))
     stopped = _work()[0]
@@ -467,13 +468,14 @@ def test_the_worker_reproves_a_confirmed_order_and_prod_never_accepts_the_uat_ba
     assert _fenced_runs() == {run_id} and not _intent(run_id).get("expiry_released")
 
 
-def _run_tool(monkeypatch, capsys, *, environment, row, pending, listed, holdings=8.0):
+def _run_tool(monkeypatch, capsys, *, environment, row, pending, listed, holdings=8.0, confirm=None):
     import sys
     import execution_service
     import webull_io
     from types import SimpleNamespace
     monkeypatch.setattr(sys, "argv", ["resume", "--chain", row["chain_key"], "--run", row["run_id"],
-                                      "--operator", "reviewer", "--expiry-proof"])
+                                      "--operator", "reviewer", "--expiry-proof"]
+                        + (["--confirm", confirm] if confirm else []))
     monkeypatch.setattr(execution_service, "_init_firebase", lambda: None)
     monkeypatch.setattr(webull_io, "runtime_identity_fingerprint",
                         lambda: row["runtime_identity_fingerprint"])
@@ -483,7 +485,9 @@ def _run_tool(monkeypatch, capsys, *, environment, row, pending, listed, holding
     monkeypatch.setattr(webull_io, "fetch_order_detail", lambda tc, run: pending)
     monkeypatch.setattr(webull_io, "fetch_open_orders", lambda tc, symbol: listed)
     monkeypatch.setattr(webull_io, "fetch_holdings", lambda tc, cfg: holdings)
-    monkeypatch.setattr(webull_io, "environment_label", lambda: environment)
+    # The real label, not a stub: environment_label() returns "Test (UAT)" / "Production",
+    # and a stub returning "UAT" once hid a comparison that never matched on real UAT.
+    monkeypatch.setenv("WEBULL_ENV", environment)
     capsys.readouterr()                       # drop the worker's own log lines from the setup
     resume.main()
     return capsys.readouterr().out
@@ -520,3 +524,54 @@ def test_a_released_stuck_order_is_a_finding_for_webull_not_an_unresolved_order(
     assert "Webull" in by["UAT_STUCK_PENDING_RELEASED"]["text"]
     assert "ORDER_UNRESOLVED" not in by and "EXPIRY_PROOF_BLOCKED" not in by
     assert "RELEASED (UAT stuck PENDING)" in ta.render(report)
+
+
+def test_the_documented_recovery_of_the_halted_order_works_end_to_end_on_uat(monkeypatch, capsys):
+    """docs/AUDIT_20261013_TH.md steps 2-4, in order, with the real CLI and the real label.
+
+    The broker keeps listing the order the whole time. Pass 3 of the audit found that the
+    tool compared the label with "UAT" while environment_label() says "Test (UAT)", so on
+    real UAT step 2 would have failed with order_still_listed_open; this walks the whole path.
+    """
+    import json
+    import operator_halt
+    run_id, pending, row = _halted_incident(monkeypatch)
+    identity = row["runtime_identity_fingerprint"]
+    listed = [_listed(run_id, pending)]
+    _clock(monkeypatch, NEXT_OPEN)
+
+    # Step 2a: dry run of the CLI on UAT.
+    shown = json.loads(_run_tool(monkeypatch, capsys, environment="UAT", row=row, pending=pending,
+                                 listed=listed))
+    assert shown["dry_run"] is True and shown["basis"] == recovery.BASIS_UAT_STUCK_PENDING
+    # Step 2b: the same command with the printed confirmation re-arms the order.
+    applied = json.loads(_run_tool(monkeypatch, capsys, environment="UAT", row=row, pending=pending,
+                                   listed=listed, confirm=shown["confirmation"]))
+    assert applied["reconciliation_resumed"] and applied["operator_halt_retained"]
+    assert _intent(run_id)["status"] == "PLACING_UNKNOWN" and _fenced_runs() == {run_id}
+
+    # Step 2c: the worker proves it again itself and releases it; the broker still lists it.
+    _stub_broker(monkeypatch, holdings_after=8.0, detail=pending)
+    _list_open(monkeypatch, *listed)
+    assert _work()[0]["status"] == "EXPIRED" and _fenced_runs() == set()
+    assert _intent(run_id)["expiry_basis"] == recovery.BASIS_UAT_STUCK_PENDING
+
+    # Step 4: a second person clears the halt the system set.
+    (halt,) = _halted()
+    with pytest.raises(ValueError, match="second operator"):
+        operator_halt.clear_halt(identity, "AAPL", expected_halt_id=halt["halt_id"],
+                                 operator="system:order-recovery", reason="x", apply=True)
+    operator_halt.clear_halt(identity, "AAPL", expected_halt_id=halt["halt_id"],
+                             operator="second-reviewer", reason="UAT stuck order released",
+                             apply=True)
+    assert _halted() == []
+
+    # Trading resumes although the broker still lists the released order.
+    body, code = _run(monkeypatch, NEXT_OPEN, 331.0, holdings=8.0)
+    assert code == 200 and body["status"] in {"READY_BUY", "READY_SELL"}
+    placed = []
+    _stub_broker(monkeypatch, holdings_after=8.0, detail=pending,
+                 place=lambda tc, order: placed.append(order) or {"order_status": "SUBMITTED"})
+    _list_open(monkeypatch, *listed)
+    _work()
+    assert len(placed) == 1

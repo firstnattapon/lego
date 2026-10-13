@@ -204,6 +204,6 @@ def test_the_splitter_keeps_order_and_returns_everything_as_blocking_off_uat(mon
     blocking, ignored = execution._split_released_stuck(chain, [other, row()])
     assert blocking == [other] and ignored == [row()]
     assert execution._split_released_stuck(chain, []) == ([], [])
-    monkeypatch.setattr(execution, "environment_label", lambda: "PROD")
+    monkeypatch.setenv("WEBULL_ENV", "PROD")
     blocking, ignored = execution._split_released_stuck(chain, [other, row()])
     assert blocking == [other, row()] and ignored == []
