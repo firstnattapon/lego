@@ -338,8 +338,11 @@ def test_a_missing_proof_keeps_the_hold_and_the_fence(monkeypatch, why, holdings
 
 
 def test_before_the_margin_nothing_is_even_read(monkeypatch):
+    # UAT may release an order that is still PENDING 30 minutes after Place (the 2026-10-12
+    # rule, test_incident_20261012.py); before that age -- and before the close + margin on
+    # anything but UAT -- the proof reads nothing, so trading hours cost no extra broker call.
     run_id, pending, _ = _zombie(monkeypatch, "cancel_expire")
-    _clock(monkeypatch, datetime(2026, 7, 23, 20, 59, tzinfo=UTC))
+    _clock(monkeypatch, datetime(2026, 7, 23, 19, 0, tzinfo=UTC))      # Place 18:31Z: 29 minutes
     _stub_broker(monkeypatch, holdings_after=8.0, detail=pending)
     monkeypatch.setattr(main, "fetch_open_orders", lambda *_: pytest.fail("read before the margin"))
     held = _work()[0]

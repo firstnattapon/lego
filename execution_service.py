@@ -1147,6 +1147,44 @@ def _reject_unsafe_dispatch_quote(chain_key_: str, run_id: str,
         price_drift_bps=evidence["price_drift_bps"])
 
 
+def _split_released_stuck(chain_key_: str, open_orders: list) -> tuple[list, list]:
+    """(blocking, ignored): open orders that still stop a new order, and UAT zombies that do not.
+
+    UAT never retires an order it left PENDING, so after _try_expiry_release has freed our
+    own fence the broker still lists it. Without this every later dispatch would end in
+    SUPPRESSED_ACTIVE_ORDER and the release would change nothing. A row is ignored only
+    while it is exactly what we released -- an intent of this chain that ended
+    EXPIRED / uat_stuck_pending, and the broker still says PENDING with nothing filled.
+    Any other row, any read failure, and every row on PROD blocks as before.
+    """
+    if not open_orders or environment_label() != UAT:
+        return list(open_orders), []
+    import order_recovery
+    blocking, ignored = [], []
+    for row in open_orders:
+        released = False
+        try:
+            run_id = str((row or {}).get("client_order_id") or "")
+            if run_id:
+                released = order_recovery.is_released_uat_stuck(
+                    row, read_intent(chain_key_, run_id))
+        except Exception:
+            released = False
+        (ignored if released else blocking).append(row)
+    return blocking, ignored
+
+
+def _note_ignored_released(run_id: str, ignored: list) -> None:
+    if not ignored:
+        return
+    _record_warning(
+        "uat_stuck_pending_ignored",
+        "UAT: order ที่ปล่อยแล้ว (stuck PENDING) ยัง list ใน open orders ของ broker — ไม่นับเป็นตัวบล็อก "
+        "order ใหม่; ส่ง order id ให้ Webull ล้างฝั่ง broker",
+        {"run_id": run_id, "ignored_released": len(ignored),
+         "ignored_client_order_ids": [str(o.get("client_order_id")) for o in ignored][:5]})
+
+
 def _try_expiry_release(trade_client, cfg, intent: dict, detail, summary: dict) -> tuple[dict | None, dict]:
     """EXPIRED zero-fill summary for a refused DAY order that is provably dead.
 
@@ -1161,7 +1199,10 @@ def _try_expiry_release(trade_client, cfg, intent: dict, detail, summary: dict) 
     2026-10-08 this reason lived in a logger.info that Cloud Logging never received.
     """
     import order_recovery
-    if not order_recovery.expiry_candidate(intent):
+    # The UAT stuck-PENDING rule is a property of the UAT broker (it never retires such an
+    # order); PROD and every person-confirmed PROD release keep the original proof.
+    uat_stuck = environment_label() == UAT
+    if not order_recovery.expiry_candidate(intent, uat_stuck_pending=uat_stuck):
         return None, {}
     checked_at = _iso(datetime.now(UTC))
     try:
@@ -1181,14 +1222,19 @@ def _try_expiry_release(trade_client, cfg, intent: dict, detail, summary: dict) 
         return None, {"expiry_proof_checked_at": checked_at, "expiry_proof_blockers": blockers}
     released, blockers = order_recovery.expiry_release(
         intent, detail, summary, open_orders=open_orders, holdings=holdings,
-        tolerance=_holdings_drift_tolerance(typed_v2=_intent_is_v2(intent)))
+        tolerance=_holdings_drift_tolerance(typed_v2=_intent_is_v2(intent)),
+        uat_stuck_pending=uat_stuck)
     if released is None:
         logger.info("lego expiry proof not met run_id=%s blockers=%s",
                     intent.get("run_id"), blockers)
-        listed = any(str(o.get("client_order_id") or "") == str(intent.get("run_id"))
-                     for o in open_orders if isinstance(o, dict))
+        listed_rows = [{k: o.get(k) for k in ("status", "filled_quantity", "total_quantity",
+                                              "time_in_force", "place_time")}
+                       for o in open_orders if isinstance(o, dict)
+                       and str(o.get("client_order_id") or "") == str(intent.get("run_id"))]
+        listed = bool(listed_rows)
         fr.node("W11", ",".join(blockers)[:60], ok=False, run_id=intent.get("run_id"),
                 blockers=blockers, open_orders=len(open_orders), listed=listed,
+                listed_rows=listed_rows[:3], uat_stuck_pending=uat_stuck,
                 holdings=holdings, decision_holdings=intent.get("decision_holdings"),
                 tolerance=_holdings_drift_tolerance(typed_v2=_intent_is_v2(intent)))
         _record_warning(
@@ -1196,15 +1242,21 @@ def _try_expiry_release(trade_client, cfg, intent: dict, detail, summary: dict) 
             {"run_id": intent.get("run_id"), "chain_key": intent.get("chain_key"),
              "blockers": blockers})
         return None, {"expiry_proof_checked_at": checked_at, "expiry_proof_blockers": blockers}
+    basis = released.get("expiry_basis")
     fr.node("W11", "released", run_id=intent.get("run_id"), open_orders=len(open_orders),
-            holdings=holdings, decision_holdings=intent.get("decision_holdings"))
+            holdings=holdings, decision_holdings=intent.get("decision_holdings"), basis=basis)
+    if basis == order_recovery.BASIS_UAT_STUCK_PENDING:
+        message = ("UAT: order ที่ broker คง PENDING (filled 0, ยัง list ใน open orders) และปฏิเสธ cancel "
+                   f"ครบ {order_recovery.UAT_STUCK_PENDING_SECONDS // 60} นาที ถูกปล่อยเป็น EXPIRED "
+                   "(holdings ไม่เปลี่ยน) เพื่อไม่ให้ order เดียวหยุดทั้ง session — ส่ง order id ให้ Webull")
+    else:
+        message = ("DAY order ที่ broker ยัง PENDING และปฏิเสธ cancel ถูกปล่อยเป็น EXPIRED หลังพิสูจน์ "
+                   "(ไม่มี fill, ไม่อยู่ใน open orders, holdings ไม่เปลี่ยน, session จบแล้ว)")
     _record_warning(
-        "day_expiry_released",
-        "DAY order ที่ broker ยัง PENDING และปฏิเสธ cancel ถูกปล่อยเป็น EXPIRED หลังพิสูจน์ "
-        "(ไม่มี fill, ไม่อยู่ใน open orders, holdings ไม่เปลี่ยน, session จบแล้ว)",
+        "day_expiry_released", message,
         {"run_id": intent.get("run_id"), "chain_key": intent.get("chain_key"),
          "expiry_proof_sha256": released["expiry_proof_sha256"],
-         "released_by": released["expiry_released_by"]})
+         "released_by": released["expiry_released_by"], "basis": basis})
     # The proof passed: say so, so blockers from earlier ticks do not outlive the release.
     return released, {"expiry_proof_checked_at": checked_at, "expiry_proof_blockers": []}
 
@@ -1349,7 +1401,10 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             {"pagination_complete": False},
             claim=intent,
         )
-    fr.node("W20", "open_orders", run_id=run_id, open_orders=len(open_orders))
+    open_orders, ignored_released = _split_released_stuck(ck, open_orders)
+    fr.node("W20", "open_orders", run_id=run_id, open_orders=len(open_orders),
+            ignored_released=len(ignored_released))
+    _note_ignored_released(run_id, ignored_released)
     import open_order_blocker
     if open_orders or (dispatch_claim or {}).get("broker_open_order_blocker"):
         observed_at = datetime.now(UTC)
@@ -1559,6 +1614,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 {"pagination_complete": False,
                  "dispatch_check_phase": "post_preview"},
                 claim=intent)
+        final_open_orders, _ = _split_released_stuck(ck, final_open_orders)
         if final_open_orders or (dispatch_claim or {}).get("broker_open_order_blocker"):
             observed_at = datetime.now(UTC)
             blocker = open_order_blocker.describe(final_open_orders, now=observed_at)

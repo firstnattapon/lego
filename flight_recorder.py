@@ -489,7 +489,7 @@ def fill_equation(cfg, intent, summary, finalized) -> None:
 # Fields whose change on an outbox intent is worth an event even when ``status`` stays put.
 _TRANSITION_WATCH = ("broker_status", "filled_quantity", "cancel_attempt_count",
                      "cancel_last_error_code", "needs_manual_check", "expiry_proof_blockers",
-                     "terminal_reason", "place_attempted")
+                     "terminal_reason", "place_attempted", "expiry_basis")
 
 
 @_safe
@@ -750,7 +750,7 @@ def _results(body: dict) -> list[dict]:
                     "cancel_attempt_count", "cancel_last_error_code", "cancel_refused_at",
                     "reconciliation_overdue", "reconciliation_age_seconds",
                     "expiry_proof_blockers", "expiry_proof_checked_at", "expiry_released",
-                    "deferred_reason", "filled_quantity") if item.get(k) is not None}})
+                    "expiry_basis", "deferred_reason", "filled_quantity") if item.get(k) is not None}})
     return items
 
 

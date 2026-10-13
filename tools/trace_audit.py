@@ -617,6 +617,7 @@ def _intent_view(doc, as_of):
         "decision_holdings": doc.get("decision_holdings"),
         "reason_missing": doc.get("broker_reason_missing") is True,
         "terminal_reason": doc.get("terminal_reason"),
+        "expiry_basis": doc.get("expiry_basis"), "expiry_released_at": doc.get("expiry_released_at"),
     }
 
 
@@ -662,8 +663,13 @@ def analyze_orders(db, chain, as_of, run=None) -> dict:
     # (snapshot_integrity), so this digest names it too instead of staying silent.
     failed_without_reason = [v for v in views
                              if v["status"] in {"FAILED", "REJECTED"} and v["reason_missing"]]
+    # Orders the UAT stuck-PENDING rule released while the broker still called them PENDING. The
+    # system trades on; the broker's behaviour is still a defect to put to Webull, and a later fill
+    # of one of them is a position the model ledger cannot attribute (check_fills' position_walk).
+    stuck_released = [v for v in views if v["expiry_basis"] == "uat_stuck_pending"]
     return {"n": len(views), "by_status": counted(v["status"] for v in views), "unresolved": unresolved,
-            "failed_without_reason": failed_without_reason, "halts": halts, "halt_audit": audit}
+            "failed_without_reason": failed_without_reason, "stuck_pending_released": stuck_released,
+            "halts": halts, "halt_audit": audit}
 
 
 # ------------------------------------------------------------------------ RTDB: the flight recorder
@@ -1001,6 +1007,15 @@ def build_findings(report) -> list[dict]:
                 add("P0", "EXPIRY_PROOF_UNKNOWN", f"order {o['run']}: cancel_expire is configured but nothing recorded WHICH "
                     "proof condition fails (no intent.expiry_proof_blockers, no W11 trace). Deploy a build with the flight "
                     "recorder and run tools.resume_order_reconciliation --expiry-proof (read-only dry run)")
+        for o in chain["orders"].get("stuck_pending_released", []):
+            add("P2", "UAT_STUCK_PENDING_RELEASED",
+                f"order {o['run']} ({o['side']} {o['qty']}, broker id…{o['broker_id']}, placed {o['placed_at']}) stayed "
+                f"PENDING with nothing filled, its one cancel was refused ({o['cancel_error']}), and it was released as "
+                f"a zero-fill EXPIRED at {o['expiry_released_at']} while the broker still listed it open (UAT rule, "
+                "order_recovery.UAT_STUCK_PENDING_SECONDS). Trading continued; send the broker order id and the place / "
+                "cancel / order-detail / open-orders request ids from the flight recorder to Webull, and expect a "
+                "position_walk mismatch if this order ever fills",
+                {"chain": chain["chain"], "broker_id": o["broker_id"]})
         for o in chain["orders"].get("failed_without_reason", []):
             add("P1", "ORDER_FAILED_REASON_UNKNOWN",
                 f"order {o['run']} ({o['side']} {o['qty']}) ended {o['status']} at the broker (id…{o['broker_id']}, placed "
@@ -1187,6 +1202,9 @@ def render(report: dict) -> str:
             for o in orders.get("failed_without_reason", []):
                 out.append(f"  FAILED WITHOUT REASON {o['run']} {o['side']} {o['qty']} {o['status']} id…{o['broker_id']} "
                            f"placed {o['placed_at']}: {o['terminal_reason']}")
+            for o in orders.get("stuck_pending_released", []):
+                out.append(f"  RELEASED (UAT stuck PENDING) {o['run']} {o['side']} {o['qty']} broker={o['broker_status']} "
+                           f"id…{o['broker_id']} placed {o['placed_at']} released {o['expiry_released_at']}")
             for o in orders["unresolved"]:
                 out.append(f"  UNRESOLVED {o['run']} {o['side']} {o['qty']} {o['status']} broker={o['broker_status']} id…{o['broker_id']} "
                            f"created {o['created_at']} placed {o['placed_at']} age {o['age_h']} h")
