@@ -125,6 +125,9 @@ W11   x: { blockers: ["order_still_listed_open"], open_orders: 1, listed: true, 
 wb    order_detail GET /trading/orders/get  st=200  rid=…  res.orders[0].order_status="PENDING"  fact={st:PENDING, fq:0, tq:1.09}
 ```
 
+เมื่อ proof ไม่ผ่าน W11 เก็บ `listed_rows` (status / filled / total / time_in_force / place_time ของแถวที่ list — ไม่มี id) และ `uat_stuck_pending` เพื่อบอกว่าทำไมกฎ UAT ของ [audit 13 ตุลาคม](AUDIT_20261013_TH.md) ไม่ใช้ได้;
+เมื่อปล่อยแล้ว W11 `released` มี `basis` (`session_over` | `uat_stuck_pending`) และ node `W20` ที่ dispatch มี `ignored_released` (จำนวน order ที่ปล่อยแล้วแต่ broker ยัง list ซึ่ง guard ข้าม)
+
 (ตัวอย่างมาจากเทสต์ replay ของ `test_incident_20261006` — ข้อมูลสังเคราะห์) intent ที่ค้างยังมี `expiry_proof_blockers` + `expiry_proof_checked_at` ติดอยู่ ดูได้จาก
 `python ops.py status` และใน tick log (`execution[]`) โดยไม่ต้องเปิด trace
 

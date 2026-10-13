@@ -295,6 +295,7 @@ def status_command(_args) -> dict:
         "manual_since": intent.get("manual_since"),
         "expiry_proof_blockers": intent.get("expiry_proof_blockers"),
         "expiry_proof_checked_at": intent.get("expiry_proof_checked_at"),
+        "expiry_basis": intent.get("expiry_basis"),
         "broker_reject_circuit": fence.get("broker_reject_circuit") or {},
         "operator_halt": fence.get("operator_halt") or {},
         "allow_fractional": runtime.deployment.allow_fractional,

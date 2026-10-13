@@ -12,7 +12,9 @@ export LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_SESSION_KEY_MODE_OVERRIDE=market
 export LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-strategy.uat-continuous.json}"
 # cancel_expire: cancel, and if the broker refuses and a DAY order is still PENDING after its
 # session closed, release it only on the proof in order_recovery.expiry_proof_blockers
-# (docs/AUDIT_20261007_TH.md). UAT only: config.py refuses it on PROD.
+# (docs/AUDIT_20261007_TH.md). On UAT an order the broker keeps listing as PENDING with nothing
+# filled is released 30 minutes after Place, during the session (docs/AUDIT_20261013_TH.md).
+# UAT only: config.py refuses it on PROD.
 export LEGO_STALE_ORDER_ACTION_OVERRIDE=cancel_expire LEGO_STALE_ORDER_SECONDS_OVERRIDE=300
 export LEGO_CANCEL_CONFIRM_GRACE_SECONDS_OVERRIDE=120
 # Caps for FIX_C=10000: 15% of principal in notional, ~1.3x that in shares, one

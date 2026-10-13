@@ -39,6 +39,21 @@ REFUSED_HOLD_SECONDS = 8 * 3600
 EXPIRY_MARGIN_SECONDS = 3600
 EXPIRY_TERMINAL_REASON = "DAY_EXPIRY_PROOF"
 LIVE_STATUSES = frozenset({"PENDING", "SUBMITTED"})
+# 2026-10-12 (4th time in 6 UAT sessions): a MARKET/DAY/CORE fractional order stayed
+# PENDING *and listed in open orders* for 7+ hours -- 21:00Z and 22:07Z, one and two hours
+# after the close, order detail PENDING / filled 0 and open-orders/list still returned it --
+# so the proof above could never pass (`order_still_listed_open`), the hold ended in a halt
+# and 23 of 26 slots traded nothing. UAT does not retire such an order; it also never filled
+# one (three earlier ones left the position exactly where it was for days), while a slow but
+# genuine fill takes seconds to minutes (longest seen: under 15 minutes, 2026-10-05).
+# UAT ONLY and only ever by the caller passing uat_stuck_pending=True (execution_service does
+# so for WEBULL_ENV=UAT, never for PROD): an order that is still PENDING with nothing filled
+# this long after Place, whose one cancel was refused, and that the broker lists as exactly
+# that, is released as a zero-fill EXPIRED during the session instead of at the close.
+UAT_STUCK_PENDING_SECONDS = 1800
+UAT_STUCK_PENDING_REASON = "UAT_STUCK_PENDING_RELEASE"
+BASIS_SESSION_OVER = "session_over"
+BASIS_UAT_STUCK_PENDING = "uat_stuck_pending"
 
 
 def validate_evidence(intent, detail, summary):
@@ -294,7 +309,86 @@ def _expiry_policy_allows(intent):
             and policy.fingerprint == intent.get("cancel_policy_hash"))
 
 
-def expiry_candidate(intent, *, now=None):
+def _stuck_pending_age_reached(intent, now):
+    """True once the order is UAT_STUCK_PENDING_SECONDS old, counted from our own Place time."""
+    try:
+        return (now - utc(intent.get("placed_at"))).total_seconds() >= UAT_STUCK_PENDING_SECONDS
+    except (TypeError, ValueError):
+        return False
+
+
+def _decimal(value):
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return number if number.is_finite() else None
+
+
+def _listed_rows(run_id, orders):
+    return [o for o in orders
+            if isinstance(o, dict) and str(o.get("client_order_id") or "") == str(run_id)]
+
+
+def _same_order(row, *, symbol, side, total):
+    """A listed row that names a different symbol, side or size is not the order we sent."""
+    for field, wanted in (("symbol", symbol), ("side", side)):
+        seen = row.get(field)
+        if seen is not None and wanted and str(seen).strip().upper() != str(wanted).strip().upper():
+            return False
+    quantity = _decimal(row.get("total_quantity"))
+    return quantity is not None and total is not None and quantity == total
+
+
+def _listed_is_stuck_pending(intent, evidence, open_orders):
+    """The broker lists exactly this order once, PENDING, nothing filled, same size.
+
+    Anything else -- a second row, another status (SUBMITTED / PARTIAL_FILLED / FILLED), a
+    filled quantity that is missing, malformed or positive -- is not the signature the
+    UAT rule was written for and stays a blocker.
+    """
+    if evidence is None or evidence.status != "PENDING":
+        return False
+    rows = _listed_rows(intent.get("run_id"), open_orders)
+    if len(rows) != 1:
+        return False
+    row = rows[0]
+    if normalize_status(row.get("status")) != "PENDING":
+        return False
+    filled = _decimal(row.get("filled_quantity"))
+    if filled is None or filled != 0:
+        return False
+    return _same_order(row, symbol=intent.get("symbol"), side=intent.get("side"),
+                       total=evidence.total_quantity)
+
+
+def is_released_uat_stuck(row, intent):
+    """Is this open-order row an order we released as a UAT stuck-PENDING zombie, unchanged?
+
+    The dispatch guards use it so a released order that the broker still lists does not
+    block every later order. It stays true only while the broker's row still says PENDING
+    with nothing filled; the moment it says anything else the row blocks again.
+    """
+    if not isinstance(row, dict) or not isinstance(intent, dict):
+        return False
+    run_id = str(intent.get("run_id") or "")
+    if not run_id or str(row.get("client_order_id") or "") != run_id:
+        return False
+    if (normalize_status(intent.get("status")) != "EXPIRED"
+            or intent.get("expiry_released") is not True
+            or intent.get("expiry_basis") != BASIS_UAT_STUCK_PENDING
+            or normalize_status(intent.get("broker_status")) != "PENDING"):
+        return False
+    if normalize_status(row.get("status")) != "PENDING":
+        return False
+    filled = _decimal(row.get("filled_quantity"))
+    if filled is None or filled != 0:
+        return False
+    symbol = str(row.get("symbol") or "").strip().upper()
+    return bool(symbol) and symbol == str(intent.get("symbol") or "").strip().upper()
+
+
+def expiry_candidate(intent, *, now=None, uat_stuck_pending=False):
     """Cheap, read-free gate: is it worth reading the broker for the proof?"""
     now = now or datetime.now(timezone.utc)
     if (intent.get("needs_manual_check") or intent.get("place_attempted") is not True
@@ -305,16 +399,28 @@ def expiry_candidate(intent, *, now=None):
         close = _session_close(intent.get("placed_at"))
     except (TypeError, ValueError):
         return False
-    return close is not None and now >= close + timedelta(seconds=EXPIRY_MARGIN_SECONDS)
+    if close is None:
+        return False
+    if now >= close + timedelta(seconds=EXPIRY_MARGIN_SECONDS):
+        return True
+    return bool(uat_stuck_pending) and _stuck_pending_age_reached(intent, now)
 
 
-def expiry_proof_blockers(intent, detail, summary, *, open_orders, holdings, now, tolerance):
+def expiry_proof_blockers(intent, detail, summary, *, open_orders, holdings, now, tolerance,
+                          uat_stuck_pending=False):
     """Why a refused DAY order is not yet provably dead. Empty list = proven.
 
     Pure: every broker read is an argument. Every condition must hold together;
     each one alone is explained by something other than "the order is gone".
+
+    uat_stuck_pending (UAT only, default off) replaces two of those conditions with the
+    stricter signature of UAT's never-retired order: age since Place instead of the session
+    close, and exactly one PENDING / nothing-filled open-orders row instead of no row.
+    Everything else -- cancel refused, single MARKET/DAY/CORE leg, identity and quantity,
+    holdings unchanged, open orders readable -- is required exactly as before.
     """
     blockers = []
+    relaxed_age = False
     if intent.get("place_attempted") is not True:
         blockers.append("place_not_attempted")
     if not intent.get("cancel_attempt_count"):
@@ -338,7 +444,10 @@ def expiry_proof_blockers(intent, detail, summary, *, open_orders, holdings, now
     if close is None:
         blockers.append("placed_outside_regular_session")
     elif now < close + timedelta(seconds=EXPIRY_MARGIN_SECONDS):
-        blockers.append("session_not_over_plus_margin")
+        if uat_stuck_pending and _stuck_pending_age_reached(intent, now):
+            relaxed_age = True
+        else:
+            blockers.append("session_not_over_plus_margin")
     evidence = None
     try:
         evidence = validate_evidence(intent, detail, summary)
@@ -349,13 +458,19 @@ def expiry_proof_blockers(intent, detail, summary, *, open_orders, holdings, now
             blockers.append("broker_status_terminal")  # ordinary reconciliation owns it
         elif evidence.status not in LIVE_STATUSES:
             blockers.append("broker_status_unrecognized")  # UNKNOWN is not "still pending"
+        elif relaxed_age and evidence.status != "PENDING":
+            # A SUBMITTED order may be working at the exchange; only PENDING has ever been stuck.
+            blockers.append("stuck_release_requires_pending")
         if evidence.filled_quantity != 0:
             blockers.append("filled_quantity_not_zero")
     if open_orders is None:
         blockers.append("open_orders_unread")
     elif any(str(order.get("client_order_id") or "") == str(intent.get("run_id"))
              for order in open_orders):
-        blockers.append("order_still_listed_open")
+        # Same code in both modes: "the broker still lists it as open". The UAT rule only
+        # lifts it for the one signature above; the unmet row is on the W11 trace.
+        if not (uat_stuck_pending and _listed_is_stuck_pending(intent, evidence, open_orders)):
+            blockers.append("order_still_listed_open")
     try:
         before, after = float(intent["decision_holdings"]), float(holdings)
         if not (math.isfinite(before) and math.isfinite(after) and before >= 0 and after >= 0):
@@ -367,7 +482,26 @@ def expiry_proof_blockers(intent, detail, summary, *, open_orders, holdings, now
     return blockers
 
 
-def expiry_release(intent, detail, summary, *, open_orders, holdings, tolerance, now=None):
+def expiry_proof(intent, detail, summary, *, open_orders, holdings, now, tolerance,
+                 uat_stuck_pending=False):
+    """(blockers, basis): the strict proof first; the UAT rule only when that is not enough.
+
+    basis says which rule released the order -- session_over (the original proof, nothing
+    relaxed) or uat_stuck_pending -- so an order that would have passed anyway is never
+    recorded as a UAT exception. basis is None while blockers remain.
+    """
+    facts = dict(open_orders=open_orders, holdings=holdings, now=now, tolerance=tolerance)
+    strict = expiry_proof_blockers(intent, detail, summary, **facts)
+    if not strict:
+        return [], BASIS_SESSION_OVER
+    if not uat_stuck_pending:
+        return strict, None
+    relaxed = expiry_proof_blockers(intent, detail, summary, uat_stuck_pending=True, **facts)
+    return relaxed, (None if relaxed else BASIS_UAT_STUCK_PENDING)
+
+
+def expiry_release(intent, detail, summary, *, open_orders, holdings, tolerance, now=None,
+                   uat_stuck_pending=False):
     """(summary, blockers): an EXPIRED zero-fill summary only when the proof holds.
 
     The caller feeds it to the ordinary terminal path, so ledgers, circuit and
@@ -376,8 +510,9 @@ def expiry_release(intent, detail, summary, *, open_orders, holdings, tolerance,
     broker-confirmed expiry.
     """
     now = now or datetime.now(timezone.utc)
-    blockers = expiry_proof_blockers(intent, detail, summary, open_orders=open_orders,
-                                     holdings=holdings, now=now, tolerance=tolerance)
+    blockers, basis = expiry_proof(intent, detail, summary, open_orders=open_orders,
+                                   holdings=holdings, now=now, tolerance=tolerance,
+                                   uat_stuck_pending=uat_stuck_pending)
     if blockers:
         return None, blockers
     broker_status = normalize_status(summary.get("status"))
@@ -387,11 +522,17 @@ def expiry_release(intent, detail, summary, *, open_orders, holdings, tolerance,
              "margin_seconds": EXPIRY_MARGIN_SECONDS, "holdings": float(holdings),
              "decision_holdings": float(intent["decision_holdings"]),
              "open_order_count": len(open_orders)}
+    if basis == BASIS_UAT_STUCK_PENDING:
+        # Only the UAT rule adds to the facts, so a session_over proof hashes exactly as before.
+        proof.update(basis=basis, threshold_seconds=UAT_STUCK_PENDING_SECONDS,
+                     listed=bool(_listed_rows(intent["run_id"], open_orders)))
     digest = hashlib.sha256(json.dumps(proof, sort_keys=True, separators=(",", ":"),
                                        default=str).encode()).hexdigest()
     resume = intent.get("reconcile_resume") if expiry_authorized(intent) else None
     return {**summary, "status": "EXPIRED", "broker_status": broker_status,
-            "terminal_reason": EXPIRY_TERMINAL_REASON, "expiry_released": True,
+            "terminal_reason": (EXPIRY_TERMINAL_REASON if basis == BASIS_SESSION_OVER
+                                else UAT_STUCK_PENDING_REASON),
+            "expiry_released": True, "expiry_basis": basis,
             "expiry_released_at": now.isoformat(), "expiry_proof_sha256": digest,
             "expiry_released_by": (str(resume["operator"])[:128] if resume
                                    else "policy:cancel_expire")}, []

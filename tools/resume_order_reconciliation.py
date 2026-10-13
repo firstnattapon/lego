@@ -6,6 +6,9 @@ Two kinds of proof, both dry run by default:
     cancel, a DAY/CORE market order whose session ended, no fill, not listed as
     open, holdings unchanged (order_recovery.expiry_proof_blockers). 2026-10-06 a
     UAT order stayed PENDING for 8+ hours and no terminal proof ever came.
+    On UAT only, an order the broker still lists as PENDING with nothing filled passes
+    too (basis uat_stuck_pending): UAT never retires such an order (2026-10-12, listed
+    open 1 and 2 hours after the close). PROD keeps "not listed as open".
 
 Never Place, cancel, clear a fence, or reset an operator halt. The worker re-reads
 the broker and runs the existing idempotent ledger finalizers (for --expiry-proof it
@@ -53,16 +56,22 @@ def plan(intent, detail, identity):
 EXPIRY_SCHEMA = "resume_expiry_proof_v1"
 
 
-def expiry_plan(intent, detail, open_orders, holdings, identity, now, tolerance):
-    """Dry-run plan for a non-terminal order that the expiry proof shows is dead."""
+def expiry_plan(intent, detail, open_orders, holdings, identity, now, tolerance,
+                uat_stuck_pending=False):
+    """Dry-run plan for a non-terminal order that the expiry proof shows is dead.
+
+    uat_stuck_pending is main()'s WEBULL_ENV == UAT: on UAT the broker keeps listing an order
+    it left PENDING, so a PENDING / nothing-filled listing no longer blocks (the plan says
+    which rule it relied on in `basis`, and the confirmation covers it). PROD never sets it.
+    """
     if (intent.get("place_attempted") is not True or not intent.get("needs_manual_check")
             or intent.get("runtime_identity_fingerprint") != identity
             or intent.get("cashflow_abandoned") or intent.get("admin_reconciliation_pending")):
         raise ValueError("intent is not eligible for broker-proven accounting recovery")
     summary = summarize_order_result({}, detail)
-    blockers = order_recovery.expiry_proof_blockers(
+    blockers, basis = order_recovery.expiry_proof(
         intent, detail, summary, open_orders=open_orders, holdings=holdings, now=now,
-        tolerance=tolerance)
+        tolerance=tolerance, uat_stuck_pending=uat_stuck_pending)
     if blockers:
         raise ValueError("expiry proof not met: " + ", ".join(blockers))
     evidence = order_recovery.validate_evidence(intent, detail, summary)
@@ -70,7 +79,7 @@ def expiry_plan(intent, detail, open_orders, holdings, identity, now, tolerance)
               "broker_evidence_sha256": fingerprint(summary), "broker_status": evidence.status,
               "run_id": intent["run_id"], "chain_key": intent["chain_key"],
               "broker_order_id": evidence.broker_order_id, "holdings": float(holdings),
-              "open_order_count": len(open_orders)}
+              "open_order_count": len(open_orders), "basis": basis}
     return {**result, "confirmation": "RELEASE-EXPIRED " + fingerprint(result)}
 
 
@@ -151,12 +160,14 @@ def main():
         cfg = webull_io.load_config()
         tolerance = execution_service._holdings_drift_tolerance(
             typed_v2=execution_service._intent_is_v2(intent))
+        # environment_label() returns the display label ("Test (UAT)"), never the bare "UAT".
+        uat = webull_io.environment_label() == webull_io.UAT
 
         def replan(current):
             return expiry_plan(
                 current, read(args.run), webull_io.fetch_open_orders(trade, current["symbol"]),
                 webull_io.fetch_holdings(trade, cfg), identity, datetime.now(timezone.utc),
-                tolerance)
+                tolerance, uat_stuck_pending=uat)
         proposed = replan(intent)
     else:
         proposed = plan(intent, read(args.run), identity)
