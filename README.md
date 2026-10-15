@@ -1,5 +1,12 @@
 # LEGO PRINCIPAL v2
 
+15 October audit: [two clean UAT sessions, remaining alert and real-money gates](docs/AUDIT_20261015_TH.md).
+Decision, ledger, fence and recovery are unchanged. Adds webhook coverage for every status the
+monitoring health policy pages on, `python ops.py alert-drill` (dry-run unless `--send`),
+the Preview-only `tools/measure_fee.py` and a quote-age finding in `tools/trace_audit.py`.
+Live acceptance remains **NO-GO**: alert delivery, real-time PROD quotes, a measured PROD fee and the
+owner's decision are still open ([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)).
+
 5 October audit: [release horizon, caps and the guarded real-money path](docs/AUDIT_20261005_TH.md).
 The 1–4 October UAT stall was not a money-path defect: a 24-hour approval window covered one
 session, the DNA (`bypass:500`) was due to end that week and the caps (36,000 USD vs a 10,000 USD

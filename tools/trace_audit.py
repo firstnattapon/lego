@@ -48,6 +48,8 @@ TERMINAL_INTENT = frozenset({
 LEVELS = ("P0", "P1", "P2", "INFO")
 IN_FLIGHT_MINUTES = 30                     # an order older than this and not terminal is stuck, not slow
 TICK_BUDGET_SECONDS = 45.0               # the Cloud Run request timeout the service is deployed with
+PROD_QUOTE_AGE_LIMIT_SECONDS = 60.0      # = execution_service.PROD_MAX_DISPATCH_QUOTE_AGE_SECONDS (test_audit_20261015 pins it)
+QUOTE_SLOW_SHARE = 0.05                  # PROD: more than this share of decisions on a quote older than the limit
 
 
 # ------------------------------------------------------------------------------ small helpers
@@ -674,6 +676,15 @@ def analyze_orders(db, chain, as_of, run=None) -> dict:
 
 # ------------------------------------------------------------------------ RTDB: the flight recorder
 
+def _quote_age_summary(ages):
+    """Age of the quote each decision priced on (D06: snapshot capture time - quote time)."""
+    if not ages:
+        return {"n": 0}
+    over = sum(1 for age in ages if age > PROD_QUOTE_AGE_LIMIT_SECONDS)
+    return {"n": len(ages), "median_s": round(quantile(ages, 0.5), 1), "p95_s": round(quantile(ages, 0.95), 1),
+            "max_s": round(max(ages), 1), "over_limit": over, "over_limit_share": round(over / len(ages), 4)}
+
+
 def analyze_traces(db, *, run=None, since=None, limit=60) -> dict:
     docs = []
     for chain, days in (db.get("webull_lego_trace") or {}).items():
@@ -690,7 +701,7 @@ def analyze_traces(db, *, run=None, since=None, limit=60) -> dict:
                        for e in d.get("events") or [] if isinstance(e, dict))]
     result = {"n": len(docs), "ticks": [], "exchanges": [], "proof": [], "errors": [], "warnings": {},
               "transitions": [], "equations": {"checked": 0, "mismatch": _bucket()}, "heartbeat": {}}
-    exchanges, errors, warnings = {}, Counter(), Counter()
+    exchanges, errors, warnings, quote_ages = {}, Counter(), Counter(), []
     for doc in docs:
         base = parse_ts(doc.get("at"))
         events = [e for e in doc.get("events") or [] if isinstance(e, dict)]
@@ -719,6 +730,10 @@ def analyze_traces(db, *, run=None, since=None, limit=60) -> dict:
             elif kind == "tr":
                 result["transitions"].append({"at": moment, "run": short(e.get("run")), "from": e.get("from"),
                                               "to": e.get("to"), "changed": e.get("chg")})
+            elif kind == "n" and e.get("n") == "D06" and isinstance(e.get("x"), dict):
+                seen, quoted = parse_ts(e["x"].get("captured_at")), parse_ts(e["x"].get("quote_time"))
+                if seen is not None and quoted is not None:
+                    quote_ages.append(max(0.0, (seen - quoted).total_seconds()))
             elif kind == "n" and e.get("n") == "W11":
                 facts = e.get("x") if isinstance(e.get("x"), dict) else {}
                 result["proof"].append({"at": moment, "run": short(facts.get("run_id")), "tag": e.get("tag"),
@@ -733,6 +748,7 @@ def analyze_traces(db, *, run=None, since=None, limit=60) -> dict:
                            for k, v in sorted(exchanges.items(), key=lambda kv: (not kv[1]["mutation"], -kv[1]["n"]))]
     result["errors"] = [{"where": k[0], "type": k[1], "n": n} for k, n in errors.most_common(10)]
     result["warnings"] = dict(warnings)
+    result["quotes"] = _quote_age_summary(quote_ages)
     result["heartbeat"] = {short(c, 14): h for c, h in (db.get("webull_lego_heartbeat") or {}).items() if isinstance(h, dict)}
     result["ticks"] = result["ticks"][-limit:]
     return result
@@ -1084,6 +1100,21 @@ def build_findings(report) -> list[dict]:
     if equations.get("mismatch", {}).get("count"):
         add("P0", "TRACE_EQUATION_MISMATCH", f"{equations['mismatch']['count']} recorded equations do not recompute; "
             f"first: {equations['mismatch']['items'][0]}")
+    quotes = traces.get("quotes") or {}
+    if quotes.get("n"):
+        env = str((deploy.get("env") or {}).get("WEBULL_ENV")
+                  or next(iter((logs.get("ticks") or {}).get("environment") or {}), "")).upper()
+        said = (f"{quotes['n']} decisions priced on quotes a median {quotes['median_s']} s old (p95 {quotes['p95_s']} s, "
+                f"max {quotes['max_s']} s); {quotes['over_limit']} older than the {PROD_QUOTE_AGE_LIMIT_SECONDS:.0f} s PROD "
+                "dispatch limit")
+        if "PROD" in env and quotes["median_s"] > PROD_QUOTE_AGE_LIMIT_SECONDS:
+            add("P1", "QUOTE_NOT_REALTIME", said + ": PROD would refuse to dispatch on most of them. The market-data "
+                "subscription is delayed, not real-time; fix that before any PROD live session")
+        elif "PROD" in env and quotes["over_limit_share"] > QUOTE_SLOW_SHARE:
+            add("P2", "QUOTE_OFTEN_STALE", said + f" ({quotes['over_limit_share']:.1%} of them, above {QUOTE_SLOW_SHARE:.0%})")
+        elif "PROD" not in env:
+            add("INFO", "QUOTE_AGE", said + ". Not a PROD export, so the limit is not enforced here (UAT quotes are "
+                "delayed); gate G6 needs this measured on PROD observe sessions, where it applies")
     for chain, beat in (traces.get("heartbeat") or {}).items():
         bad = {k: beat.get(k) for k in ("write_errors", "flush_timeouts", "internal_errors") if beat.get(k)}
         if bad:
@@ -1228,6 +1259,10 @@ def render(report: dict) -> str:
             out.append(f"  {t['at']} {t['tick']} http={t['http']} {t['pipe']}/{t['biz']} why={t['why']} events={t['events']}"
                        f"{' PARTIAL' if t['partial'] else ''}")
             out.append(f"      {t['path']}")
+        q = tr.get("quotes") or {}
+        if q.get("n"):
+            out.append(f"  quote age at decision: median {q['median_s']} s p95 {q['p95_s']} s max {q['max_s']} s over {q['n']} "
+                       f"decisions; {q['over_limit']} older than the {PROD_QUOTE_AGE_LIMIT_SECONDS:.0f} s PROD limit")
         for p in tr["proof"][-8:]:
             out.append(f"  W11 {p['at']} run {p['run']} blockers {p['blockers']} listed={p['listed']} open_orders={p['open_orders']} "
                        f"holdings={p['holdings']} decision_holdings={p['decision_holdings']} {p['reason'] or ''}")

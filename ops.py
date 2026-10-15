@@ -264,6 +264,39 @@ def bootstrap_command(args) -> dict:
     return {"dry_run": False, "secret_version": response.name}
 
 
+def alert_drill_command(args) -> dict:
+    """Post one clearly-marked drill message to the alert receiver; touches no trading state.
+
+    Dry-run unless --send. The URL comes from Secret Manager (--secret) or the
+    ALERT_WEBHOOK_URL environment variable and is never printed. A SENT result is not
+    proof that a person was reached: delivery_verified stays false until someone confirms.
+    """
+    import alerting
+    if args.secret:
+        if (not args.secret.startswith("projects/") or "/secrets/" not in args.secret
+                or "/versions/" in args.secret):
+            raise ValueError("secret must be projects/PROJECT/secrets/NAME")
+        from google.cloud import secretmanager
+        client = secretmanager.SecretManagerServiceClient()
+        response = client.access_secret_version(request={"name": args.secret + "/versions/latest"})
+        url = response.payload.data.decode("utf-8").strip()
+        source = "secret_manager"
+    else:
+        url = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
+        source = "environment"
+    if not url:
+        raise ValueError("no webhook URL: pass --secret projects/PROJECT/secrets/NAME or set ALERT_WEBHOOK_URL")
+    try:
+        result = alerting.drill(url, send=args.send)
+    except ValueError as exc:
+        return {"blocked": True, "reason": str(exc), "url_source": source, "sent": False}
+    result["url_source"] = source
+    if args.send:
+        result["next"] = ("confirm the message reached a person who can act on it, "
+                          "then record it in the release evidence")
+    return result
+
+
 def status_command(_args) -> dict:
     import main
     main._init_firebase()
@@ -402,6 +435,7 @@ COMMANDS = {"check": check_command, "release-binding": binding_command,
             "migrate-market-day": migrate_session_command,
             "bootstrap-auth": bootstrap_command, "status": status_command,
             "repair-audit": repair_audit_command,
+            "alert-drill": alert_drill_command,
             "reset-reject-halt": reset_reject_halt_command,
             "halt-orders": halt_orders_command,
             "clear-operator-halt": clear_operator_halt_command,
@@ -441,6 +475,11 @@ def parser() -> argparse.ArgumentParser:
     boot.add_argument("--secret", required=True,
                       help="projects/PROJECT/secrets/NAME")
     boot.add_argument("--apply", action="store_true")
+    drill = sub.add_parser(
+        "alert-drill", help="post one marked drill message to the alert webhook (dry-run unless --send)")
+    drill.add_argument("--secret", help="projects/PROJECT/secrets/NAME holding the HTTPS webhook URL; "
+                                        "default: the ALERT_WEBHOOK_URL environment variable")
+    drill.add_argument("--send", action="store_true", help="actually post (default: build and show the payload)")
     sub.add_parser("status")
     migrate = sub.add_parser("migrate-market-day")
     migrate.add_argument("--apply", action="store_true")

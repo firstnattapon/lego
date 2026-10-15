@@ -21,11 +21,11 @@
 |---|---|
 | UAT order path | BUY และ SELL positive fill ≥ 2 regular sessions, `finalized_seq>0`, holdings ตรง broker, ไม่มี order ซ้ำ (G2) |
 | UAT failure drills | restart กลาง order, token หาย/หมด → หยุดปลอดภัยและมี alert (G3) |
-| Alert | apply `tools/monitoring_config.py`, ตั้ง `ALERT_WEBHOOK_SECRET_OVERRIDE`, ทดสอบถึงผู้รับจริง (G4) |
+| Alert | apply `tools/monitoring_config.py`, ตั้ง `ALERT_WEBHOOK_SECRET_OVERRIDE`, ซ้อม `python ops.py alert-drill --secret projects/P/secrets/N` (dry-run) แล้ว `--send` ให้ถึงผู้รับจริง (G4; ผล `SENT` ไม่ใช่หลักฐานว่าคนเห็น — `delivery_verified` เป็น false เสมอ ต้องมีคนยืนยัน) |
 | PROD observe | ≥ 2 regular sessions: authenticated reads, quote สด, ไม่มี new-order mutation; ยืนยันสิทธิ์ market data real-time |
 | Token | operator-issued, `NORMAL`, เหลือ > 3 วัน (`LEGO_TOKEN_REFRESH_MARGIN_DAYS`: runtime ไม่ส่ง order ใหม่ถ้าเหลือน้อยกว่านั้น แต่ยังอ่านและ reconcile ได้จนหมดอายุ), หมุนก่อนวันที่ 12 ของอายุ |
 | แยกจาก UAT | account/secrets `*-prod`, service `lego-tick-prod`, **RTDB แยก**: script บังคับให้ระบุ `DATABASE_URL_OVERRIDE` สำหรับ PROD ทุกโหมด (ไม่ auto-discover แล้ว) และ rules ของ DB นั้นต้องปิดอ่านสาธารณะ พิสูจน์ด้วย `curl` ตามหัวข้อ 2b |
-| ต้นทุน | วัด fee จริงด้วย Preview Order หลายขนาด (`estimated_transaction_fee ÷ estimated_cost`) แล้วส่งให้ `release-plan --fee-pct` (ไม่ส่ง = WARN `fee_unmeasured`). fee เป็น**ต้นทุนล้วน**: กลยุทธ์ถือ ≈FIX_C ดอลลาร์คงที่ ไม่มี edge ในตัวเมื่อราคาเป็น random walk — ตารางและข้อสรุปใน [AUDIT_20261010](AUDIT_20261010_TH.md) หัวข้อ "ต้นทุน" (fee 0.15% ที่ DIFF 25 ได้ผลสุทธิ ≈ 0 ในโลกที่ดีที่สุด); การตัดสินใจเปิดเป็นของเจ้าของบัญชี ไม่ใช่ gate ของโค้ด |
+| ต้นทุน | วัด fee จริงด้วย Preview Order หลายขนาด (`estimated_transaction_fee ÷ estimated_cost`) ด้วย `AUTO_SUBMIT=false python tools/measure_fee.py --allow-prod --notionals 25,50,100,250,1000` (Preview อย่างเดียว ไม่ import Place/Cancel; ได้ `suggested_fee_pct` = ค่ามากสุดปัดขึ้น, `payload_shape`, อายุ quote) แล้วส่งให้ `release-plan --fee-pct` (ไม่ส่ง = WARN `fee_unmeasured`). fee เป็น**ต้นทุนล้วน**: กลยุทธ์ถือ ≈FIX_C ดอลลาร์คงที่ ไม่มี edge ในตัวเมื่อราคาเป็น random walk — ตารางและข้อสรุปใน [AUDIT_20261010](AUDIT_20261010_TH.md) หัวข้อ "ต้นทุน" (fee 0.15% ที่ DIFF 25 ได้ผลสุทธิ ≈ 0 ในโลกที่ดีที่สุด); การตัดสินใจเปิดเป็นของเจ้าของบัญชี ไม่ใช่ gate ของโค้ด |
 
 ## 1. เลือกวิธี funding (ตัดสินใจก่อนวางแผน)
 
@@ -177,3 +177,34 @@ python ops.py bootstrap-auth --token-file PRIVATE_TOKEN --secret projects/lego-f
 | funding รอบเดียว | 12,500 (125%) | 200 | 2 | initial-funding |
 
 ตรวจด้วย `release-plan` เสมอ: ค่าที่ไม่ผ่านจะไม่ได้ ack — อย่าแก้เลขเพื่อให้ผ่านโดยไม่เข้าใจเหตุผล (ดู `docs/AUDIT_20261005_TH.md`)
+
+## 11. เส้นทางที่ UAT ไม่เคยทดสอบ (ครั้งแรกจะเกิดบน PROD)
+
+UAT ผ่านครบหลาย session แล้ว แต่สิ่งต่อไปนี้ยังไม่เคยรันกับ broker จริง — ต้องเห็นครั้งแรกในขั้น observe/canary ไม่ใช่ตอนมีเงินเสี่ยงเต็มจำนวน
+
+| เส้นทาง | ทำไม UAT ไม่ครอบ | ปิดด้วย |
+|---|---|---|
+| Token auth (hydrate จาก Secret Manager → `token.txt` → verify → refresh margin) | UAT ใช้ HMAC (`_check_token_enable` เป็น False); เส้นทางนี้มีแต่ unit test | PROD observe ≥ 2 session: tick ไม่เป็น `TOKEN_PREFLIGHT_BLOCKED` / `AUTH_BACKOFF`, `operational_health.token_warning` เป็น false, และหมุน token ตามหัวข้อ 7 สำเร็จอย่างน้อย 1 ครั้ง |
+| Preview บน PROD และ payload MARKET/DAY/QTY/CORE | `lego_broker_smoke` ปฏิเสธ Preview บน PROD โดยตั้งใจ | `tools/measure_fee.py --allow-prod` (ข้อสมมติ "Preview ไม่สร้าง order" มาจากดัชนีเอกสาร Webull เท่านั้น — เปิดหน้าเต็มไม่ได้; ยืนยันกับ Webull ก่อนรันครั้งแรก) |
+| Fee parser เข้ม (`lego_orders._actual_fee`) | fee UAT มีรูปแบบเดียว | canary order แรก: ตรวจ `AWAITING_BROKER_FEE` / `FEE_OVERDUE` |
+| USD buying power ของบัญชี PROD (`validate_preview_funding`) | บัญชี UAT มี buying power เสมอ | `measure_fee --side BUY` ที่ notional เท่า order จริง + cash USD พอ |
+| Whole-share (`LEGO_ALLOW_FRACTIONAL=false`) | UAT รันเศษหุ้นอย่างเดียว | UAT control run ก่อนด้วย `LEGO_ALLOW_FRACTIONAL=false` อย่างน้อย 1 session |
+| อายุ quote ≤ 60 วินาที ตอน dispatch | quote UAT หน่วง ~15 นาทีโดยดีไซน์ (median 903 s ใน audit 15 ต.ค.) | `tools.trace_audit` จาก PROD observe: ต้องไม่มี `QUOTE_NOT_REALTIME` (P1) / `QUOTE_OFTEN_STALE` (P2) |
+| cash account / settlement | ไม่มีใน UAT | ถาม Webull ก่อน |
+
+## 12. เมื่อ UAT หยุดเพราะ order ค้าง (`MANUAL_RECONCILIATION_REQUIRED` / `OPERATOR_HALT`)
+
+ห้ามแก้ RTDB ด้วยมือ, ห้ามลบ halt/fence, ห้าม Place ใหม่ด้วย ID ใหม่ — fence ผูกกับ order เดิมจนกว่า order นั้นปิดบัญชีครบ
+
+1. **หลักฐาน (read-only)**: `python ops.py status` (halt, fence, intent ที่ `needs_manual_check`), `python ops.py inspect-open-orders`, อ่าน Order Detail ของ order นั้นที่ broker;
+   ดู `cancel_last_error_code` ของ intent: `CANCEL_REFUSED_NOT_OPERABLE` (417 ชัดเจน) ต่างจาก `CANCEL_OUTCOME_UNKNOWN` / `TICK_DEFERRED` (cancel ไม่ทราบผล) ซึ่งไม่มี `cancel_refused_at`
+2. **เลือกทางตามสถานะที่ broker** (เครื่องมือกู้ต้องไม่มี worker ถือ fence: หยุด Scheduler ชั่วคราวและรอ lease หมด — เฉพาะขั้นนี้ แล้วเปิดกลับ):
+   - order **terminal** (FILLED / CANCELLED / EXPIRED): `python -m tools.resume_order_reconciliation --chain <chain> --run <run id เต็ม> --operator <ชื่อ>` (dry-run พิมพ์ `RESUME <sha>`) เทียบกับหลักฐาน แล้วรันซ้ำด้วย `--confirm "RESUME <sha>"`
+   - order **non-terminal และ cancel ถูก 417**: เติม `--expiry-proof` (UAT: PENDING + filled 0 + อายุ ≥ 30 นาที + holdings ไม่เปลี่ยน; PROD: session จบ + 1 ชม. + ไม่อยู่ใน open orders) ถ้า blocker ไม่ครบ **ห้ามฝืน**
+   - order **non-terminal และ cancel ไม่ทราบผล** (ไม่มี `cancel_refused_at`): ไม่มีเครื่องมือปล่อย (`--expiry-proof` จะบอก `cancel_not_refused`) — ส่ง order id + request id ให้ Webull แล้วรอให้ broker retire order (zombie เดิมหายภายในไม่กี่วัน) จึงกลับไปทางแรก
+3. **รอ 1–2 tick** ให้ worker อ่าน broker ซ้ำและปล่อย fence; ตรวจ `python ops.py status` (fence ว่าง, `needs_manual_check` false)
+4. **ปลด halt เป็นขั้นสุดท้าย** ใน shell ที่ตั้ง `LEGO_ACTIVE=false`: `python ops.py clear-operator-halt --halt-id <halt id เต็ม> --operator <ผู้ตรวจคนที่สอง> --reason "<เหตุผล>"` (dry-run) แล้ว `--apply`;
+   ปฏิเสธเองเมื่อ fence ยังมี order ค้าง, audit ค้าง, worker ยัง active หรือผู้ปลดเป็นคนเดียวกับผู้ตั้ง
+5. ส่ง evidence pack ให้ Webull ทุกครั้งที่เกิด (รูปแบบตาราง ดู `docs/AUDIT_20261015_TH.md` หัวข้อ "หลักฐานสำหรับ Webull")
+
+บน PROD ไม่มี cancel อัตโนมัติ (นโยบาย `hold`) และ `cancel_expire` ถูกปฏิเสธโดย config — order ค้างบน PROD กู้ได้ด้วยข้อ 2 ทางแรกหรือทางที่สองเท่านั้น และต้องมีคน

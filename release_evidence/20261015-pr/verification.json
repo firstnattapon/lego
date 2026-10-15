@@ -1,0 +1,169 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-10-15T14:34:30.951932+00:00",
+  "base_commit": "0fffe1032b3b11836ac07632e174bad25203b1ba",
+  "python": "Python 3.12.3 (the version CI runs), numpy 2.4.6 as pinned in requirements.txt",
+  "local_status": "PASS",
+  "failed_checks": [],
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "note": "Candidate hash is computed by the operator from the committed clean tree (ops.py release-plan); it changes with this PR, so UAT needs a new release before 2026-10-26T20:00Z to get these changes and a renewed window. Nothing here touched a broker, Firebase project or deployed revision; decision, ledger, fence, recovery and halt code is unchanged.",
+  "full_suite": {
+    "command": "pytest -q",
+    "junit_sha256": "1e4b723955e8199542de8c83f2ec8d365a702cabb13f51e8d7ff98978d6d2c79",
+    "counts": {
+      "tests": 1926,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1917
+    },
+    "baseline_before_change": {
+      "tests": 1871,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1862
+    },
+    "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +55 tests (test_audit_20261015.py); no existing test changed."
+  },
+  "checks": [
+    {
+      "id": "py_compile",
+      "command": "python -m py_compile *.py tools/*.py",
+      "exit_code": 0
+    },
+    {
+      "id": "shell_syntax",
+      "command": "bash -n deploy/*.sh",
+      "exit_code": 0
+    },
+    {
+      "id": "new_tests",
+      "command": "pytest -q test_audit_20261015.py",
+      "tests": {
+        "test_audit_20261015.py": 55
+      }
+    },
+    {
+      "id": "trace_audit_on_this_evidence",
+      "command": "python tools/trace_audit.py --logs ... --rtdb ... --yaml ... --repo <clean checkout of 0fffe10>",
+      "result": "0 P0 / 3 P1 (ORDER_FAILED_REASON_UNKNOWN, FEE_DRAG, ALERTING_NOT_CONFIGURED) / 3 P2 (UAT_STUCK_PENDING_RELEASED, TICKS_DEFERRED, WEBULL_SDK_ERRORS) / 2 info (QUOTE_AGE, UAT_ONLY); 0 equation, fill or ledger mismatches; candidate 07da0002... matches the clean checkout of 0fffe10"
+    },
+    {
+      "id": "readiness_audit_on_this_evidence",
+      "output": "release_evidence/20261015-pr/readiness-audit.json",
+      "result": "BLOCKED: snapshot_integrity FAIL (broker FAILED without reason), 6 PASS, 7 BLOCKED (external evidence); real_money_ready false"
+    }
+  ],
+  "mutation": {
+    "command": "scratchpad tool: apply one change to the real file, run test_audit_20261015.py, restore",
+    "suites": [
+      "test_audit_20261015.py"
+    ],
+    "total": 20,
+    "caught": 20,
+    "results": [
+      {
+        "mutation": "M1 drop OPERATOR_HALT from ACTION_EVENTS",
+        "file": "alerting.py",
+        "caught": true
+      },
+      {
+        "mutation": "M2 payload without text/content",
+        "file": "alerting.py",
+        "caught": true
+      },
+      {
+        "mutation": "M3 payload built outside the try of notify()",
+        "file": "alerting.py",
+        "caught": true
+      },
+      {
+        "mutation": "M4 drill sends without --send",
+        "file": "alerting.py",
+        "caught": true
+      },
+      {
+        "mutation": "M5 drill result carries the URL",
+        "file": "alerting.py",
+        "caught": true
+      },
+      {
+        "mutation": "M6 drill skips the HTTPS rule",
+        "file": "alerting.py",
+        "caught": true
+      },
+      {
+        "mutation": "M6b drill marks itself delivery_verified",
+        "file": "alerting.py",
+        "caught": true
+      },
+      {
+        "mutation": "M7 measure_fee skips --allow-prod",
+        "file": "tools/measure_fee.py",
+        "caught": true
+      },
+      {
+        "mutation": "M8 suggestion uses the median instead of the maximum",
+        "file": "tools/measure_fee.py",
+        "caught": true
+      },
+      {
+        "mutation": "M9 measure_fee skips the AUTO_SUBMIT check",
+        "file": "tools/measure_fee.py",
+        "caught": true
+      },
+      {
+        "mutation": "M10 measure_fee calls place_order after Preview",
+        "file": "tools/measure_fee.py",
+        "caught": true
+      },
+      {
+        "mutation": "M11 measure_fee drops the payload shape",
+        "file": "tools/measure_fee.py",
+        "caught": true
+      },
+      {
+        "mutation": "M12 fee percent rounded down",
+        "file": "tools/measure_fee.py",
+        "caught": true
+      },
+      {
+        "mutation": "M12b quantity rounded up past the notional",
+        "file": "tools/measure_fee.py",
+        "caught": true
+      },
+      {
+        "mutation": "M13 quote-age finding does not distinguish PROD",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M14 age limit 90 s instead of production's 60 s",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M15 PROD P1 decided on max instead of median",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M16 alert-drill sends by default",
+        "file": "ops.py",
+        "caught": true
+      },
+      {
+        "mutation": "M17 alert-drill accepts any secret name",
+        "file": "ops.py",
+        "caught": true
+      },
+      {
+        "mutation": "M18 D06 events not collected",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      }
+    ]
+  }
+}
