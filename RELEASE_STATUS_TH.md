@@ -1,5 +1,14 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 15 ตุลาคม: [audit UAT 2 session สะอาด](docs/AUDIT_20261015_TH.md) — revision `00045-luv` (main@0fffe10 หลัง PR #28), session 13–14 ต.ค.: 52/52 แถว, สมการ/ledger/fill/cashflow คำนวณซ้ำ 0 mismatch
+(426 tick ↔ 426 request, 26 commit event ↔ 26 แถว), 14 intents = FILLED 8 · CANCELLED 3 · EXPIRED 1 · FAILED 1 · SUPPRESSED 1; ไม่มี halt/fence ค้าง. **กฎ UAT PENDING (PR #28) ใช้จริงครั้งแรก**: SELL 1.07 ค้าง `PENDING` ถูกปล่อย `EXPIRED` ที่ +31 นาที
+ระหว่าง session โดยไม่ halt (guard ของ order ถัดไปยังไม่เห็นในข้อมูล — export จบก่อน session 15 ต.ค.). ที่เหลือ: broker `FAILED` ไม่ให้เหตุผลครั้งที่ 2 (SELL 0.38), ไม่มี alert (ERROR 1 tick ไม่ถึงใคร), fee UAT 1.074% ต่อ order,
+quote UAT หน่วง ~903 s (PROD เพดาน 60 s), cancel timeout 1 ใน 4 ครั้ง และ window จบ **2026-10-26T20:00Z**. PR นี้ไม่แตะ money path/recovery: webhook ครอบ status ที่ policy ครอบ + payload `text`/`content` + `ops.py alert-drill`;
+`tools/measure_fee.py` (Preview-only); `trace_audit` วัดอายุ quote (`QUOTE_NOT_REALTIME` เมื่อ PROD); runbook หัวข้อเส้นทางที่ UAT ไม่เคยทดสอบและขั้นตอนเมื่อ UAT หยุดเพราะ order ค้าง.
+ข้อจำกัดที่เปิดอยู่ (ไม่แก้ใน PR นี้): zombie + cancel "ไม่ทราบผล" ⇒ halt ที่ไม่มีเครื่องมือปล่อยจนกว่า broker retire order (ไม่เคยเกิด; ดู F-b ใน audit).
+สถานะ: **code-ready, live-evidence-pending (NO-GO เงินจริง)** — PR นี้เปลี่ยน candidate hash จึงต้อง `release-plan` + `continuous-uat.sh` ใหม่ **ก่อน 2026-10-26T20:00Z**; เงินจริงยังต้อง alert ถึงคนจริง (G4),
+PROD observe ≥2 session + quote real-time, token ที่คนหมุน, DB/rules PROD แยก, fee PROD ที่วัดแล้ว และการตัดสินใจเชิงเศรษฐศาสตร์ของเจ้าของ. ผล local และ evidence อยู่ใน `release_evidence/20261015-pr/`.
+
 ล่าสุด 13 ตุลาคม: [audit order UAT ค้าง PENDING *และยัง list เป็น open* ซ้ำ](docs/AUDIT_20261013_TH.md) — revision `00044-nac` (main@51462e2), session 12 ต.ค.: สมการ/ledger/lineage ตรงทั้ง 26 แถว
 (439 tick ↔ 439 request, คำนวณซ้ำด้วยเลขคณิตธรรมดา 0 mismatch) แต่ BUY 1.37 ค้าง `PENDING`, cancel ถูก 417, **เสีย 23 จาก 26 slot** แล้ว halt ข้าม session (รอบที่ 4 ใน 6 session).
 **ต้นเหตุที่ `cancel_expire` ไม่ปล่อย order ทราบแล้ว**: flight recorder (21:00Z และ 22:07Z) แสดง `order_detail`=PENDING filled 0 และ `open-orders/list` ยังคืน order นี้ ⇒ `order_still_listed_open` — UAT ไม่เอา order ที่ค้างออกจาก open list.
