@@ -50,6 +50,11 @@ IN_FLIGHT_MINUTES = 30                     # an order older than this and not te
 TICK_BUDGET_SECONDS = 45.0               # the Cloud Run request timeout the service is deployed with
 PROD_QUOTE_AGE_LIMIT_SECONDS = 60.0      # = execution_service.PROD_MAX_DISPATCH_QUOTE_AGE_SECONDS (test_audit_20261015 pins it)
 QUOTE_SLOW_SHARE = 0.05                  # PROD: more than this share of decisions on a quote older than the limit
+OUTAGE_GAP_SECONDS = 100.0               # failing ticks come ~60 s apart; one healthy tick between two of them makes ~120 s
+OUTAGE_SAME_TICK_SECONDS = 20.0          # the log line and the flight-recorder trace of one tick
+OUTAGE_MIN_SECONDS = 600.0               # shorter runs are the broker's ordinary weather (WEBULL_ERRORS names them)
+OUTAGE_PAGE_SECONDS = 1800.0             # from here a run costs whole slots: P1
+SLOT_SECONDS = 900.0                     # the 15-minute DNA slot of the deployed bundle
 
 
 # ------------------------------------------------------------------------------ small helpers
@@ -482,6 +487,7 @@ def analyze_logs(entries, *, since=None) -> dict:
             near_budget=sum(1 for t in ticks if (num(t.get("duration_ms")) or 0) > 0.7 * TICK_BUDGET_SECONDS * 1000),
             gaps=gaps[:10], gap_count=len(gaps),
             segments=_segments(ticks), error_runs=_error_runs(ticks),
+            broker_halt=_broker_halt_ticks(ticks),
             halt_since=next((t["halt_since"] for t in reversed(ticks) if t.get("halt_since")), None),
             paused=sum(1 for t in ticks if t.get("reconciliation_paused")),
             environment=counted(t.get("environment") for t in ticks if t.get("environment")),
@@ -491,7 +497,22 @@ def analyze_logs(entries, *, since=None) -> dict:
                               latency_s=spread([r["latency"] for r in http_rows], 2))
     result["webull"] = _webull_ops(ops, ticks)
     result["webull"]["sdk_errors"] = _sdk_text_errors(texts)
+    # A tick is logged when it ends; the flight recorder stamps its start. Start times line the two up.
+    failing = [_failing_tick(t["_at"] - timedelta(milliseconds=num(t.get("duration_ms")) or 0), _log_failure(t), "logs")
+               for t in ticks if t["_at"] and t.get("pipeline_status") == "TICK_DECISION_ERROR"]
+    result["failing_ticks"], result["outages"] = failing, outage_runs(failing)
     return result
+
+
+def _broker_halt_ticks(ticks):
+    """Ticks the broker-reject circuit stopped: when it began, how much it blocked, whether it still stands."""
+    halted = [t for t in ticks if t.get("business_status") == "BROKER_REJECT_HALT"]
+    if not halted:
+        return None
+    return {"ticks": len(halted), "since": iso(halted[0]["_at"]), "last": iso(halted[-1]["_at"]),
+            "slots_blocked": sum(1 for t in halted
+                                 if (t.get("decision") or {}).get("status") == "PASS_BROKER_REJECT_HALT"),
+            "standing": ticks[-1].get("business_status") == "BROKER_REJECT_HALT"}
 
 
 def _segments(ticks):
@@ -524,6 +545,71 @@ def _error_runs(ticks):
         runs.append(current)
     return [{**r, "pipeline": dict(r["pipeline"].most_common(3)), "types": dict(r["types"].most_common(3))}
             for r in runs]
+
+
+def _failing_tick(moment, failure, source):
+    return {"at": iso(moment), "op": failure.get("op"), "code": failure.get("code"),
+            "http": failure.get("http"), "source": source}
+
+
+def outage_runs(ticks) -> list[dict]:
+    """Runs of failing decision ticks: every tick of a run failed, one healthy tick ends it.
+
+    ``ticks`` come from _failing_tick, from any number of sources. The same tick seen by the log
+    and by the flight recorder (their stamps differ by seconds) counts once, and a run takes its
+    cause from the first tick that names one.
+    """
+    runs, last = [], None
+    for tick in sorted(ticks, key=lambda t: parse_ts(t["at"])):
+        moment = parse_ts(tick["at"])
+        gap = None if last is None else (moment - last).total_seconds()
+        if gap is not None and gap <= OUTAGE_SAME_TICK_SECONDS:
+            run = runs[-1]
+        elif gap is not None and gap <= OUTAGE_GAP_SECONDS:
+            run = runs[-1]
+            run["to"], run["ticks"] = tick["at"], run["ticks"] + 1
+        else:
+            run = {"from": tick["at"], "to": tick["at"], "ticks": 1, "op": None, "code": None,
+                   "http": None, "sources": []}
+            runs.append(run)
+        for key in ("op", "code", "http"):
+            run[key] = run[key] or tick.get(key)
+        run["sources"] = sorted(set(run["sources"]) | {tick["source"]})
+        last = moment
+    for run in runs:
+        run["seconds"] = round((parse_ts(run["to"]) - parse_ts(run["from"])).total_seconds())
+        run["slots"] = round(run["seconds"] / SLOT_SECONDS)
+    return runs
+
+
+def _error_record_ticks(db, since=None) -> list[dict]:
+    """One failing tick per record of webull_lego_errors.
+
+    The recorder can skip a trace (no budget left, a duplicate); this node has a record for every
+    exception a tick caught, so it fills the holes that would otherwise split one outage in two.
+    """
+    ticks = []
+    for record in (db.get("webull_lego_errors") or {}).values():
+        moment = parse_ts(record.get("at")) if isinstance(record, dict) else None
+        if moment is None or (since and moment < since):
+            continue
+        broker = record.get("broker_error") if isinstance(record.get("broker_error"), dict) else {}
+        ticks.append(_failing_tick(moment, {"op": broker.get("operation"), "code": broker.get("code"),
+                                            "http": broker.get("http_status")}, "errors"))
+    return ticks
+
+
+def _log_failure(tick) -> dict:
+    errors = [e for e in (tick.get("errors") or []) if isinstance(e, dict)]
+    broker = next((e["broker_error"] for e in errors if isinstance(e.get("broker_error"), dict)), {})
+    return {"op": broker.get("operation"), "code": broker.get("code"), "http": broker.get("http_status")}
+
+
+def _trace_failure(events) -> dict:
+    for e in events:
+        if e.get("k") == "wb" and isinstance(e.get("err"), dict):
+            return {"op": e.get("op"), "code": e["err"].get("code"), "http": e.get("st")}
+    return {}
 
 
 _SDK_EXCEPTION = re.compile(r"get_response exception\.\s*(\{.*?\})", re.S)
@@ -647,13 +733,23 @@ def analyze_orders(db, chain, as_of, run=None) -> dict:
     for v in unresolved:
         full = next((k for k in outbox if short(k) == v["run"]), None)
         v["timeline"] = _timeline(transitions.get(full)) if full else []
-    halts = []
+    halts, broker_circuits = [], []
     for scope, lock in (db.get("webull_lego_order_dispatch_locks") or {}).items():
         halt = lock.get("operator_halt") if isinstance(lock, dict) else None
         if isinstance(halt, dict) and halt.get("halted"):
             halts.append({"scope": short(scope, 14), "halt": short(halt.get("halt_id")), "reason": halt.get("reason"),
                           "set_at": halt.get("set_at"), "set_by": halt.get("set_by"),
                           "inflight": short(lock.get("inflight_run_id")), "fenced": short(lock.get("fenced_run_id"))})
+        circuit = lock.get("broker_reject_circuit") if isinstance(lock, dict) else None
+        if isinstance(circuit, dict) and (circuit.get("halted") or circuit.get("status") == "HALF_OPEN"):
+            broker_circuits.append({"scope": short(scope, 14), "halt": short(circuit.get("halt_id")),
+                                    "state": "HALTED" if circuit.get("halted") else "HALF_OPEN",
+                                    "since": iso(parse_ts(circuit.get("halted_at"))) or circuit.get("halted_at"),
+                                    "count": whole(num(circuit.get("consecutive_broker_rejects"))),
+                                    "probe_streak": whole(num(circuit.get("probe_streak")) or 0),
+                                    "probes": whole(num(circuit.get("probe_total")) or 0),
+                                    "last_probe_at": iso(parse_ts(circuit.get("last_probe_at"))),
+                                    "inflight": short(lock.get("inflight_run_id"))})
     audit = []
     for scope, events in (db.get("webull_lego_operator_halt_audit") or {}).items():
         for event in (events or {}).values():
@@ -671,7 +767,7 @@ def analyze_orders(db, chain, as_of, run=None) -> dict:
     stuck_released = [v for v in views if v["expiry_basis"] == "uat_stuck_pending"]
     return {"n": len(views), "by_status": counted(v["status"] for v in views), "unresolved": unresolved,
             "failed_without_reason": failed_without_reason, "stuck_pending_released": stuck_released,
-            "halts": halts, "halt_audit": audit}
+            "halts": halts, "broker_circuits": broker_circuits, "halt_audit": audit}
 
 
 # ------------------------------------------------------------------------ RTDB: the flight recorder
@@ -747,6 +843,10 @@ def analyze_traces(db, *, run=None, since=None, limit=60) -> dict:
                             "ms": spread(v["ms"]), "request_ids": v["request_ids"], "mutation": v["mutation"]}
                            for k, v in sorted(exchanges.items(), key=lambda kv: (not kv[1]["mutation"], -kv[1]["n"]))]
     result["errors"] = [{"where": k[0], "type": k[1], "n": n} for k, n in errors.most_common(10)]
+    failing = [_failing_tick(parse_ts(d.get("at")), _trace_failure([e for e in d.get("events") or [] if isinstance(e, dict)]),
+                             "traces")
+               for d in docs if d.get("pipe") == "TICK_DECISION_ERROR" and parse_ts(d.get("at"))]
+    result["failing_ticks"], result["outages"] = failing, outage_runs(failing)
     result["warnings"] = dict(warnings)
     result["quotes"] = _quote_age_summary(quote_ages)
     result["heartbeat"] = {short(c, 14): h for c, h in (db.get("webull_lego_heartbeat") or {}).items() if isinstance(h, dict)}
@@ -962,6 +1062,8 @@ def analyze_rtdb(db, *, diff=None, fix_c=None, as_of=None, run=None, since=None)
             "orders": analyze_orders(db, chain, as_of, run),
         })
     result["traces"] = analyze_traces(db, run=run, since=since)
+    failing = _error_record_ticks(db, since)
+    result["error_records"] = {"n": len(failing), "failing_ticks": failing, "outages": outage_runs(failing)}
     return result
 
 
@@ -1096,6 +1198,47 @@ def build_findings(report) -> list[dict]:
     for e in (logs.get("webull") or {}).get("sdk_errors", [])[:5]:
         add("P2", "WEBULL_SDK_ERRORS", f"{e['n']}× SDK error route={e['route']} code={e['code']} http={e['http']} "
             f"({e['first']} … {e['last']}) request ids {e['request_ids']}")
+    # A standing broker-reject halt and a long run of failing decisions each stop trading without
+    # moving a ledger, so neither shows up as a mismatch. 2026-10-16 the halt stood for the rest of the
+    # session and 2026-10-15 every decision failed from 14:57Z to the close; the digest named neither.
+    circuits, seen = [], set()
+    for chain in rtdb.get("chains", []):
+        for c in chain["orders"].get("broker_circuits", []):
+            if (c["scope"], c["halt"], c["state"]) not in seen:     # every chain lists every account lock
+                seen.add((c["scope"], c["halt"], c["state"]))
+                circuits.append(c)
+    halt_ticks = ticks.get("broker_halt") or {}
+    halted = [c for c in circuits if c["state"] == "HALTED"]
+    for c in halted or ([{}] if halt_ticks.get("standing") else []):
+        since = c.get("since") or halt_ticks.get("since")
+        detail = (f" (halt {c['halt']}, {c['count']} FAILED/REJECTED in a row, probes {c['probes']}, "
+                  f"failed-probe streak {c['probe_streak']})" if c else "")
+        blocked = (f"; {halt_ticks['ticks']} ticks and {halt_ticks['slots_blocked']} slots in these logs were decided and not traded"
+                   if halt_ticks else "")
+        add("P1", "BROKER_REJECT_HALT_ACTIVE",
+            f"new orders have been stopped by the broker-reject circuit since {since}{detail}{blocked}. "
+            "A UAT build with broker_circuit.try_half_open tests the broker again after a cooldown; any other build, and PROD "
+            "always, needs ops.py reset-reject-halt after a person has read the rejected orders",
+            {"halt": c.get("halt"), "last_probe_at": c.get("last_probe_at")})
+    for c in circuits:
+        if c["state"] == "HALF_OPEN":
+            add("INFO", "BROKER_REJECT_HALF_OPEN",
+                f"the broker-reject circuit of {c['scope']} is half-open (last probe {c['last_probe_at']}, probes {c['probes']}, "
+                f"failed-probe streak {c['probe_streak']}): the next order tests the broker. Nothing to reset",
+                {"halt": c.get("halt")})
+    for w in outage_runs((logs.get("failing_ticks") or []) + (traces.get("failing_ticks") or [])
+                         + ((rtdb.get("error_records") or {}).get("failing_ticks") or [])):
+        if w["seconds"] >= OUTAGE_MIN_SECONDS:
+            cause = (f"op={w['op']} code={w['code']} http={w['http']}. The system fails closed (no order without a fresh read "
+                     "of holdings) and resumes by itself once the broker answers; send the request ids of the first and the last "
+                     "failure to Webull" if w["code"] else
+                     "no broker error is attached to these ticks, so this is not the broker's weather: read webull_lego_errors")
+            add("P1" if w["seconds"] >= OUTAGE_PAGE_SECONDS else "P2", "DECISION_OUTAGE",
+                f"{w['ticks']} decision ticks failed in a row {w['from']} → {w['to']} ({round(w['seconds'] / 60)} min, about "
+                f"{w['slots']} slots with no decision): {cause}"
+                + ("" if (deploy or {}).get("alert_webhook_configured")
+                   else "; no ALERT_WEBHOOK_* is configured, so nobody was told"),
+                {"sources": w["sources"]})
     equations = traces.get("equations") or {}
     if equations.get("mismatch", {}).get("count"):
         add("P0", "TRACE_EQUATION_MISMATCH", f"{equations['mismatch']['count']} recorded equations do not recompute; "
@@ -1185,6 +1328,13 @@ def render(report: dict) -> str:
                        + (" …" if len(t["segments"]) > 14 else ""))
             for r in t["error_runs"][:6]:
                 out.append(f"  error run {r['from']} → {r['to']} ×{r['n']} pipeline {_kv(r['pipeline'])} types {_kv(r['types'])}")
+            bh = t.get("broker_halt")
+            if bh:
+                out.append(f"  broker-reject halt: {bh['ticks']} ticks {bh['since']} → {bh['last']}, {bh['slots_blocked']} slots decided "
+                           f"and not traded; {'STILL STANDING at the last tick' if bh['standing'] else 'cleared before the last tick'}")
+            for w in logs.get("outages", [])[:6]:
+                out.append(f"  decision outage {w['from']} → {w['to']} ×{w['ticks']} ({w['seconds']} s, ~{w['slots']} slots) "
+                           f"op={w['op']} code={w['code']} http={w['http']}")
         if h.get("n"):
             out.append(f"  http requests {h['n']}: {_kv(h.get('by_status', {}))}; latency s {h.get('latency_s')}")
         out.append("")
@@ -1246,6 +1396,10 @@ def render(report: dict) -> str:
                     out.append(f"    {step['at']} r{step['rev']} {step['status']} broker={step['broker_status']} {step['cancel_error'] or ''}")
             for h in orders["halts"]:
                 out.append(f"  HALT {h['halt']} {h['reason']} set {h['set_at']} by {h['set_by']} (inflight {h['inflight']}, fenced {h['fenced']})")
+            for b in orders.get("broker_circuits", []):
+                out.append(f"  BROKER-REJECT {'HALT' if b['state'] == 'HALTED' else 'HALF-OPEN'} {b['halt']} since {b['since']} "
+                           f"({b['count']} FAILED/REJECTED; probes {b['probes']}, failed-probe streak {b['probe_streak']}, "
+                           f"last probe {b['last_probe_at']}; inflight {b['inflight']})")
             for e in orders["halt_audit"][-4:]:
                 out.append(f"    audit {e['at']} {e['action']} {e['operator']} {e['reason']}")
         tr = rtdb["traces"]
@@ -1271,6 +1425,9 @@ def render(report: dict) -> str:
                        f"{' MUTATION' if e['mutation'] else ''}")
         for x in tr["transitions"][-10:]:
             out.append(f"  S01 {x['at']} {x['run']} {x['from']} → {x['to']} {x['changed'] or ''}")
+        for w in tr.get("outages", [])[:6]:
+            out.append(f"  decision outage {w['from']} → {w['to']} ×{w['ticks']} ({w['seconds']} s, ~{w['slots']} slots) "
+                       f"op={w['op']} code={w['code']} http={w['http']}")
         if tr["errors"]:
             out.append("  caught errors: " + ", ".join(f"{e['where']}:{e['type']}×{e['n']}" for e in tr["errors"]))
         if tr["warnings"]:

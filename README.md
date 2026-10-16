@@ -1,5 +1,14 @@
 # LEGO PRINCIPAL v2
 
+16 October audit: [a standing broker-reject halt, a five-hour broker outage and the real-money gates](docs/AUDIT_20261016_TH.md).
+Three UBER SELLs in a row came back `FAILED` with no reason and the sticky `BROKER_REJECT_HALT` then
+stopped UAT for the rest of the session. On UAT only, the halt now lets one ordinary READY order through
+after a cooldown (900 s, doubling per failed probe, capped at four hours): a reject brings the halt back
+at once, a fill clears it. PROD never probes by itself, and nothing configurable switches that on.
+`tools/trace_audit.py` now reports a standing halt and long runs of failing decisions. Decision, ledger,
+fence and recovery are unchanged. Live acceptance remains **NO-GO**: alert delivery, real-time PROD quotes,
+a measured PROD fee and the owner's decision are still open ([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)).
+
 15 October audit: [two clean UAT sessions, remaining alert and real-money gates](docs/AUDIT_20261015_TH.md).
 Decision, ledger, fence and recovery are unchanged. Adds webhook coverage for every status the
 monitoring health policy pages on, `python ops.py alert-drill` (dry-run unless `--send`),

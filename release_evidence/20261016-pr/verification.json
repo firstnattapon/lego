@@ -1,0 +1,364 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-10-16T16:28:05.503699+00:00",
+  "base_commit": "11ecb6bfae9be76626fa7b95bb4d39229339c2cd",
+  "python": "Python 3.12.3 (the version CI runs), numpy 2.4.6 as pinned in requirements.txt",
+  "local_status": "PASS",
+  "failed_checks": [],
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "note": "Candidate hash is computed by the operator from the committed clean tree (ops.py release-plan); it changes with this PR, so UAT needs a new release before 2026-10-29T20:00Z to get these changes. Nothing here touched a broker, Firebase project or deployed revision. Decision, ledger, fence and recovery code is unchanged; PROD behaviour is unchanged (the half-open path refuses every environment but the exact string UAT).",
+  "full_suite": {
+    "command": "pytest -q",
+    "junit_sha256": "985c5dd9e7d5e0229d98aa0f673195046730d777c86dee0e0e4e7ff09b2e1f1d",
+    "counts": {
+      "tests": 2012,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 2003
+    },
+    "baseline_before_change": {
+      "tests": 1926,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 1917
+    },
+    "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +86 tests (test_audit_20261016.py); no existing test changed."
+  },
+  "checks": [
+    {
+      "id": "py_compile",
+      "command": "python -m py_compile *.py tools/*.py",
+      "exit_code": 0
+    },
+    {
+      "id": "shell_syntax",
+      "command": "bash -n deploy/*.sh",
+      "exit_code": 0
+    },
+    {
+      "id": "new_tests",
+      "command": "pytest -q test_audit_20261016.py",
+      "tests": {
+        "test_audit_20261016.py": 86
+      }
+    },
+    {
+      "id": "real_fence_replay",
+      "command": "scratch test (not committed): the circuit document of the halted account from the RTDB export, in the repo's in-memory RTDB, through try_half_open",
+      "result": "899 s after halted_at: refused; 900 s: HALF_OPEN with counter 2 and the original halt id; PROD three days after: refused"
+    },
+    {
+      "id": "trace_audit_on_this_evidence",
+      "command": "python tools/trace_audit.py --logs ... --rtdb ... --yaml ... --repo <clean checkout of 11ecb6b>",
+      "result": "0 P0 / 6 P1 (ORDER_FAILED_REASON_UNKNOWN x3, ALERTING_NOT_CONFIGURED, BROKER_REJECT_HALT_ACTIVE, DECISION_OUTAGE: 304 ticks 2026-10-15T14:57Z..19:59Z, about 20 slots) / 3 P2 (WEBULL_ERRORS, WEBULL_SDK_ERRORS x2) / 2 info (QUOTE_AGE, UAT_ONLY); 0 equation, row, fill or ledger mismatches; candidate dd90b7d1... matches the clean checkout of 11ecb6b. The same tool before this change reported 4 P1 / 3 P2 / 2 info on the same files (no halt, no outage)"
+    },
+    {
+      "id": "readiness_audit_on_this_evidence",
+      "output": "release_evidence/20261016-pr/readiness-audit.json",
+      "result": "BLOCKED: snapshot_integrity FAIL (3 broker FAILED without reason), request_tick_pairing FAIL 94/95 (export boundary: first request log 13:31:04Z, first tick began about 13:30:05Z), 5 PASS, 7 BLOCKED (external evidence); real_money_ready false"
+    }
+  ],
+  "mutation": {
+    "command": "scratchpad tool: apply one textual change to a scratch copy of the repo, run test_audit_20261016.py test_trace_audit.py test_broker_reject_safety.py test_flight_recorder.py, restore",
+    "suites": [
+      "test_audit_20261016.py",
+      "test_trace_audit.py",
+      "test_broker_reject_safety.py",
+      "test_flight_recorder.py"
+    ],
+    "total": 56,
+    "caught": 56,
+    "by_file": {
+      "broker_circuit.py": 25,
+      "decision_service.py": 4,
+      "flight_recorder.py": 2,
+      "tools/trace_audit.py": 25
+    },
+    "history": "the first sweep of this list left 4 changes uncaught (loose environment spelling, a halted flag that is not true, the loser of a race returning the winner's circuit, the cause of an outage taken from the last tick instead of the first) and one pattern that did not match; tests were added for each and the whole list was run again",
+    "results": [
+      {
+        "mutation": "M1 probe env includes PROD",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M2 probe base 800",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M3 probe max 28800",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M4 cooldown linear",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M5 cooldown boundary gt",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M6 not halted still probes",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M7 inflight ignored",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M8 operator halt ignored",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M9 audit pending ignored",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M10 live lease ignored",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M11 unreadable lease allowed",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M12 bad halted at allowed",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M13 naive now allowed",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M14 counter zero on open",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M15 foreign open returned",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M16 probe total not counted",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M17 probing never",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M18 fill keeps streak",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M19 fill keeps status",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M20 fail streak not counted",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M21 reset keeps streak",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M22 reset accepts half open",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M23 probe env normalised",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M24 probe on pass slot",
+        "file": "decision_service.py",
+        "caught": true
+      },
+      {
+        "mutation": "M25 probe in observe mode",
+        "file": "decision_service.py",
+        "caught": true
+      },
+      {
+        "mutation": "M26 probe env hardwired uat",
+        "file": "decision_service.py",
+        "caught": true
+      },
+      {
+        "mutation": "M27 probe result dropped",
+        "file": "decision_service.py",
+        "caught": true
+      },
+      {
+        "mutation": "M28 recorder drops status",
+        "file": "flight_recorder.py",
+        "caught": true
+      },
+      {
+        "mutation": "M29 recorder drops streak",
+        "file": "flight_recorder.py",
+        "caught": true
+      },
+      {
+        "mutation": "M30 outage min 300",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M31 outage page 3600",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M32 outage gap 50",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M33 outage gap 130",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M34 same tick zero",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M35 same tick 70",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M36 cause never backfilled",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M37 cause last wins",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M38 slots per minute",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M39 sources not merged",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M40 since ignored for errors",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M41 error records unused",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M42 traces unused",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M43 outage always p2",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M44 outage always p1",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M45 halt seen dedupe off",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M46 log only halt ignored",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M47 halt always standing",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M48 half open reported as halt",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M49 half open not reported",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M50 no webhook note dropped",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M51 tx recheck removed",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M52 precheck removed",
+        "file": "broker_circuit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M53 half open state always halted",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M54 half open not listed",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M55 probe streak not shown",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      },
+      {
+        "mutation": "M56 outage ticks not counted",
+        "file": "tools/trace_audit.py",
+        "caught": true
+      }
+    ]
+  }
+}

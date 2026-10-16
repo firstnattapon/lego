@@ -1,5 +1,15 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 16 ตุลาคม: [audit halt ที่ค้างหลัง FAILED 3 ใบติด](docs/AUDIT_20261016_TH.md) — revision `00047-qix` (main@11ecb6b หลัง PR #29), log 16 ต.ค. 13:30–15:04Z: 95 tick ทุก 60.0 วินาที ไม่มีช่องว่าง,
+แถว 728–734 ต่อเนื่อง, สมการ/ledger/lineage 0 mismatch, ไม่มี fill, candidate `dd90b7d1…` ตรงกับ checkout สะอาดของ `11ecb6b`. **UAT หยุดเทรดที่เหลือของวัน**: SELL UBER 3 ใบติด (13:45 / 14:00 / 14:22Z) ถูก broker ทำ `FAILED`
+โดยไม่ให้เหตุผล (Preview/Place/Detail ตอบ 200) → `BROKER_REJECT_HALT` (halt `12ae3645…`) ที่ไม่หายเอง ≈ 22 จาก 26 slot; ก่อนหน้านั้น `positions` 417 เป็นคลื่นฝั่ง broker (15 ต.ค. 14:57→19:59Z ≈ 20 slot, 16 ต.ค. 7 tick)
+และไม่มี alert ถึงใคร. **แก้ใน source (UAT เท่านั้น)**: หลัง cooldown 900 s (×2 ต่อ probe ที่พลาด, เพดาน 4 ชั่วโมง) ปล่อย order ที่ READY อยู่แล้ว**ใบเดียว**ผ่าน halt — FAILED ⇒ halt กลับทันที, fill ⇒ เคลียร์; PROD ไม่เปลี่ยน (ต้องใช้คน);
+`tools/trace_audit.py` เห็น halt ที่ค้างและ outage ของ decision; flight recorder บันทึกสถานะ circuit. ไม่แตะสูตรตัดสินใจ/ledger/fence/recovery/`max_mutations=1`. เทสต์ 2,003 passed / 9 skipped (+86), mutation จับ 56/56.
+ข้อจำกัดที่เปิดอยู่ (ไม่แก้ใน PR นี้): zombie + cancel "ไม่ทราบผล" (F-b); สาเหตุ FAILED และ `positions` 417 ฝั่ง Webull ไม่ทราบ (evidence pack อยู่ใน audit).
+สถานะ: **code-ready, live-evidence-pending (NO-GO เงินจริง)** — halt ของวันนี้เคลียร์ได้ทันทีด้วย `ops.py reset-reject-halt` (ข้อ 0 ใน audit); PR นี้เปลี่ยน candidate hash จึงต้อง `release-plan` + `continuous-uat.sh` ใหม่ **ก่อน 2026-10-29T20:00Z**;
+เงินจริงยังต้อง alert ถึงคนจริง (G4), PROD observe ≥2 session + quote real-time, token ที่คนหมุน, DB/rules PROD แยก, fee PROD ที่วัดแล้ว และการตัดสินใจเชิงเศรษฐศาสตร์ของเจ้าของ (DIFF=25 ที่ fee 1.07% ≈ −547 USD/ปี ต่อ FIX_C 10,000 ในแบบจำลอง).
+ผล local และ evidence อยู่ใน `release_evidence/20261016-pr/`.
+
 ล่าสุด 15 ตุลาคม: [audit UAT 2 session สะอาด](docs/AUDIT_20261015_TH.md) — revision `00045-luv` (main@0fffe10 หลัง PR #28), session 13–14 ต.ค.: 52/52 แถว, สมการ/ledger/fill/cashflow คำนวณซ้ำ 0 mismatch
 (426 tick ↔ 426 request, 26 commit event ↔ 26 แถว), 14 intents = FILLED 8 · CANCELLED 3 · EXPIRED 1 · FAILED 1 · SUPPRESSED 1; ไม่มี halt/fence ค้าง. **กฎ UAT PENDING (PR #28) ใช้จริงครั้งแรก**: SELL 1.07 ค้าง `PENDING` ถูกปล่อย `EXPIRED` ที่ +31 นาที
 ระหว่าง session โดยไม่ halt (guard ของ order ถัดไปยังไม่เห็นในข้อมูล — export จบก่อน session 15 ต.ค.). ที่เหลือ: broker `FAILED` ไม่ให้เหตุผลครั้งที่ 2 (SELL 0.38), ไม่มี alert (ERROR 1 tick ไม่ถึงใคร), fee UAT 1.074% ต่อ order,

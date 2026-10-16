@@ -456,6 +456,8 @@ def decision_gates(auto, outbox_blocked, circuit, fence, stop, preflight, row) -
          circuit_halted=pick(circuit, "halted").get("halted"),
          consecutive_rejects=pick(circuit, "consecutive_broker_rejects").get(
              "consecutive_broker_rejects"),
+         circuit_status=pick(circuit, "status").get("status"),
+         probe_streak=pick(circuit, "probe_streak").get("probe_streak"),
          inflight_run_id=pick(fence, "inflight_run_id").get("inflight_run_id"),
          operator_halt=bool(pick(stop, "halted").get("halted")),
          preflight_ok=pick(preflight, "ok").get("ok"),

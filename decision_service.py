@@ -346,6 +346,20 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
 
         import broker_circuit
         circuit = broker_circuit.status(runtime_identity, cfg.symbol)
+        if (auto and circuit.get("halted") and runtime is not None
+                and row["สถานะ"] in (READY_BUY, READY_SELL)):
+            # UAT only: the circuit refuses every other environment, and anything still cooling
+            # down. A READY slot is the one order that may test whether the broker has recovered;
+            # a PASS slot does not spend the chance. From here the order is an ordinary intent.
+            probe = broker_circuit.try_half_open(
+                runtime_identity, cfg.symbol,
+                environment=runtime.deployment.environment, now=decision_time)
+            if probe:
+                circuit = probe
+                _record_warning("BROKER_REJECT_AUTO_PROBE",
+                                "UAT cooldown over: one order may test the broker",
+                                {"symbol": cfg.symbol, "halt_id": probe.get("probe_of_halt_id"),
+                                 "probe_total": probe.get("probe_total")})
         if auto and circuit.get("halted"):
             auto = False
             outbox_blocked = broker_circuit.HALT
