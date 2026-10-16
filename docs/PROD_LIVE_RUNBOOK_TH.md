@@ -128,6 +128,7 @@ python tools/verify_deployment.py --service private-service.json --scheduler pri
 
 symbol เดียว, whole shares, caps ต่ำ, window สั้น, เฝ้าหลาย session แรกด้วยตัวเอง กำหนดเงื่อนไขหยุดล่วงหน้า:
 `needs_manual_check`, `order_contract_anomaly`, `OPEN_ORDER_BLOCKED` ที่ไม่หาย, holdings ใน state ต่างจาก broker, broker reject circuit เปิด
+(บน PROD ไม่มีการลองเอง — halt ค้างจนกว่าคนจะอ่าน order ที่ถูกปฏิเสธแล้วเคลียร์ ดูข้อ 13)
 ครบ controlled scope แล้วหยุดเพิ่ม exposure จนกว่าผลรับรองและ authorization ใหม่ครอบคลุมการทำต่อ
 
 ## 6. Kill switch (หยุด order ใหม่ — ไม่ลบอะไร)
@@ -208,3 +209,23 @@ UAT ผ่านครบหลาย session แล้ว แต่สิ่ง
 5. ส่ง evidence pack ให้ Webull ทุกครั้งที่เกิด (รูปแบบตาราง ดู `docs/AUDIT_20261015_TH.md` หัวข้อ "หลักฐานสำหรับ Webull")
 
 บน PROD ไม่มี cancel อัตโนมัติ (นโยบาย `hold`) และ `cancel_expire` ถูกปฏิเสธโดย config — order ค้างบน PROD กู้ได้ด้วยข้อ 2 ทางแรกหรือทางที่สองเท่านั้น และต้องมีคน
+
+## 13. เมื่อหยุดเพราะ broker reject circuit (`BROKER_REJECT_HALT`)
+
+กลไก: broker ตอบ `FAILED` / `REJECTED` ติดกัน 3 order ⇒ circuit ตัด (`halted`, `halt_id` = run ใบที่ 3, `halted_at`) และไม่ส่ง order ใหม่ (`PASS_BROKER_REJECT_HALT`) — fence, ledger และ holdings ไม่ขยับ.
+เหตุการณ์จริง 16 ต.ค. (SELL UBER 3 ใบ `FAILED` ไม่มีเหตุผล): `docs/AUDIT_20261016_TH.md`
+
+| environment | เกิดอะไรต่อ |
+|---|---|
+| **UAT** | หลัง cooldown 900 s นับจาก `halted_at` (×2 ต่อ probe ที่พลาด: 900 → 1,800 → 3,600 → 7,200 → 14,400 s เพดาน) ที่ slot `READY_BUY`/`READY_SELL` แรก ระบบปล่อย order ปกติ **ใบเดียว** เป็น probe: `FAILED`/`REJECTED` ⇒ halt กลับทันที (`halt_id` ใหม่, `probe_streak`+1); fill ⇒ circuit กลับ `READY`. ต้องไม่มี order ค้าง, operator halt หรือ lease — ไม่ครบ halt คงอยู่. warning `BROKER_REJECT_AUTO_PROBE` บันทึกทุกครั้งที่เปิด |
+| **PROD** | **ไม่มีการลองเอง** (ไม่มีตัวแปร environment ใดเปิดได้) — halt ค้างจนกว่าคนจะอ่าน order ที่ถูกปฏิเสธแล้วเคลียร์. นี่คือเงื่อนไขหยุด canary (ข้อ 5) ไม่ใช่สิ่งที่รอให้หายเอง |
+
+1. **หลักฐาน (read-only)**: `python -m tools.trace_audit --logs LOGS.json --rtdb EXPORT.json --yaml YAML.txt` — `BROKER_REJECT_HALT_ACTIVE` บอก halt id, ตั้งแต่เมื่อไร, tick/slot ที่เสีย, จำนวน probe และ failed-probe streak;
+   `python ops.py status`; อ่าน Order Detail ของ order ที่ล้มทุกใบ เก็บ broker order id + request id ของ Preview/Place/Order Detail ส่งให้ Webull (รูปแบบตาราง ดู "หลักฐานสำหรับ Webull" ใน `docs/AUDIT_20261016_TH.md`)
+2. ตรวจว่า fence ว่าง (ไม่มี order ค้าง, ไม่มี lease) และ holdings/open orders ที่ broker ตรงกับ state; ถ้ามี order ค้างให้ทำข้อ 12 ก่อน
+3. **เคลียร์** (ไม่ต้องหยุดหรือ redeploy service; คำสั่งไม่เปิดการเทรดให้เอง) ใน shell ที่ตั้ง env เดียวกับ service แต่ `LEGO_ACTIVE=false`:
+   `LEGO_ACTIVE=false python ops.py reset-reject-halt --halt-id <halt id เต็ม> --reason "<เหตุผล>"` (dry-run) แล้วเติม `--apply`.
+   ปฏิเสธเองเมื่อ halt เปลี่ยน/หาย, fence ยังมี order ค้าง หรือ worker ถือ lease; circuit ที่เป็น `HALF_OPEN` ตอบว่า "nothing to reset" (ถูกต้อง: order ถัดไปคือ probe)
+4. หลัง reset ตัวนับกลับเป็น 0 — FAILED ติดกันอีก 3 ใบจะ halt ใหม่. ถ้า `failed-probe streak` ≥ 2 หรือ halt ซ้ำภายในวันเดียว อย่า reset ซ้ำ ๆ: หยุดรอ Webull
+
+ห้ามแก้ `broker_reject_circuit` ใน RTDB ด้วยมือ และห้ามใช้ reset เพื่อข้าม order ที่ยังค้างที่ broker (ใช้ข้อ 12)
