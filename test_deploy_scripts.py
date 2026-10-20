@@ -137,11 +137,12 @@ def test_continuous_uat_script_agrees_with_the_policy_file():
         return re.search(rf'{name}_OVERRIDE="\$\{{{name}_OVERRIDE:-([^}}]*)\}}"', script).group(1)
 
     for name in ("WEBULL_ENV", "LEGO_MODE", "LEGO_ACTIVE", "LEGO_SYMBOL", "LEGO_FIX_C", "LEGO_DIFF",
-                 "LEGO_ALLOW_FRACTIONAL", "LEGO_SESSION_KEY_MODE", "LEGO_STALE_ORDER_ACTION",
+                 "LEGO_SESSION_KEY_MODE", "LEGO_STALE_ORDER_ACTION",
                  "LEGO_STALE_ORDER_SECONDS", "LEGO_CANCEL_CONFIRM_GRACE_SECONDS"):
         assert exported(name) == policy[name], name
+    # LEGO_ALLOW_FRACTIONAL moved here 2026-10-20: the whole-share control run needs it overridable.
     for name in ("LEGO_DNA_BUNDLE", "LEGO_MAX_SESSION_ORDERS", "LEGO_MAX_ORDER_QUANTITY",
-                 "LEGO_MAX_ORDER_NOTIONAL_USD"):
+                 "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_ALLOW_FRACTIONAL"):
         assert defaulted(name) == policy[name], name
 
 

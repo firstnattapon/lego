@@ -1,0 +1,97 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-10-20T09:25:49.979235+00:00",
+  "base_commit": "e039b48166f3c06dbf6778f488b6da72d1e56415",
+  "python": "Python 3.12.3 (the version CI runs), numpy 2.4.6 as pinned in requirements.txt",
+  "local_status": "PASS",
+  "failed_checks": [],
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "note": "Candidate hash is computed by the operator from the committed clean tree (ops.py release-plan); it changes with this PR, so UAT needs a new release before 2026-10-30T20:00Z to get these changes. Nothing here touched a broker, Firebase project or deployed revision. Decision, ledger, fence and recovery code is unchanged; PROD behaviour is unchanged (the half-open path still refuses every environment but the exact string UAT).",
+  "full_suite": {
+    "command": "pytest -q",
+    "junit_sha256": "b3a16be528637aa5de9e04fb77b327793caacae21030ac90fa68455d4a12c02b",
+    "counts": {
+      "tests": 2064,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 2055
+    },
+    "baseline_before_change": {
+      "tests": 2012,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 2003
+    },
+    "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +52 tests (test_audit_20261020.py); 3 existing tests changed on purpose because they pinned the 12 s recorder floor (2) or the hard-coded fractional flag (1): test_audit_20261010::test_a_routine_tick_with_the_same_budget_is_still_skipped, test_flight_recorder::test_a_tick_with_little_budget_left_does_not_write, test_deploy_scripts::test_continuous_uat_script_agrees_with_the_policy_file."
+  },
+  "mutation": {
+    "mutants": 29,
+    "killed": 29,
+    "survivors": [],
+    "by_file": {
+      "flight_recorder.py": 10,
+      "observability.py": 7,
+      "main.py": 2,
+      "tools/trace_audit.py": 8,
+      "deploy/continuous-uat.sh": 2
+    },
+    "note": "each mutant applied to a copy of the tree and test_audit_20261020.py run; first sweep: 28/29, the survivor (main.py reported halted_at for a circuit that is not halted) got its own test, then 29/29"
+  },
+  "checks": [
+    {
+      "id": "py_compile",
+      "command": "python -m py_compile *.py tools/*.py",
+      "exit_code": 0
+    },
+    {
+      "id": "shell_syntax",
+      "command": "bash -n deploy/*.sh",
+      "exit_code": 0
+    },
+    {
+      "id": "new_tests",
+      "command": "pytest -q test_audit_20261020.py",
+      "tests": {
+        "test_audit_20261020.py": 52
+      },
+      "result": "29 of the 51 first-draft tests failed on main@e039b48 (the positive cases), 22 passed (guards that must hold before and after); all pass after the change"
+    },
+    {
+      "id": "independent_ledger_recompute",
+      "command": "plain Python on webull_lego_rows, no repo code",
+      "result": "26/26 rows: V=H*P, gap=V-FIX_C, R=FIX_C*ln(P/P0), E=A-R, qty=floor(gap/P at 2 places) when gap>DIFF else 0; 0 failures; holdings 145.1328, A=0, dA=0 on every row"
+    },
+    {
+      "id": "reproduce_s1_before_after",
+      "command": "scratch test (not committed): fr.finish with the remaining budget read from the Cloud Run log",
+      "result": "before: remaining 1.85 / 2.64 / 11.58 s (TICK_DEFERRED) and 3.86 / 2.81 / 6.20 s (broker outage) skipped=budget, only the 15.66 s tick written (6 of 7 dropped, matching skipped_budget=6 and the one outage trace in the export); after: 7 of 7 written"
+    },
+    {
+      "id": "replay_s2_halt_ticks",
+      "command": "the 391 BROKER_REJECT_HALT ticks of the log through observability.emit_tick with halted_at taken from the order_audit timeline (14:15:30, 14:46:26, 15:31:20, 16:45:24, 19:00:19Z)",
+      "result": "severity ERROR 391 -> 32, INFO 359; ERROR ticks per halt episode 4 / 4 / 7 / 10 / 7"
+    },
+    {
+      "id": "trace_audit_on_this_evidence",
+      "command": "python tools/trace_audit.py --logs ... --rtdb ... --yaml ... --repo <clean checkout of e039b48>",
+      "result": "after: 0 P0 / 9 P1 / 8 P2 / 3 info; new findings ['LOG_EXPORT_SHORT', 'RECORDER_SKIPPED_TICKS', 'TRACE_GAP_ROWS']: TRACE_GAP_ROWS = v2, v6, v9 (steps 755 / 759 / 762), RECORDER_SKIPPED_TICKS = 6, LOG_EXPORT_SHORT = 6.0 h; before this change the same files gave 0 P0 / 9 P1 / 6 P2 / 2 info; 0 equation, row, fill or ledger mismatches; candidate eb7495ec... matches the clean checkout of e039b48 (backend_only)"
+    },
+    {
+      "id": "readiness_audit_on_this_evidence",
+      "output": "release_evidence/20261020-pr/readiness-audit.json",
+      "result": "BLOCKED: 6 PASS, 1 FAIL (snapshot_integrity: 7 broker FAILED without reason), 7 BLOCKED (external operational evidence); real_money_ready false"
+    },
+    {
+      "id": "pip_audit",
+      "command": "pip-audit -r requirements.txt",
+      "result": "No known vulnerabilities found (2026-10-20)"
+    },
+    {
+      "id": "ci_on_base",
+      "result": "GitHub Actions CI run 38932991785 on main@e039b48: success"
+    }
+  ]
+}

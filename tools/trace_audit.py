@@ -55,6 +55,8 @@ OUTAGE_SAME_TICK_SECONDS = 20.0          # the log line and the flight-recorder 
 OUTAGE_MIN_SECONDS = 600.0               # shorter runs are the broker's ordinary weather (WEBULL_ERRORS names them)
 OUTAGE_PAGE_SECONDS = 1800.0             # from here a run costs whole slots: P1
 SLOT_SECONDS = 900.0                     # the 15-minute DNA slot of the deployed bundle
+LOG_EXPORT_SHORT_SECONDS = 600.0         # the log export ends this long before the database's last heartbeat
+_D08_IN_PATH = re.compile(r"\bD08\b")    # flight_recorder.NODES: the decision equation node of the tick path
 
 
 # ------------------------------------------------------------------------------ small helpers
@@ -796,9 +798,13 @@ def analyze_traces(db, *, run=None, since=None, limit=60) -> dict:
                 or any(str(e.get("run") or (e.get("x") or {}).get("run_id") or "").startswith(run[:8])
                        for e in d.get("events") or [] if isinstance(e, dict))]
     result = {"n": len(docs), "ticks": [], "exchanges": [], "proof": [], "errors": [], "warnings": {},
-              "transitions": [], "equations": {"checked": 0, "mismatch": _bucket()}, "heartbeat": {}}
+              "transitions": [], "equations": {"checked": 0, "mismatch": _bucket()}, "heartbeat": {},
+              "first_at": docs[0].get("at") if docs else None, "equation_runs": []}
     exchanges, errors, warnings, quote_ages = {}, Counter(), Counter(), []
+    equation_runs = set()
     for doc in docs:
+        if _D08_IN_PATH.search(str(doc.get("path") or "")):      # the tick recorded its decision equation
+            equation_runs.update(str(r) for r in doc.get("runs") or [])
         base = parse_ts(doc.get("at"))
         events = [e for e in doc.get("events") or [] if isinstance(e, dict)]
         result["ticks"].append({"at": doc.get("at"), "tick": short(doc.get("tick")), "http": doc.get("http"),
@@ -850,8 +856,31 @@ def analyze_traces(db, *, run=None, since=None, limit=60) -> dict:
     result["warnings"] = dict(warnings)
     result["quotes"] = _quote_age_summary(quote_ages)
     result["heartbeat"] = {short(c, 14): h for c, h in (db.get("webull_lego_heartbeat") or {}).items() if isinstance(h, dict)}
+    result["equation_runs"] = sorted(equation_runs)
     result["ticks"] = result["ticks"][-limit:]
     return result
+
+
+def _trace_gap(rows, traces) -> dict | None:
+    """Committed rows with no recorded decision equation (D08) although the flight recorder was running.
+
+    2026-10-19 the recorder dropped every tick that ended with little budget left: 23 of 26 rows had an
+    equation. Only rows committed since the first trace of the export count (older ones may predate the
+    recorder or its retention). None = nothing to compare: no traces, or a build that records no equations.
+    """
+    recorded, first = set(traces.get("equation_runs") or ()), parse_ts(traces.get("first_at"))
+    if not recorded or first is None:
+        return None
+    missing = []
+    for row in rows:
+        committed = parse_ts(row.get(COL["time"]))
+        if committed is None or committed < first or row.get("committed") is False:
+            continue
+        if str(row.get("run_id")) not in recorded:
+            missing.append({"version": row.get("version"), "step": row.get(COL["step"]),
+                            "slot": row.get("market_slot_id"), "at": row.get(COL["time"]), "run": short(row.get("run_id"))})
+    missing.sort(key=lambda m: (m["version"] is None, m["version"] or 0))
+    return {"since": iso(first), "missing": missing}
 
 
 def _check_equation_event(event, report):
@@ -1039,6 +1068,7 @@ def git_state(repo: Path):
 def analyze_rtdb(db, *, diff=None, fix_c=None, as_of=None, run=None, since=None) -> dict:
     result = {"collections": {k: (len(v) if isinstance(v, dict) else 1) for k, v in sorted(db.items())},
               "chains": []}
+    traces = analyze_traces(db, run=run, since=since)
     for chain, state in sorted((db.get("webull_lego_state") or {}).items()):
         if not isinstance(state, dict):
             continue
@@ -1060,8 +1090,10 @@ def analyze_rtdb(db, *, diff=None, fix_c=None, as_of=None, run=None, since=None)
             "rows": rows_report, "fills": fills_report, "ledger": check_ledger(state, realized, fills_report),
             "economics": economics(realized, fix_c=fixed, sessions=sessions or None),
             "orders": analyze_orders(db, chain, as_of, run),
+            # A single-order or time-boxed view sees only some traces: it cannot say which rows lack one.
+            "trace_gap": None if (run or since) else _trace_gap(rows, traces),
         })
-    result["traces"] = analyze_traces(db, run=run, since=since)
+    result["traces"] = traces
     failing = _error_record_ticks(db, since)
     result["error_records"] = {"n": len(failing), "failing_ticks": failing, "outages": outage_runs(failing)}
     return result
@@ -1158,6 +1190,18 @@ def build_findings(report) -> list[dict]:
             add("P1", "ROWS_NOT_CONTIGUOUS", f"row versions/steps are not contiguous: {rows_report.get('steps', {}).get('gaps')}")
         if rows_report.get("uncommitted"):
             add("P1", "ROWS_UNCOMMITTED", f"{rows_report['uncommitted']} rows are not committed")
+        gap = chain.get("trace_gap")
+        if gap and gap["missing"]:
+            labels = [f"v{m['version']}" + (f" ({m['slot']})" if m["slot"] else "") for m in gap["missing"]]
+            more = f" and {len(labels) - 6} more" if len(labels) > 6 else ""
+            add("P2", "TRACE_GAP_ROWS",
+                f"{len(labels)} committed rows have no recorded decision equation although the flight recorder was running "
+                f"since {gap['since']}: {', '.join(labels[:6])}{more}. The row, its Cloud Run log line and the error/warning "
+                "records still hold them, but the forensic trace (equation inputs, request ids) does not. On a build before "
+                "2026-10-20 the usual cause is the 12 s budget floor, which dropped every tick that ended with little budget "
+                "left (heartbeat skipped_budget; docs/AUDIT_20261020_TH.md S1); otherwise read write_errors / flush_timeouts "
+                "in the heartbeat",
+                {"chain": chain["chain"], "runs": [m["run"] for m in gap["missing"][:20]]})
         eco = chain["economics"]
         if eco.get("n") and eco["fee_pct"]["median"] >= 0.3:
             size = eco.get("order_size")
@@ -1262,6 +1306,24 @@ def build_findings(report) -> list[dict]:
         bad = {k: beat.get(k) for k in ("write_errors", "flush_timeouts", "internal_errors") if beat.get(k)}
         if bad:
             add("P2", "RECORDER_UNHEALTHY", f"flight recorder counters on {chain}: {bad}")
+        skipped = num(beat.get("skipped_budget"))
+        if skipped:
+            add("P2", "RECORDER_SKIPPED_TICKS",
+                f"the flight recorder on {chain} has skipped {int(skipped)} notable ticks for lack of tick budget since boot "
+                f"{beat.get('boot_at')} ({beat.get('written')} traces written of {beat.get('ticks')} ticks): they are missing "
+                "from webull_lego_trace and only the Cloud Run log has them. Builds before 2026-10-20 dropped every tick that "
+                "ended with under 12 s left, which is the TICK_DEFERRED and broker-outage ticks (a later build skips one only "
+                "when under 1 s is left); see TRACE_GAP_ROWS for the rows affected", {"chain": chain})
+    last_tick, beat_times = parse_ts((logs.get("ticks") or {}).get("last")), [
+        parse_ts(b.get("at")) for b in (traces.get("heartbeat") or {}).values()]
+    beat_times = [b for b in beat_times if b is not None]
+    if last_tick is not None and beat_times:
+        lag = (max(beat_times) - last_tick).total_seconds()
+        if lag > LOG_EXPORT_SHORT_SECONDS:
+            add("INFO", "LOG_EXPORT_SHORT",
+                f"the Cloud Run log export ends at {iso(last_tick)} but the database's last heartbeat is {iso(max(beat_times))} "
+                f"({lag / 3600:.1f} h later): the ticks after the export are not in these logs, so every count taken from them "
+                "(ERROR ticks, halted ticks, failures) is a lower bound. Export the logs up to the time of the database export")
     if not traces.get("n") and (rtdb.get("chains") or deploy):
         add("INFO", "NO_TRACES", "no flight-recorder traces in this export: the reason an order stays unresolved cannot be read "
             "from Firebase until a build with the recorder is deployed")

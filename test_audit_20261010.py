@@ -155,10 +155,13 @@ def test_a_tick_that_moved_money_keeps_its_tail_with_three_seconds_left(monkeypa
 
 
 def test_a_routine_tick_with_the_same_budget_is_still_skipped(monkeypatch):
+    # "Routine" was a committed row until 2026-10-19: that audit found 3 of 26 rows without their
+    # equation because this very floor dropped them (test_audit_20261020). The repeat of a standing
+    # halt is what is still routine.
     monkeypatch.setattr(fr, "_remaining", lambda: 3.0)
     with tick():
-        fr.node("D10", "committed")
-        result = fr.finish(body(), 200)
+        fr.node("D02", "MARKET_CLOSED")
+        result = fr.finish(body(business_status="BROKER_REJECT_HALT"), 200)
     assert result["skipped"] == "budget" and traces() == {}
     assert fr._STATS["skipped_budget"] == 1
 

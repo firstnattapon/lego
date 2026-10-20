@@ -1,0 +1,1487 @@
+{
+  "schema": "lego_audit_input_hashes_v1",
+  "generated_at": "2026-10-20T09:25:49.979235+00:00",
+  "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates are the numbers quoted in docs/AUDIT_20261020_TH.md and are reproducible with: python tools/trace_audit.py --json --logs ... --rtdb ... --yaml ... --repo <clean checkout of e039b48>. Per-tick lists (failing ticks, notable traces) are left out; their runs are in the outages.",
+  "inputs": [
+    {
+      "name": "downloaded-logs-20261020-094824.json",
+      "role": "Cloud Run logs of lego-tick-uat, revision lego-tick-uat-00048-kap, 2026-10-19T13:30Z..20:47Z (exported 2026-10-20)",
+      "bytes": 2411318,
+      "sha256": "d11da3490e105bde09052e286840652aeca3258b012b9334cfc91ea384ed6245"
+    },
+    {
+      "name": "lego-firebase-default-rtdb-export.json",
+      "role": "RTDB export 2026-10-20T02:46Z (chain UBER_33b541c2034c v26, 77 traces, heartbeat 02:44:05Z)",
+      "bytes": 736533,
+      "sha256": "90727cdff0313ec1a4f1e3872d1995f8abe368c186d5367bfb195b9932b5c60f"
+    },
+    {
+      "name": "YAML.txt",
+      "role": "Cloud Run service and revision lego-tick-uat-00048-kap (generation 48)",
+      "bytes": 13194,
+      "sha256": "02b52395f0903053e354e5d138bd0515efa8b63d187ddd7482a2cd7267dd3d53"
+    },
+    {
+      "name": "webull-llms.txt",
+      "role": "Webull Thailand API index; identical to every previous round (sha256 4bc263da...)",
+      "bytes": 9289,
+      "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+    },
+    {
+      "name": "audit_20261020_deep_plan_th.md",
+      "role": "operator observations attached to the task; checked against the raw inputs, corrections listed in docs/AUDIT_20261020_TH.md",
+      "bytes": 57815,
+      "sha256": "02bc36002dc18788e50c5e223d55a8952045f84a18733233a9170da3090d9b8b"
+    }
+  ],
+  "aggregates": {
+    "logs": {
+      "entries": 1191,
+      "ticks": {
+        "n": 438,
+        "first": "2026-10-19T13:30:19Z",
+        "last": "2026-10-19T20:47:05Z",
+        "interval_s": 60.0,
+        "by_severity": {
+          "ERROR": 397,
+          "INFO": 36,
+          "WARNING": 5
+        },
+        "by_http": {
+          "200": 434,
+          "503": 4
+        },
+        "by_pipeline": {
+          "TICK_OK": 429,
+          "TICK_DEFERRED": 5,
+          "TICK_DECISION_ERROR": 4
+        },
+        "by_business": {
+          "BROKER_REJECT_HALT": 391,
+          "SLOT_CONSUMED": 35,
+          "ERROR": 4,
+          "TICK_DEFERRED": 3,
+          "WAITING_RECONCILIATION": 2,
+          "BROKER_ORDER_FAILED": 2,
+          "ROW_COMMITTED": 1
+        },
+        "duration_ms": {
+          "n": 438,
+          "p50": 802.0,
+          "p95": 12550.2,
+          "max": 33698.2
+        },
+        "slowest": [
+          {
+            "at": "2026-10-19T13:49:38Z",
+            "tick": "a572b088",
+            "ms": 33698.152,
+            "business": "TICK_DEFERRED"
+          },
+          {
+            "at": "2026-10-19T14:45:37Z",
+            "tick": "ffbd9a26",
+            "ms": 32572.568,
+            "business": "TICK_DEFERRED"
+          },
+          {
+            "at": "2026-10-19T13:46:37Z",
+            "tick": "ea80132c",
+            "ms": 32250.074,
+            "business": "ERROR"
+          },
+          {
+            "at": "2026-10-19T13:45:36Z",
+            "tick": "91596ec5",
+            "ms": 31217.311,
+            "business": "ERROR"
+          },
+          {
+            "at": "2026-10-19T13:47:33Z",
+            "tick": "9fef2402",
+            "ms": 28868.074,
+            "business": "ERROR"
+          }
+        ],
+        "near_budget": 3,
+        "gaps": [],
+        "gap_count": 0,
+        "segments": [
+          {
+            "status": "ROW_COMMITTED",
+            "from": "2026-10-19T13:30:19Z",
+            "to": "2026-10-19T13:30:19Z",
+            "n": 1
+          },
+          {
+            "status": "SLOT_CONSUMED",
+            "from": "2026-10-19T13:31:06Z",
+            "to": "2026-10-19T13:44:06Z",
+            "n": 14
+          },
+          {
+            "status": "ERROR",
+            "from": "2026-10-19T13:45:36Z",
+            "to": "2026-10-19T13:48:24Z",
+            "n": 4
+          },
+          {
+            "status": "TICK_DEFERRED",
+            "from": "2026-10-19T13:49:38Z",
+            "to": "2026-10-19T13:49:38Z",
+            "n": 1
+          },
+          {
+            "status": "WAITING_RECONCILIATION",
+            "from": "2026-10-19T13:50:23Z",
+            "to": "2026-10-19T13:51:08Z",
+            "n": 2
+          },
+          {
+            "status": "BROKER_ORDER_FAILED",
+            "from": "2026-10-19T13:52:09Z",
+            "to": "2026-10-19T13:52:09Z",
+            "n": 1
+          },
+          {
+            "status": "SLOT_CONSUMED",
+            "from": "2026-10-19T13:53:06Z",
+            "to": "2026-10-19T13:59:05Z",
+            "n": 7
+          },
+          {
+            "status": "BROKER_ORDER_FAILED",
+            "from": "2026-10-19T14:00:31Z",
+            "to": "2026-10-19T14:00:31Z",
+            "n": 1
+          },
+          {
+            "status": "SLOT_CONSUMED",
+            "from": "2026-10-19T14:01:05Z",
+            "to": "2026-10-19T14:14:06Z",
+            "n": 14
+          },
+          {
+            "status": "BROKER_REJECT_HALT",
+            "from": "2026-10-19T14:15:30Z",
+            "to": "2026-10-19T14:44:05Z",
+            "n": 30
+          },
+          {
+            "status": "TICK_DEFERRED",
+            "from": "2026-10-19T14:45:37Z",
+            "to": "2026-10-19T14:45:37Z",
+            "n": 1
+          },
+          {
+            "status": "BROKER_REJECT_HALT",
+            "from": "2026-10-19T14:46:27Z",
+            "to": "2026-10-19T15:29:06Z",
+            "n": 44
+          },
+          {
+            "status": "TICK_DEFERRED",
+            "from": "2026-10-19T15:30:29Z",
+            "to": "2026-10-19T15:30:29Z",
+            "n": 1
+          },
+          {
+            "status": "BROKER_REJECT_HALT",
+            "from": "2026-10-19T15:31:21Z",
+            "to": "2026-10-19T20:47:05Z",
+            "n": 317
+          }
+        ],
+        "error_runs": [
+          {
+            "from": "2026-10-19T13:45:36Z",
+            "to": "2026-10-19T13:48:24Z",
+            "n": 4,
+            "pipeline": {
+              "TICK_DECISION_ERROR": 4
+            },
+            "types": {
+              "ServerException": 3,
+              "ClientException": 1
+            }
+          },
+          {
+            "from": "2026-10-19T13:52:09Z",
+            "to": "2026-10-19T13:52:09Z",
+            "n": 1,
+            "pipeline": {
+              "TICK_OK": 1
+            },
+            "types": {}
+          },
+          {
+            "from": "2026-10-19T14:00:31Z",
+            "to": "2026-10-19T14:00:31Z",
+            "n": 1,
+            "pipeline": {
+              "TICK_OK": 1
+            },
+            "types": {}
+          },
+          {
+            "from": "2026-10-19T14:15:30Z",
+            "to": "2026-10-19T14:44:05Z",
+            "n": 30,
+            "pipeline": {
+              "TICK_OK": 30
+            },
+            "types": {}
+          },
+          {
+            "from": "2026-10-19T14:46:27Z",
+            "to": "2026-10-19T15:29:06Z",
+            "n": 44,
+            "pipeline": {
+              "TICK_OK": 44
+            },
+            "types": {}
+          },
+          {
+            "from": "2026-10-19T15:31:21Z",
+            "to": "2026-10-19T20:47:05Z",
+            "n": 317,
+            "pipeline": {
+              "TICK_OK": 317
+            },
+            "types": {}
+          }
+        ],
+        "broker_halt": {
+          "ticks": 391,
+          "since": "2026-10-19T14:15:30Z",
+          "last": "2026-10-19T20:47:05Z",
+          "slots_blocked": 18,
+          "standing": true
+        },
+        "halt_since": null,
+        "paused": 0,
+        "environment": {
+          "UAT": 438
+        },
+        "mode": {
+          "trade": 438
+        }
+      },
+      "http": {
+        "n": 438,
+        "by_status": {
+          "200": 434,
+          "503": 4
+        },
+        "latency_s": {
+          "n": 438,
+          "p50": 0.82,
+          "p95": 12.62,
+          "max": 33.7
+        }
+      },
+      "instances": {
+        "0010dd86072c": 1191
+      },
+      "revisions": {
+        "lego-tick-uat-00048-kap": 1191
+      },
+      "webull": {
+        "operations": {
+          "sdk_positions": {
+            "n": 55,
+            "errors": 10,
+            "ms": {
+              "n": 55,
+              "p50": 1800.5,
+              "p95": 6911.6,
+              "max": 11457.2
+            },
+            "codes": {
+              "GATEWAY_TIMEOUT": 8
+            },
+            "http": {
+              "504": 8
+            },
+            "request_ids": [
+              "94fd933b-c1cf-4693-ac26-f7a6a218887d",
+              "39be6ace-8791-4bbc-997d-5e56eb089d30",
+              "ce97805d-241f-4118-b592-08869d7389c3"
+            ]
+          },
+          "sdk_snapshot": {
+            "n": 47,
+            "errors": 2,
+            "ms": {
+              "n": 47,
+              "p50": 946.7,
+              "p95": 4016.0,
+              "max": 6355.3
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_instrument": {
+            "n": 39,
+            "errors": 13,
+            "ms": {
+              "n": 39,
+              "p50": 1147.1,
+              "p95": 10828.2,
+              "max": 12170.4
+            },
+            "codes": {},
+            "http": {
+              "502": 4
+            },
+            "request_ids": []
+          },
+          "sdk_open_orders": {
+            "n": 19,
+            "errors": 0,
+            "ms": {
+              "n": 19,
+              "p50": 963.5,
+              "p95": 1924.9,
+              "max": 1961.3
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_sdk_request": {
+            "n": 12,
+            "errors": 0,
+            "ms": {
+              "n": 12,
+              "p50": 1049.7,
+              "p95": 2210.9,
+              "max": 3806.8
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_preview": {
+            "n": 9,
+            "errors": 0,
+            "ms": {
+              "n": 9,
+              "p50": 1678.3,
+              "p95": 4896.7,
+              "max": 4896.7
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_order_detail": {
+            "n": 9,
+            "errors": 0,
+            "ms": {
+              "n": 9,
+              "p50": 1080.8,
+              "p95": 2699.7,
+              "max": 2699.7
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "ledger_persistence": {
+            "n": 9,
+            "errors": 0,
+            "ms": {
+              "n": 9,
+              "p50": 519.7,
+              "p95": 1145.9,
+              "max": 1145.9
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "reserve_attempt": {
+            "n": 7,
+            "errors": 0,
+            "ms": {
+              "n": 7,
+              "p50": 59.1,
+              "p95": 198.8,
+              "max": 198.8
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "place_witness": {
+            "n": 7,
+            "errors": 0,
+            "ms": {
+              "n": 7,
+              "p50": 58.8,
+              "p95": 204.7,
+              "max": 204.7
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_place": {
+            "n": 7,
+            "errors": 0,
+            "ms": {
+              "n": 7,
+              "p50": 1219.6,
+              "p95": 2098.3,
+              "max": 2098.3
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "place": {
+            "n": 7,
+            "errors": 0,
+            "ms": {
+              "n": 7,
+              "p50": 1306.1,
+              "p95": 2188.2,
+              "max": 2188.2
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "order_detail": {
+            "n": 7,
+            "errors": 0,
+            "ms": {
+              "n": 7,
+              "p50": 1006.1,
+              "p95": 2601.7,
+              "max": 2601.7
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          },
+          "sdk_accounts": {
+            "n": 6,
+            "errors": 0,
+            "ms": {
+              "n": 6,
+              "p50": 777.7,
+              "p95": 3061.5,
+              "max": 3061.5
+            },
+            "codes": {},
+            "http": {},
+            "request_ids": []
+          }
+        },
+        "errors": [
+          {
+            "op": "instrument",
+            "code": "SDK.UNKNOWNSERVERERROR",
+            "http": 502,
+            "n": 3,
+            "first": "2026-10-19T13:45:36Z",
+            "last": "2026-10-19T13:48:24Z",
+            "request_ids": []
+          },
+          {
+            "op": "instrument",
+            "code": "SDK.HTTPERROR",
+            "http": null,
+            "n": 1,
+            "first": "2026-10-19T13:46:37Z",
+            "last": "2026-10-19T13:46:37Z",
+            "request_ids": []
+          }
+        ],
+        "sdk_errors": [
+          {
+            "route": "/trading/assets/positions/list",
+            "code": "GATEWAY_TIMEOUT",
+            "http": 504,
+            "n": 8,
+            "first": "2026-10-19T15:00:15Z",
+            "last": "2026-10-19T19:45:15Z",
+            "request_ids": [
+              "94fd933b-c1cf-4693-ac26-f7a6a218887d",
+              "39be6ace-8791-4bbc-997d-5e56eb089d30",
+              "ce97805d-241f-4118-b592-08869d7389c3"
+            ]
+          },
+          {
+            "route": "/trading/instruments/stocks/profiles/list",
+            "code": "SDK.UnknownServerError",
+            "http": 502,
+            "n": 4,
+            "first": "2026-10-19T13:45:36Z",
+            "last": "2026-10-19T13:48:24Z",
+            "request_ids": []
+          }
+        ]
+      },
+      "outages": [
+        {
+          "from": "2026-10-19T13:45:04Z",
+          "to": "2026-10-19T13:48:05Z",
+          "ticks": 4,
+          "op": "instrument",
+          "code": "SDK.UNKNOWNSERVERERROR",
+          "http": 502,
+          "sources": [
+            "logs"
+          ],
+          "seconds": 181,
+          "slots": 0
+        }
+      ]
+    },
+    "as_of": "2026-10-20T02:46:05Z",
+    "rtdb": {
+      "collections": {
+        "webull_lego_errors": 4,
+        "webull_lego_execution_transitions": 1,
+        "webull_lego_heartbeat": 1,
+        "webull_lego_order_audit": 8,
+        "webull_lego_order_dispatch_locks": 1,
+        "webull_lego_order_outbox": 1,
+        "webull_lego_rows": 26,
+        "webull_lego_state": 1,
+        "webull_lego_trace": 1,
+        "webull_lego_trace_days": 1,
+        "webull_lego_warnings": 2
+      },
+      "chains": [
+        {
+          "chain": "UBER_33b541c20",
+          "state": {
+            "updated_at": "2026-10-19T19:45:19Z",
+            "version": 26,
+            "dna_step": 779,
+            "slot_id": "2026-10-19:25",
+            "semantics": "execution_terminal_funding_v3",
+            "clock_mode": "market",
+            "holdings": 145.1328,
+            "p0": 70.35
+          },
+          "rows": {
+            "n": 26,
+            "fix_c": 10000.0,
+            "diff": {
+              "given": 25.0,
+              "lower": 0.0,
+              "upper": 136.07475200000044,
+              "source": "config",
+              "used": 25.0
+            },
+            "p0": 70.35,
+            "rules": {
+              "floor_v2": 8
+            },
+            "gated": {
+              "PASS_BROKER_REJECT_HALT": 18
+            },
+            "mismatch": {
+              "count": 0,
+              "items": []
+            },
+            "versions": {
+              "first": 1,
+              "last": 26,
+              "contiguous": true
+            },
+            "steps": {
+              "first": 754,
+              "last": 779,
+              "gaps": [],
+              "increasing": true
+            },
+            "uncommitted": 0,
+            "cashflow_status": {
+              "NO_ACTION": 18,
+              "PENDING_EXECUTION": 8
+            },
+            "status_counts": {
+              "PASS_BROKER_REJECT_HALT": 18,
+              "READY_SELL": 8
+            }
+          },
+          "fills": {
+            "n": 0,
+            "mismatch": {
+              "count": 0,
+              "items": []
+            },
+            "fills": [],
+            "finalized_seq": 0,
+            "applied_seq": null
+          },
+          "ledger": {
+            "applied": 0,
+            "finalized_seq": 0,
+            "net_position_change": 0,
+            "cumulative_realized": null,
+            "problems": []
+          },
+          "economics": {
+            "n": 0
+          },
+          "orders": {
+            "n": 8,
+            "by_status": {
+              "FAILED": 7,
+              "SUPPRESSED_STATE_CHANGED": 1
+            },
+            "unresolved": [],
+            "failed_without_reason": [
+              {
+                "run": "3edc5606",
+                "status": "FAILED",
+                "side": "SELL",
+                "qty": 1.94,
+                "broker_status": null,
+                "broker_id": "038AKDLN",
+                "created_at": "2026-10-19T13:49:37Z",
+                "placed_at": "2026-10-19T13:50:18Z",
+                "filled_quantity": "0.000000",
+                "cancel_attempts": null,
+                "cancel_refused_at": null,
+                "cancel_error": null,
+                "hold_deadline": null,
+                "needs_manual": false,
+                "manual_since": null,
+                "policy": "cancel_expire",
+                "expiry_proof_blockers": null,
+                "expiry_proof_checked_at": null,
+                "age_h": 12.94,
+                "unresolved": false,
+                "decision_holdings": 145.1328,
+                "reason_missing": true,
+                "terminal_reason": "broker order failed; broker rejection reason unavailable",
+                "expiry_basis": null,
+                "expiry_released_at": null
+              },
+              {
+                "run": "fd1d6167",
+                "status": "FAILED",
+                "side": "SELL",
+                "qty": 2.32,
+                "broker_status": null,
+                "broker_id": "038AKEQQ",
+                "created_at": "2026-10-19T14:00:17Z",
+                "placed_at": "2026-10-19T14:00:27Z",
+                "filled_quantity": "0.000000",
+                "cancel_attempts": null,
+                "cancel_refused_at": null,
+                "cancel_error": null,
+                "hold_deadline": null,
+                "needs_manual": false,
+                "manual_since": null,
+                "policy": "cancel_expire",
+                "expiry_proof_blockers": null,
+                "expiry_proof_checked_at": null,
+                "age_h": 12.76,
+                "unresolved": false,
+                "decision_holdings": 145.1328,
+                "reason_missing": true,
+                "terminal_reason": "broker order failed; broker rejection reason unavailable",
+                "expiry_basis": null,
+                "expiry_released_at": null
+              },
+              {
+                "run": "ae713b52",
+                "status": "FAILED",
+                "side": "SELL",
+                "qty": 2.25,
+                "broker_status": null,
+                "broker_id": "038AKGHM",
+                "created_at": "2026-10-19T14:15:13Z",
+                "placed_at": "2026-10-19T14:15:24Z",
+                "filled_quantity": "0.000000",
+                "cancel_attempts": null,
+                "cancel_refused_at": null,
+                "cancel_error": null,
+                "hold_deadline": null,
+                "needs_manual": false,
+                "manual_since": null,
+                "policy": "cancel_expire",
+                "expiry_proof_blockers": null,
+                "expiry_proof_checked_at": null,
+                "age_h": 12.51,
+                "unresolved": false,
+                "decision_holdings": 145.1328,
+                "reason_missing": true,
+                "terminal_reason": "broker order failed; broker rejection reason unavailable",
+                "expiry_basis": null,
+                "expiry_released_at": null
+              },
+              {
+                "run": "509ffab4",
+                "status": "FAILED",
+                "side": "SELL",
+                "qty": 2.58,
+                "broker_status": null,
+                "broker_id": "038AKK31",
+                "created_at": "2026-10-19T14:45:18Z",
+                "placed_at": "2026-10-19T14:46:22Z",
+                "filled_quantity": "0.000000",
+                "cancel_attempts": null,
+                "cancel_refused_at": null,
+                "cancel_error": null,
+                "hold_deadline": null,
+                "needs_manual": false,
+                "manual_since": null,
+                "policy": "cancel_expire",
+                "expiry_proof_blockers": null,
+                "expiry_proof_checked_at": null,
+                "age_h": 12.01,
+                "unresolved": false,
+                "decision_holdings": 145.1328,
+                "reason_missing": true,
+                "terminal_reason": "broker order failed; broker rejection reason unavailable",
+                "expiry_basis": null,
+                "expiry_released_at": null
+              },
+              {
+                "run": "b3c7ec50",
+                "status": "FAILED",
+                "side": "SELL",
+                "qty": 3.65,
+                "broker_status": null,
+                "broker_id": "038AKP7F",
+                "created_at": "2026-10-19T15:30:17Z",
+                "placed_at": "2026-10-19T15:31:16Z",
+                "filled_quantity": "0.000000",
+                "cancel_attempts": null,
+                "cancel_refused_at": null,
+                "cancel_error": null,
+                "hold_deadline": null,
+                "needs_manual": false,
+                "manual_since": null,
+                "policy": "cancel_expire",
+                "expiry_proof_blockers": null,
+                "expiry_proof_checked_at": null,
+                "age_h": 11.26,
+                "unresolved": false,
+                "decision_holdings": 145.1328,
+                "reason_missing": true,
+                "terminal_reason": "broker order failed; broker rejection reason unavailable",
+                "expiry_basis": null,
+                "expiry_released_at": null
+              },
+              {
+                "run": "fbfc6877",
+                "status": "FAILED",
+                "side": "SELL",
+                "qty": 3.18,
+                "broker_status": null,
+                "broker_id": "038AL1MN",
+                "created_at": "2026-10-19T16:45:13Z",
+                "placed_at": "2026-10-19T16:45:21Z",
+                "filled_quantity": "0.000000",
+                "cancel_attempts": null,
+                "cancel_refused_at": null,
+                "cancel_error": null,
+                "hold_deadline": null,
+                "needs_manual": false,
+                "manual_since": null,
+                "policy": "cancel_expire",
+                "expiry_proof_blockers": null,
+                "expiry_proof_checked_at": null,
+                "age_h": 10.01,
+                "unresolved": false,
+                "decision_holdings": 145.1328,
+                "reason_missing": true,
+                "terminal_reason": "broker order failed; broker rejection reason unavailable",
+                "expiry_basis": null,
+                "expiry_released_at": null
+              },
+              {
+                "run": "c703f30b",
+                "status": "FAILED",
+                "side": "SELL",
+                "qty": 2.85,
+                "broker_status": null,
+                "broker_id": "038ALH4Q",
+                "created_at": "2026-10-19T19:00:09Z",
+                "placed_at": "2026-10-19T19:00:16Z",
+                "filled_quantity": "0.000000",
+                "cancel_attempts": null,
+                "cancel_refused_at": null,
+                "cancel_error": null,
+                "hold_deadline": null,
+                "needs_manual": false,
+                "manual_since": null,
+                "policy": "cancel_expire",
+                "expiry_proof_blockers": null,
+                "expiry_proof_checked_at": null,
+                "age_h": 7.77,
+                "unresolved": false,
+                "decision_holdings": 145.1328,
+                "reason_missing": true,
+                "terminal_reason": "broker order failed; broker rejection reason unavailable",
+                "expiry_basis": null,
+                "expiry_released_at": null
+              }
+            ],
+            "stuck_pending_released": [],
+            "halts": [],
+            "broker_circuits": [
+              {
+                "scope": "UBER_22a7c4e5f",
+                "halt": "c703f30b",
+                "state": "HALTED",
+                "since": "2026-10-19T19:00:19Z",
+                "count": 3,
+                "probe_streak": 4,
+                "probes": 4,
+                "last_probe_at": "2026-10-19T19:00:05Z",
+                "inflight": ""
+              }
+            ],
+            "halt_audit": []
+          },
+          "trace_gap": {
+            "since": "2026-10-19T13:30:04Z",
+            "missing": [
+              {
+                "version": 2,
+                "step": 755,
+                "slot": "2026-10-19:1",
+                "at": "2026-10-19T13:49:37Z",
+                "run": "3edc5606"
+              },
+              {
+                "version": 6,
+                "step": 759,
+                "slot": "2026-10-19:5",
+                "at": "2026-10-19T14:45:18Z",
+                "run": "509ffab4"
+              },
+              {
+                "version": 9,
+                "step": 762,
+                "slot": "2026-10-19:8",
+                "at": "2026-10-19T15:30:17Z",
+                "run": "b3c7ec50"
+              }
+            ]
+          }
+        }
+      ],
+      "traces": {
+        "n": 77,
+        "exchanges": [
+          {
+            "op": "place",
+            "status": 200,
+            "error": null,
+            "n": 7,
+            "first": "2026-10-19T13:50:20Z",
+            "last": "2026-10-19T19:00:17Z",
+            "ms": {
+              "n": 7,
+              "p50": 1218.9,
+              "p95": 2097.7,
+              "max": 2097.7
+            },
+            "request_ids": [
+              "d5e41411-b074-4954-af33-7f61864c63cb",
+              "c05924b2-03e1-4409-9966-161188db97ef",
+              "8affc7ff-bf0b-4294-bd50-b971203e38fd"
+            ],
+            "mutation": true
+          },
+          {
+            "op": "positions",
+            "status": 200,
+            "error": null,
+            "n": 38,
+            "first": "2026-10-19T13:30:12Z",
+            "last": "2026-10-19T19:45:18Z",
+            "ms": {
+              "n": 38,
+              "p50": 1365.3,
+              "p95": 5920.8,
+              "max": 6230.0
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "snapshot",
+            "status": 200,
+            "error": null,
+            "n": 38,
+            "first": "2026-10-19T13:30:13Z",
+            "last": "2026-10-19T19:45:19Z",
+            "ms": {
+              "n": 38,
+              "p50": 916.5,
+              "p95": 2370.3,
+              "max": 4015.2
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "instrument",
+            "status": 200,
+            "error": null,
+            "n": 23,
+            "first": "2026-10-19T13:30:10Z",
+            "last": "2026-10-19T19:45:08Z",
+            "ms": {
+              "n": 23,
+              "p50": 1073.0,
+              "p95": 1573.2,
+              "max": 2273.8
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "open_orders",
+            "status": 200,
+            "error": null,
+            "n": 15,
+            "first": "2026-10-19T13:30:16Z",
+            "last": "2026-10-19T19:00:14Z",
+            "ms": {
+              "n": 15,
+              "p50": 963.2,
+              "p95": 1924.7,
+              "max": 1961.1
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "sdk_request",
+            "status": 200,
+            "error": null,
+            "n": 10,
+            "first": "2026-10-19T13:30:06Z",
+            "last": "2026-10-19T19:45:07Z",
+            "ms": {
+              "n": 10,
+              "p50": 952.9,
+              "p95": 2210.8,
+              "max": 2210.8
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "order_detail",
+            "status": 200,
+            "error": null,
+            "n": 8,
+            "first": "2026-10-19T13:50:23Z",
+            "last": "2026-10-19T19:00:19Z",
+            "ms": {
+              "n": 8,
+              "p50": 1080.1,
+              "p95": 2699.1,
+              "max": 2699.1
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "preview",
+            "status": 200,
+            "error": null,
+            "n": 7,
+            "first": "2026-10-19T13:50:15Z",
+            "last": "2026-10-19T19:00:13Z",
+            "ms": {
+              "n": 7,
+              "p50": 1218.9,
+              "p95": 4895.9,
+              "max": 4895.9
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "positions",
+            "status": 504,
+            "error": "GATEWAY_TIMEOUT",
+            "n": 7,
+            "first": "2026-10-19T15:00:15Z",
+            "last": "2026-10-19T19:45:15Z",
+            "ms": {
+              "n": 7,
+              "p50": 6812.6,
+              "p95": 6986.4,
+              "max": 6986.4
+            },
+            "request_ids": [
+              "94fd933b-c1cf-4693-ac26-f7a6a218887d",
+              "ce97805d-241f-4118-b592-08869d7389c3",
+              "d9269106-c6af-4b35-a51f-b562f462fa1a"
+            ],
+            "mutation": false
+          },
+          {
+            "op": "accounts",
+            "status": 200,
+            "error": null,
+            "n": 5,
+            "first": "2026-10-19T13:30:09Z",
+            "last": "2026-10-19T19:45:07Z",
+            "ms": {
+              "n": 5,
+              "p50": 942.9,
+              "p95": 3061.4,
+              "max": 3061.4
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "instrument",
+            "status": 502,
+            "error": "SDK.UnknownServerError",
+            "n": 2,
+            "first": "2026-10-19T13:48:19Z",
+            "last": "2026-10-19T13:48:24Z",
+            "ms": {
+              "n": 2,
+              "p50": 863.2,
+              "p95": 1470.0,
+              "max": 1470.0
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "instrument",
+            "status": null,
+            "error": "SDK.HttpError",
+            "n": 1,
+            "first": "2026-10-19T13:48:16Z",
+            "last": "2026-10-19T13:48:16Z",
+            "ms": {
+              "n": 1,
+              "p50": 10535.6,
+              "p95": 10535.6,
+              "max": 10535.6
+            },
+            "request_ids": [],
+            "mutation": false
+          },
+          {
+            "op": "positions",
+            "status": null,
+            "error": "SDK.HttpError",
+            "n": 1,
+            "first": "2026-10-19T14:30:17Z",
+            "last": "2026-10-19T14:30:17Z",
+            "ms": {
+              "n": 1,
+              "p50": 11456.9,
+              "p95": 11456.9,
+              "max": 11456.9
+            },
+            "request_ids": [],
+            "mutation": false
+          }
+        ],
+        "proof": [],
+        "errors": [
+          {
+            "where": "X00",
+            "type": "ServerException",
+            "n": 1
+          }
+        ],
+        "warnings": {
+          "BROKER_REJECT_HALT": 18,
+          "BROKER_REJECT_AUTO_PROBE": 2
+        },
+        "transitions": [
+          {
+            "at": "2026-10-19T13:30:18Z",
+            "run": "e934dc9e",
+            "from": "PENDING_DISPATCH",
+            "to": "SUPPRESSED_STATE_CHANGED",
+            "changed": {
+              "terminal_reason": "dispatch blocked: quote_age_limit"
+            }
+          },
+          {
+            "at": "2026-10-19T13:50:23Z",
+            "run": "3edc5606",
+            "from": "PLACING_UNKNOWN",
+            "to": "PENDING",
+            "changed": {
+              "filled_quantity": "0.000000"
+            }
+          },
+          {
+            "at": "2026-10-19T13:52:08Z",
+            "run": "3edc5606",
+            "from": "PENDING",
+            "to": "FAILED",
+            "changed": {
+              "terminal_reason": "broker order failed; broker rejection reason unavailable"
+            }
+          },
+          {
+            "at": "2026-10-19T14:00:30Z",
+            "run": "fd1d6167",
+            "from": "PLACING_UNKNOWN",
+            "to": "FAILED",
+            "changed": {
+              "filled_quantity": "0.000000",
+              "terminal_reason": "broker order failed; broker rejection reason unavailable"
+            }
+          },
+          {
+            "at": "2026-10-19T14:15:30Z",
+            "run": "ae713b52",
+            "from": "PLACING_UNKNOWN",
+            "to": "FAILED",
+            "changed": {
+              "filled_quantity": "0.000000",
+              "terminal_reason": "broker order failed; broker rejection reason unavailable"
+            }
+          },
+          {
+            "at": "2026-10-19T14:46:26Z",
+            "run": "509ffab4",
+            "from": "PLACING_UNKNOWN",
+            "to": "FAILED",
+            "changed": {
+              "filled_quantity": "0.000000",
+              "terminal_reason": "broker order failed; broker rejection reason unavailable"
+            }
+          },
+          {
+            "at": "2026-10-19T15:31:20Z",
+            "run": "b3c7ec50",
+            "from": "PLACING_UNKNOWN",
+            "to": "FAILED",
+            "changed": {
+              "filled_quantity": "0.000000",
+              "terminal_reason": "broker order failed; broker rejection reason unavailable"
+            }
+          },
+          {
+            "at": "2026-10-19T16:45:25Z",
+            "run": "fbfc6877",
+            "from": "PLACING_UNKNOWN",
+            "to": "FAILED",
+            "changed": {
+              "filled_quantity": "0.000000",
+              "terminal_reason": "broker order failed; broker rejection reason unavailable"
+            }
+          },
+          {
+            "at": "2026-10-19T19:00:19Z",
+            "run": "c703f30b",
+            "from": "PLACING_UNKNOWN",
+            "to": "FAILED",
+            "changed": {
+              "filled_quantity": "0.000000",
+              "terminal_reason": "broker order failed; broker rejection reason unavailable"
+            }
+          }
+        ],
+        "equations": {
+          "checked": 23,
+          "mismatch": {
+            "count": 0,
+            "items": []
+          }
+        },
+        "heartbeat": {
+          "UBER_33b541c20": {
+            "at": "2026-10-20T02:44:05.672Z",
+            "biz": "BROKER_REJECT_HALT",
+            "boot_at": "2026-10-16T16:39:16.913Z",
+            "boot_id": "601e53df",
+            "cand": "eb7495ecb3bbc6f70e78660b649124a5ce574210b81117aaa0ea4f5c83a3e9e8",
+            "dropped_events": 0,
+            "env": "UAT",
+            "flush_timeouts": 0,
+            "git": "e039b48166f3c06dbf6778f488b6da72d1e56415",
+            "http": 200,
+            "internal_errors": 0,
+            "last_trace": "UBER_33b541c2034c/2026-10-20/023304_043c1e0c",
+            "level": "notable",
+            "mode": "trade",
+            "notable": 1981,
+            "pipe": "TICK_OK",
+            "rev": "lego-tick-uat-00048-kap",
+            "skipped_budget": 6,
+            "skipped_dup": 1803,
+            "sym": "UBER",
+            "tick": "6108d8da1c624755b20da8129ac0b509",
+            "ticks": 4926,
+            "write_errors": 0,
+            "written": 172
+          }
+        },
+        "outages": [
+          {
+            "from": "2026-10-19T13:48:05Z",
+            "to": "2026-10-19T13:48:05Z",
+            "ticks": 1,
+            "op": "instrument",
+            "code": "SDK.HttpError",
+            "http": null,
+            "sources": [
+              "traces"
+            ],
+            "seconds": 0,
+            "slots": 0
+          }
+        ],
+        "quotes": {
+          "n": 23,
+          "median_s": 903.5,
+          "p95_s": 912.9,
+          "max_s": 235813.5,
+          "over_limit": 23,
+          "over_limit_share": 1.0
+        },
+        "first_at": "2026-10-19T13:30:04.966Z",
+        "notable_ticks_listed": 60,
+        "equation_runs_n": 23
+      },
+      "error_records": {
+        "n": 4,
+        "outages": [
+          {
+            "from": "2026-10-19T13:45:36Z",
+            "to": "2026-10-19T13:48:24Z",
+            "ticks": 4,
+            "op": "instrument",
+            "code": "SDK.UNKNOWNSERVERERROR",
+            "http": 502,
+            "sources": [
+              "errors"
+            ],
+            "seconds": 168,
+            "slots": 0
+          }
+        ]
+      }
+    },
+    "deploy": {
+      "service": {
+        "revision": "lego-tick-uat-00048-kap",
+        "generation": "48",
+        "timeout_s": 45.0,
+        "concurrency": 1.0,
+        "cpu": "0.3333",
+        "memory": "512Mi",
+        "max_scale": 1.0,
+        "min_scale": null
+      },
+      "env": {
+        "LEGO_ACTIVE": "true",
+        "LEGO_ALLOW_FRACTIONAL": "true",
+        "LEGO_CANCEL_CONFIRM_GRACE_SECONDS": "120",
+        "LEGO_CANDIDATE_HASH": "eb7495ecb3bbc6f70e78660b649124a5ce574210b81117aaa0ea4f5c83a3e9e8",
+        "LEGO_DIFF": "25",
+        "LEGO_DNA_BUNDLE": "strategy.uat-continuous.json",
+        "LEGO_DNA_CLOCK_MODE": "market",
+        "LEGO_FIX_C": "10000",
+        "LEGO_GIT_COMMIT": "e039b48166f3c06dbf6778f488b6da72d1e56415",
+        "LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER": "1",
+        "LEGO_MAX_ORDER_NOTIONAL_USD": "1500",
+        "LEGO_MAX_ORDER_QUANTITY": "30",
+        "LEGO_MAX_SESSION_ORDERS": "26",
+        "LEGO_MODE": "trade",
+        "LEGO_RELEASE_AUTHORIZATION": "<set>",
+        "LEGO_SESSION_KEY_MODE": "market_day",
+        "LEGO_STALE_ORDER_ACTION": "cancel_expire",
+        "LEGO_STALE_ORDER_SECONDS": "300",
+        "LEGO_SYMBOL": "UBER",
+        "LEGO_TRACE_PROJECT_ID": "lego-firebase",
+        "LEGO_TRADING_WINDOW_END": "2026-10-30T20:00:00Z",
+        "WEBULL_ENV": "UAT"
+      },
+      "secret_env": [
+        "WEBULL_ACCOUNT_ID",
+        "WEBULL_APP_KEY",
+        "WEBULL_APP_SECRET"
+      ],
+      "alert_webhook_configured": false,
+      "git_commit": "e039b48166f3c06dbf6778f488b6da72d1e56415",
+      "candidate_hash": "eb7495ecb3bbc6f70e78660b649124a5ce574210b81117aaa0ea4f5c83a3e9e8",
+      "window_end": "2026-10-30T20:00:00Z",
+      "window_days_left": 10.72,
+      "revision_in_logs": true,
+      "repo_candidate_hashes": {
+        "backend_only": "eb7495ecb3bbc6f70e78660b649124a5ce574210b81117aaa0ea4f5c83a3e9e8"
+      },
+      "repo_commit": "e039b48166f3c06dbf6778f488b6da72d1e56415",
+      "repo_dirty": false,
+      "candidate_comparable": true,
+      "candidate_matches_repo": true,
+      "candidate_variant": "backend_only"
+    },
+    "findings": [
+      {
+        "level": "P1",
+        "code": "ORDER_FAILED_REASON_UNKNOWN",
+        "text": "order 3edc5606 (SELL 1.94) ended FAILED at the broker (id…038AKDLN, placed 2026-10-19T13:50:18Z) and the broker gave no reason; tools.readiness_audit fails snapshot_integrity on it until Webull explains. Send the broker order id and the place / order-detail request ids from the flight recorder (the 'wb' events of that tick) to Webull",
+        "evidence": {
+          "chain": "UBER_33b541c20",
+          "broker_id": "038AKDLN"
+        }
+      },
+      {
+        "level": "P1",
+        "code": "ORDER_FAILED_REASON_UNKNOWN",
+        "text": "order fd1d6167 (SELL 2.32) ended FAILED at the broker (id…038AKEQQ, placed 2026-10-19T14:00:27Z) and the broker gave no reason; tools.readiness_audit fails snapshot_integrity on it until Webull explains. Send the broker order id and the place / order-detail request ids from the flight recorder (the 'wb' events of that tick) to Webull",
+        "evidence": {
+          "chain": "UBER_33b541c20",
+          "broker_id": "038AKEQQ"
+        }
+      },
+      {
+        "level": "P1",
+        "code": "ORDER_FAILED_REASON_UNKNOWN",
+        "text": "order ae713b52 (SELL 2.25) ended FAILED at the broker (id…038AKGHM, placed 2026-10-19T14:15:24Z) and the broker gave no reason; tools.readiness_audit fails snapshot_integrity on it until Webull explains. Send the broker order id and the place / order-detail request ids from the flight recorder (the 'wb' events of that tick) to Webull",
+        "evidence": {
+          "chain": "UBER_33b541c20",
+          "broker_id": "038AKGHM"
+        }
+      },
+      {
+        "level": "P1",
+        "code": "ORDER_FAILED_REASON_UNKNOWN",
+        "text": "order 509ffab4 (SELL 2.58) ended FAILED at the broker (id…038AKK31, placed 2026-10-19T14:46:22Z) and the broker gave no reason; tools.readiness_audit fails snapshot_integrity on it until Webull explains. Send the broker order id and the place / order-detail request ids from the flight recorder (the 'wb' events of that tick) to Webull",
+        "evidence": {
+          "chain": "UBER_33b541c20",
+          "broker_id": "038AKK31"
+        }
+      },
+      {
+        "level": "P1",
+        "code": "ORDER_FAILED_REASON_UNKNOWN",
+        "text": "order b3c7ec50 (SELL 3.65) ended FAILED at the broker (id…038AKP7F, placed 2026-10-19T15:31:16Z) and the broker gave no reason; tools.readiness_audit fails snapshot_integrity on it until Webull explains. Send the broker order id and the place / order-detail request ids from the flight recorder (the 'wb' events of that tick) to Webull",
+        "evidence": {
+          "chain": "UBER_33b541c20",
+          "broker_id": "038AKP7F"
+        }
+      },
+      {
+        "level": "P1",
+        "code": "ORDER_FAILED_REASON_UNKNOWN",
+        "text": "order fbfc6877 (SELL 3.18) ended FAILED at the broker (id…038AL1MN, placed 2026-10-19T16:45:21Z) and the broker gave no reason; tools.readiness_audit fails snapshot_integrity on it until Webull explains. Send the broker order id and the place / order-detail request ids from the flight recorder (the 'wb' events of that tick) to Webull",
+        "evidence": {
+          "chain": "UBER_33b541c20",
+          "broker_id": "038AL1MN"
+        }
+      },
+      {
+        "level": "P1",
+        "code": "ORDER_FAILED_REASON_UNKNOWN",
+        "text": "order c703f30b (SELL 2.85) ended FAILED at the broker (id…038ALH4Q, placed 2026-10-19T19:00:16Z) and the broker gave no reason; tools.readiness_audit fails snapshot_integrity on it until Webull explains. Send the broker order id and the place / order-detail request ids from the flight recorder (the 'wb' events of that tick) to Webull",
+        "evidence": {
+          "chain": "UBER_33b541c20",
+          "broker_id": "038ALH4Q"
+        }
+      },
+      {
+        "level": "P1",
+        "code": "ALERTING_NOT_CONFIGURED",
+        "text": "no ALERT_WEBHOOK_* in the service env; 397 ERROR ticks and any unresolved order paged nobody"
+      },
+      {
+        "level": "P1",
+        "code": "BROKER_REJECT_HALT_ACTIVE",
+        "text": "new orders have been stopped by the broker-reject circuit since 2026-10-19T19:00:19Z (halt c703f30b, 3 FAILED/REJECTED in a row, probes 4, failed-probe streak 4); 391 ticks and 18 slots in these logs were decided and not traded. A UAT build with broker_circuit.try_half_open tests the broker again after a cooldown; any other build, and PROD always, needs ops.py reset-reject-halt after a person has read the rejected orders",
+        "evidence": {
+          "halt": "c703f30b",
+          "last_probe_at": "2026-10-19T19:00:05Z"
+        }
+      },
+      {
+        "level": "P2",
+        "code": "TRACE_GAP_ROWS",
+        "text": "3 committed rows have no recorded decision equation although the flight recorder was running since 2026-10-19T13:30:04Z: v2 (2026-10-19:1), v6 (2026-10-19:5), v9 (2026-10-19:8). The row, its Cloud Run log line and the error/warning records still hold them, but the forensic trace (equation inputs, request ids) does not. On a build before 2026-10-20 the usual cause is the 12 s budget floor, which dropped every tick that ended with little budget left (heartbeat skipped_budget; docs/AUDIT_20261020_TH.md S1); otherwise read write_errors / flush_timeouts in the heartbeat",
+        "evidence": {
+          "chain": "UBER_33b541c20",
+          "runs": [
+            "3edc5606",
+            "509ffab4",
+            "b3c7ec50"
+          ]
+        }
+      },
+      {
+        "level": "P2",
+        "code": "TICKS_DEFERRED",
+        "text": "3 ticks ran out of time budget and deferred their work to the next tick"
+      },
+      {
+        "level": "P2",
+        "code": "TICK_NEAR_BUDGET",
+        "text": "3 ticks used more than 70% of the 45 s budget; slowest: [{'at': '2026-10-19T13:49:38Z', 'tick': 'a572b088', 'ms': 33698.152, 'business': 'TICK_DEFERRED'}, {'at': '2026-10-19T14:45:37Z', 'tick': 'ffbd9a26', 'ms': 32572.568, 'business': 'TICK_DEFERRED'}]"
+      },
+      {
+        "level": "P2",
+        "code": "WEBULL_ERRORS",
+        "text": "3× broker error op=instrument code=SDK.UNKNOWNSERVERERROR http=502 (2026-10-19T13:45:36Z … 2026-10-19T13:48:24Z) request ids []"
+      },
+      {
+        "level": "P2",
+        "code": "WEBULL_ERRORS",
+        "text": "1× broker error op=instrument code=SDK.HTTPERROR http=None (2026-10-19T13:46:37Z … 2026-10-19T13:46:37Z) request ids []"
+      },
+      {
+        "level": "P2",
+        "code": "WEBULL_SDK_ERRORS",
+        "text": "8× SDK error route=/trading/assets/positions/list code=GATEWAY_TIMEOUT http=504 (2026-10-19T15:00:15Z … 2026-10-19T19:45:15Z) request ids ['94fd933b-c1cf-4693-ac26-f7a6a218887d', '39be6ace-8791-4bbc-997d-5e56eb089d30', 'ce97805d-241f-4118-b592-08869d7389c3']"
+      },
+      {
+        "level": "P2",
+        "code": "WEBULL_SDK_ERRORS",
+        "text": "4× SDK error route=/trading/instruments/stocks/profiles/list code=SDK.UnknownServerError http=502 (2026-10-19T13:45:36Z … 2026-10-19T13:48:24Z) request ids []"
+      },
+      {
+        "level": "P2",
+        "code": "RECORDER_SKIPPED_TICKS",
+        "text": "the flight recorder on UBER_33b541c20 has skipped 6 notable ticks for lack of tick budget since boot 2026-10-16T16:39:16.913Z (172 traces written of 4926 ticks): they are missing from webull_lego_trace and only the Cloud Run log has them. Builds before 2026-10-20 dropped every tick that ended with under 12 s left, which is the TICK_DEFERRED and broker-outage ticks (a later build skips one only when under 1 s is left); see TRACE_GAP_ROWS for the rows affected",
+        "evidence": {
+          "chain": "UBER_33b541c20"
+        }
+      },
+      {
+        "level": "INFO",
+        "code": "QUOTE_AGE",
+        "text": "23 decisions priced on quotes a median 903.5 s old (p95 912.9 s, max 235813.5 s); 23 older than the 60 s PROD dispatch limit. Not a PROD export, so the limit is not enforced here (UAT quotes are delayed); gate G6 needs this measured on PROD observe sessions, where it applies"
+      },
+      {
+        "level": "INFO",
+        "code": "LOG_EXPORT_SHORT",
+        "text": "the Cloud Run log export ends at 2026-10-19T20:47:05Z but the database's last heartbeat is 2026-10-20T02:44:05Z (6.0 h later): the ticks after the export are not in these logs, so every count taken from them (ERROR ticks, halted ticks, failures) is a lower bound. Export the logs up to the time of the database export"
+      },
+      {
+        "level": "INFO",
+        "code": "UAT_ONLY",
+        "text": "this is UAT evidence; real money also needs real alert delivery, observed PROD sessions and a measured PROD fee (gates G4-G6) which no UAT export can supply"
+      }
+    ],
+    "summary": {
+      "P0": 0,
+      "P1": 9,
+      "P2": 8,
+      "INFO": 3
+    }
+  }
+}

@@ -93,7 +93,10 @@ Heartbeat เขียน ≤ทุก 5 นาที. หลัง Place/Cancel
 
 - **ไม่กระทบการเทรด**: ทุกฟังก์ชันของ recorder ไม่ raise, ไม่ print, ไม่แก้ argument, ไม่เปลี่ยน control flow; DB พัง/เวลาไม่พอ/flush ค้างไม่เปลี่ยนผลของ `lego_tick`
   (`test_a_recorder_that_cannot_write_never_changes_the_tick`, `test_a_recorder_failure_never_changes_what_the_broker_call_returns_or_raises`)
-- **เขียนหลัง tick พร้อมตอบ**: หลัง `emit_tick`/`notify_tick`; time-box 3 วินาที (thread + join); ข้ามถ้างบเหลือ <12 วินาที (ไม่ชนเพดาน Cloud Run 45 วินาที)
+- **เขียนหลัง tick พร้อมตอบ**: หลัง `emit_tick`/`notify_tick`; time-box 3 วินาที (thread + join); ไม่ชนเพดาน Cloud Run 45 วินาที —
+  tick ที่เป็น**หลักฐาน** (reason `mutation`, `row_committed`, `deferred`, `error`, `unresolved_intent`, `webull_error`, `warning`) เขียนได้ถึงเหลืองบ 1 วินาที
+  (deadline 35 วินาที + time-box 3 วินาที ≤ ~38 วินาที); ที่ไม่ใช่หลักฐาน (heartbeat ของ tick ว่าง, การซ้ำของ halt, level `all`) ข้ามถ้างบเหลือ <12 วินาที.
+  ก่อน 2026-10-20 เกณฑ์ 12 วินาทีใช้กับทุก tick ยกเว้นที่ Place/Cancel จึงทิ้งทุก tick ที่จบเพราะงบหมด (`TICK_DEFERRED`, broker ล่ม): สมการครบ 23 จาก 26 แถว — ดู `docs/AUDIT_20261020_TH.md` S1
 - **Cloud Logging ยังไม่มี payload**: เพิ่มเฉพาะ `request_id`, `http_status`, `error_code` ที่ผ่าน regex ใน event `lego_operation` ของ `sdk_*`; payload อยู่ใน RTDB private เท่านั้น
 - **ไม่มี credential/identity**: ผ่าน `security_text.trace_clean` — key ลับ (`account_id`, `app_key`, `x-signature`, token, …) และข้อความ free text ถูก redact; ไม่เก็บ header; `/auth/*` และ `/openapi/config` เก็บแค่ status
 - **path สาธารณะได้แค่รหัส**: `webull_lego_warnings`/`rows`/`state`/`order_audit` อ่านได้โดยทุกคน จึงรับเฉพาะรหัส blocker + เวลา (ไม่มี holdings/open orders/ตัวเลข)
@@ -135,7 +138,8 @@ wb    order_detail GET /trading/orders/get  st=200  rid=…  res.orders[0].order
 
 - **ยังไม่เคยรันกับ RTDB และ Webull จริง**: เทสต์ใช้ FAKE_DB และ SDK จริงจาก wheel ที่ vendor ไว้กับ transport ปลอม; ขนาด/ความหน่วงของการเขียนจริง (ประมาณ 0.5–1 MB/วัน, ≤3 วินาทีต่อ tick)
   ต้องวัดหลัง deploy — ดู `heartbeat.flush_timeouts`/`write_errors`
-- **recorder เป็น best effort**: "ไม่มี trace" ไม่ได้แปลว่า "ไม่มีเหตุการณ์" (tick ที่ตายก่อน flush, ข้ามเพราะงบเวลา `skipped_budget`, หรือ dedup) — heartbeat บอกจำนวนที่ข้าม
+- **recorder เป็น best effort**: "ไม่มี trace" ไม่ได้แปลว่า "ไม่มีเหตุการณ์" (tick ที่ตายก่อน flush, ข้ามเพราะงบเวลา `skipped_budget`, หรือ dedup) — heartbeat บอกจำนวนที่ข้าม;
+  `tools.trace_audit` เปิดเผยเอง: `RECORDER_SKIPPED_TICKS` (heartbeat `skipped_budget` > 0) และ `TRACE_GAP_ROWS` (แถว committed ที่ไม่มีสมการ D08 ใน trace). request id ที่ถูก dedup (เช่น poll `PENDING` ซ้ำ) ยังอยู่ใน Cloud Run log (`lego_operation`)
 - ผลของ SDK-internal retry เห็นเฉพาะผลสุดท้ายของ `get_response` (สิ่งที่ pipeline เห็นจริง)
 - เก็บ response เฉพาะ symbol/order ที่เกี่ยวข้อง (positions/open orders ตัดส่วนอื่นทิ้งเก็บแค่ `count`)
 - ความหมายของ `PENDING` หลังปิดตลาดและของ HTTP 417 ยังเป็นข้อสันนิษฐานจน Webull ยืนยัน (`developer.webull.co.th` เปิดจากสภาพแวดล้อมนี้ไม่ได้) — recorder เก็บ**หลักฐานของคำตอบ** ไม่ได้แปลความแทน
