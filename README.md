@@ -1,5 +1,13 @@
 # LEGO PRINCIPAL v2
 
+20 October audit: [a flight recorder that dropped the ticks that explain an order, a halt that paged every minute, and the real-money gates](docs/AUDIT_20261020_TH.md).
+The 19 October UAT session was correct (438 ticks, all 26 rows recomputed from first principles, nothing filled) but the broker failed all 7 UBER SELLs without a reason,
+and the flight recorder kept the equation of only 23 of the 26 rows: it wrote a notable tick only with 12 s of tick budget left, and the ticks that matter end because the budget ran out.
+Ticks that deferred, failed, committed a row or left an order unresolved are now written down to one second left; a standing broker-reject halt is an `ERROR` for the first 180 s of each
+hour of halt instead of on every tick (391 of 438 ticks, replayed: 32); `tools/trace_audit.py` reports skipped ticks, rows without a recorded equation and a log export shorter than the
+database; `deploy/continuous-uat.sh` can run the whole-share control (a one-way move for the chain). Decision, ledger, fence and recovery are unchanged. Live acceptance remains **NO-GO**:
+alert delivery, real-time PROD quotes, a measured PROD fee and the owner's decision are still open ([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)).
+
 16 October audit: [a standing broker-reject halt, a five-hour broker outage and the real-money gates](docs/AUDIT_20261016_TH.md).
 Three UBER SELLs in a row came back `FAILED` with no reason and the sticky `BROKER_REJECT_HALT` then
 stopped UAT for the rest of the session. On UAT only, the halt now lets one ordinary READY order through

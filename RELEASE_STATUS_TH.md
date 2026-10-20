@@ -1,5 +1,16 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 20 ตุลาคม: [audit recorder ทิ้ง tick หลักฐาน และ halt ส่ง ERROR ทุก tick](docs/AUDIT_20261020_TH.md) — revision `00048-kap` (main@e039b48 หลัง PR #30), log 19 ต.ค. 13:30–20:47Z: 438 tick ↔ 438 request (instance เดียว 82 ชม. 5 นาที),
+แถว 754–779 ต่อเนื่อง, สมการคำนวณใหม่จากหลักการเบื้องต้นตรงทั้ง 26 แถว, ไม่มี fill, candidate `eb7495ec…` ตรงกับ checkout สะอาดของ `e039b48`. broker UAT ทำ SELL UBER 7 ใบ `FAILED` โดยไม่ให้เหตุผล
+(auto-probe ของ PR #30 ทำงานจริง 4 ครั้ง ล้มทุกครั้ง; streak 4, cooldown เพดาน 4 ชม. หมด 23:00:19Z). **ข้อบกพร่องที่พบ**: (S1) flight recorder ทิ้งทุก tick ที่จบเพราะงบหมด — สมการครบ 23/26 แถว, probe warning 2/4, Preview 7/9;
+(S2) halt ของ broker เป็น ERROR 391/438 tick (health-policy จะ page ทุก ~5 นาทีทั้งคืนเมื่อผูก alert); (N3) whole-share control เป็นทางเดียวไม่ย้อนบน chain และ `continuous-uat.sh` รันไม่ได้.
+**แก้ใน source**: tick ที่เป็นหลักฐานเขียนได้ถึงเหลืองบ 1 วินาที; halt ของ broker เป็น ERROR เฉพาะ 180 วินาทีแรกของทุกชั่วโมง (replay 391 → 32); `trace_audit` เพิ่ม `RECORDER_SKIPPED_TICKS`, `TRACE_GAP_ROWS`, `LOG_EXPORT_SHORT`;
+`LEGO_ALLOW_FRACTIONAL_OVERRIDE` ใน `continuous-uat.sh`. ไม่แตะสูตรตัดสินใจ/ledger/fence/recovery. เทสต์ 2,055 passed / 9 skipped (+52), mutation จับ 29/29.
+ข้อจำกัดที่เปิดอยู่ (ไม่แก้ใน PR นี้): สาเหตุ FAILED ฝั่ง Webull ไม่ทราบ (evidence pack อยู่ใน audit); probe จริงช้ากว่าออกแบบ 1 slot (N2); order tick = 12 broker call และ 3 จาก 7 order ต้องใช้ 2 tick (S4 — วัดบน PROD canary).
+สถานะ: **code-ready, live-evidence-pending (NO-GO เงินจริง)** — halt ที่ค้างเคลียร์ได้ด้วย `ops.py reset-reject-halt` **ก่อน 13:30Z** (ข้อ 0 ใน audit; redeploy ไม่เคลียร์ halt); PR นี้เปลี่ยน candidate hash จึงต้อง `release-plan` + `continuous-uat.sh` ใหม่ **ก่อน 2026-10-30T20:00Z**;
+เงินจริงยังต้อง alert ถึงคนจริง (G4), PROD observe ≥2 session + quote real-time, token ที่คนหมุน, DB/rules PROD แยก, fee PROD ที่วัดแล้ว และการตัดสินใจเชิงเศรษฐศาสตร์ของเจ้าของ.
+ผล local และ evidence อยู่ใน `release_evidence/20261020-pr/`.
+
 ล่าสุด 16 ตุลาคม: [audit halt ที่ค้างหลัง FAILED 3 ใบติด](docs/AUDIT_20261016_TH.md) — revision `00047-qix` (main@11ecb6b หลัง PR #29), log 16 ต.ค. 13:30–15:04Z: 95 tick ทุก 60.0 วินาที ไม่มีช่องว่าง,
 แถว 728–734 ต่อเนื่อง, สมการ/ledger/lineage 0 mismatch, ไม่มี fill, candidate `dd90b7d1…` ตรงกับ checkout สะอาดของ `11ecb6b`. **UAT หยุดเทรดที่เหลือของวัน**: SELL UBER 3 ใบติด (13:45 / 14:00 / 14:22Z) ถูก broker ทำ `FAILED`
 โดยไม่ให้เหตุผล (Preview/Place/Detail ตอบ 200) → `BROKER_REJECT_HALT` (halt `12ae3645…`) ที่ไม่หายเอง ≈ 22 จาก 26 slot; ก่อนหน้านั้น `positions` 417 เป็นคลื่นฝั่ง broker (15 ต.ค. 14:57→19:59Z ≈ 20 slot, 16 ต.ค. 7 tick)
