@@ -464,6 +464,8 @@ def _run_tick(request):
         "active": runtime.operator.active,
         "new_mutations_authorized": runtime.allows_new_broker_mutation,
         "broker_reject_halted": bool(circuit.get("halted")),
+        # When the halt began: observability pages a standing halt by its age, not on every tick.
+        "broker_reject_halted_at": circuit.get("halted_at") if circuit.get("halted") else None,
         "operational_health": health,
         "recovery": recovery,
         "decision": decision,

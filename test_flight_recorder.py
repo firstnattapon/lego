@@ -454,10 +454,12 @@ def test_the_final_write_is_time_boxed(monkeypatch):
 
 
 def test_a_tick_with_little_budget_left_does_not_write(monkeypatch):
+    # A routine tick: the repeat of a standing halt. A committed row, a deferral and a broker error
+    # are evidence and are written down to one second left (test_audit_20261020, 2026-10-19 audit).
     monkeypatch.setattr(fr, "_remaining", lambda: 5.0)
     with tick():
-        fr.node("D10", "committed")
-        result = fr.finish(body(), 200)
+        fr.node("D02", "MARKET_CLOSED")
+        result = fr.finish(body(business_status="BROKER_REJECT_HALT"), 200)
     assert result["skipped"] == "budget" and traces() == {}
 
 

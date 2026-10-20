@@ -8,8 +8,14 @@ set -Eeuo pipefail
 : "${LEGO_TRADING_WINDOW_END_OVERRIDE:?New explicit approval expiry required}"
 export WEBULL_ENV_OVERRIDE=UAT LEGO_MODE_OVERRIDE=trade LEGO_ACTIVE_OVERRIDE=true
 export LEGO_SYMBOL_OVERRIDE=UBER LEGO_FIX_C_OVERRIDE=10000 LEGO_DIFF_OVERRIDE=25
-export LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_SESSION_KEY_MODE_OVERRIDE=market_day
+export LEGO_SESSION_KEY_MODE_OVERRIDE=market_day
 export LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-strategy.uat-continuous.json}"
+# true = fractional orders (this policy file's default). false = the whole-share control run, the
+# order shape PROD starts with (docs/AUDIT_20261020_TH.md N3). The release authorization is bound to
+# this value, so plan the release with an env file that says the same (LEGO_ALLOW_FRACTIONAL=false).
+# For a chain already bound to 2-place quantities the move is one way: lego_state accepts
+# fractional -> whole-share (a tightening) and refuses the way back.
+export LEGO_ALLOW_FRACTIONAL_OVERRIDE="${LEGO_ALLOW_FRACTIONAL_OVERRIDE:-true}"
 # cancel_expire: cancel, and if the broker refuses and a DAY order is still PENDING after its
 # session closed, release it only on the proof in order_recovery.expiry_proof_blockers
 # (docs/AUDIT_20261007_TH.md). On UAT an order the broker keeps listing as PENDING with nothing

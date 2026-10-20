@@ -65,11 +65,17 @@ MAX_EVENT_BYTES = 6144
 MAX_TICK_BYTES = 98304
 MAX_EVENTS = 200
 FLUSH_MIN_BUDGET_SECONDS = 12.0
-# A tick that sent or cancelled an order keeps its tail even when it ran long. The write is
-# time-boxed to FLUSH_TIMEBOX_SECONDS and the tick deadline (35 s) sits 10 s inside Cloud
+# A tick whose trace explains an order keeps its tail even when it ran long: one that sent or
+# cancelled an order ("mutation") and, since the 2026-10-19 audit, one that deferred, failed,
+# committed a row, left an order unresolved or recorded a warning (_EVIDENCE_REASONS). The write
+# is time-boxed to FLUSH_TIMEBOX_SECONDS and the tick deadline (35 s) sits 10 s inside Cloud
 # Run's 45 s limit, so one second left is enough (worst case ~38 s). 2026-10-09 15:24 the one
 # tick that overran lost exactly the part after Place: the order-detail error and the
-# deferral that explained the order which then FAILED.
+# deferral that explained the order which then FAILED. 2026-10-19 the 12 s floor dropped every
+# tick that ended because its budget ran out (1.85, 2.64 and 11.58 s left) and 3 of the 4
+# broker-outage ticks (3.86, 2.81 and 6.20 s left): 3 of 26 committed rows had no recorded
+# equation (heartbeat skipped_budget = 6). Only the idle heartbeat, a repeated halt and the
+# debug level still need the full FLUSH_MIN_BUDGET_SECONDS.
 FLUSH_MIN_BUDGET_MUTATION_SECONDS = 1.0
 FLUSH_TIMEBOX_SECONDS = 3.0
 PRUNE_MIN_BUDGET_SECONDS = 10.0
@@ -138,6 +144,11 @@ NODES: dict[str, dict] = {
 
 _IDLE_BIZ = frozenset({"MARKET_CLOSED", "SLOT_CONSUMED"})
 _STEADY = frozenset({"unresolved_intent", "halt", "biz_other", "warning", "webull_error"})
+# What happened to an order, a row or the tick's own deadline. A tick with one of these reasons is
+# written down to FLUSH_MIN_BUDGET_MUTATION_SECONDS left; a repeated halt, the first tick of a boot
+# and the debug level are not evidence and keep FLUSH_MIN_BUDGET_SECONDS.
+_EVIDENCE_REASONS = frozenset({"mutation", "row_committed", "deferred", "error",
+                               "unresolved_intent", "webull_error", "warning"})
 _REASON_BY_BIZ = {
     "ROW_COMMITTED": "row_committed",
     "WAITING_RECONCILIATION": "unresolved_intent",
@@ -914,7 +925,7 @@ def finish(body: dict, code, request=None) -> dict | None:
             _write(chain, trace.started.strftime("%Y-%m-%d"), None, None,
                    _heartbeat(trace, pipe, biz, code, None))
         return result
-    if not _budget_ok(mutation="mutation" in reasons):
+    if not _budget_ok(evidence=bool(reasons & _EVIDENCE_REASONS)):
         _STATS["skipped_budget"] += 1
         result["skipped"] = "budget"
         return result
@@ -938,9 +949,9 @@ def finish(body: dict, code, request=None) -> dict | None:
     return result
 
 
-def _budget_ok(mutation: bool = False) -> bool:
+def _budget_ok(evidence: bool = False) -> bool:
     left = _remaining()
-    floor = FLUSH_MIN_BUDGET_MUTATION_SECONDS if mutation else FLUSH_MIN_BUDGET_SECONDS
+    floor = FLUSH_MIN_BUDGET_MUTATION_SECONDS if evidence else FLUSH_MIN_BUDGET_SECONDS
     return left is None or left >= floor
 
 

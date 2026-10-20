@@ -114,11 +114,17 @@ NOTICE_STATUSES = frozenset({"RELEASE_EXPIRED", "DNA_EXHAUSTED"})
 # 180 s in none of 4,000.
 PAUSED_PAGE_SECONDS = 180
 PAUSED_REMINDER_PERIOD_SECONDS = 3600
+# A standing broker-reject halt is the same kind of steady state: it needs a person (PROD) or a
+# cooldown (UAT) and repeats every minute until then. 2026-10-19 it was an ERROR on 391 of 438
+# ticks, 48 of them after the close, and the health policy of tools/monitoring_config.py pages on
+# severity>=ERROR with a five-minute rate limit: one page every five minutes all night. A halt
+# whose start is unknown still pages on every tick.
+PAGED_HOURLY = frozenset({"MANUAL_RECONCILIATION_REQUIRED", "BROKER_REJECT_HALT"})
 
 
 def severity_for(health: str, *, paused: bool = False,
                  halt_age_seconds: float | None = None) -> str:
-    if paused and health == "MANUAL_RECONCILIATION_REQUIRED":
+    if paused and health in PAGED_HOURLY:
         if (halt_age_seconds is not None
                 and max(0.0, halt_age_seconds) % PAUSED_REMINDER_PERIOD_SECONDS
                 < PAUSED_PAGE_SECONDS):
@@ -152,10 +158,14 @@ def emit_tick(body: dict, code: int, *, request=None, now: datetime | None = Non
     phases = [body.get("recovery") or {}, body.get("dispatch") or {}]
     paused = any(phase.get("reconciliation_paused") for phase in phases)
     halt_since = next((phase.get("halt_since") for phase in phases if phase.get("halt_since")), None)
+    standing = health == "BROKER_REJECT_HALT"
+    if standing and not halt_since:
+        halt_since = body.get("broker_reject_halted_at")
+    paged_hourly = paused or standing
     event = {
         "event": "lego_tick_completed", "timestamp": now.isoformat(),
-        "severity": severity_for(health, paused=paused,
-                                 halt_age_seconds=_halt_age_seconds(halt_since, now) if paused else None),
+        "severity": severity_for(health, paused=paged_hourly,
+                                 halt_age_seconds=_halt_age_seconds(halt_since, now) if paged_hourly else None),
         "revision": os.environ.get("K_REVISION"),
         "candidate_hash": os.environ.get("LEGO_CANDIDATE_HASH"),
         "correlation_id": body.get("correlation_id"), "http_status": code,
