@@ -1,5 +1,13 @@
 # LEGO PRINCIPAL v2
 
+21 October audit: [a dispatch gate that dropped both BUYs of the session on a transient `balances/get` 417, a decision commit that never checked the time left, and the real-money gates](docs/AUDIT_20261021_TH.md).
+The 20 October UAT session was correct (437 ticks, all 26 rows recomputed from first principles, nothing filled) but the broker failed all 5 UBER SELLs without a reason (15 in a row since 16 October),
+and both BUY intents ended as `NOT_PLACED` with 14 minutes of their slot left: `balances/get` answered HTTP 417 three times and the gate treated a transient read as a verdict on the order.
+A transient read before Place now defers the intent at most twice (every guard runs again on each try), a tick that runs out of time while reading is no longer turned into `NOT_PLACED`,
+the decision stage defers the whole tick when less than 3 s is left after the snapshot (row v2 was committed with 0.88 s left and has no recorded equation), and the UAT token check counts a client pair
+that is still valid (a false `webull_token` warning at 16:45:07Z). Decision, ledger, fence, recovery, order limits and the circuit rules are unchanged. Live acceptance remains **NO-GO**:
+the broker failure, alert delivery, real-time PROD quotes, a measured PROD fee and the owner's decision are still open ([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)).
+
 20 October audit: [a flight recorder that dropped the ticks that explain an order, a halt that paged every minute, and the real-money gates](docs/AUDIT_20261020_TH.md).
 The 19 October UAT session was correct (438 ticks, all 26 rows recomputed from first principles, nothing filled) but the broker failed all 7 UBER SELLs without a reason,
 and the flight recorder kept the equation of only 23 of the 26 rows: it wrote a notable tick only with 12 s of tick budget left, and the ticks that matter end because the budget ran out.

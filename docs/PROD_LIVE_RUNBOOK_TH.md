@@ -253,3 +253,19 @@ incident ของ health-policy ปิดเองหลัง 30 นาที�
 
 **เกณฑ์ canary เพิ่ม (S4)**: order tick ที่ตัดสินใจ+Place ใน tick เดียวเรียก broker ≈ 12 ครั้ง (instrument 1, positions 3, snapshot 3, open_orders 2, preview, place, order_detail) ใช้ 15–25 วินาทีบน UAT และ 3 จาก 7 order ต้องใช้ 2 tick
 (เลื่อนที่ `require_budget` ก่อน fence — fail-closed ไม่เสียเงิน แต่ Preview ซ้ำ). ก่อนขยาย caps บน PROD ให้วัดสัดส่วน order ที่ต้องใช้ 2 tick และ p95 ของ order tick จาก `lego_operation` / `lego_tick_completed`; ถ้าแย่กว่า UAT ให้หยุดและตัดสินใจเรื่องลดการอ่านซ้ำก่อน (ไม่แก้ในรอบนี้ — เป็น money path)
+
+## 15. order ที่ถูกเลื่อนก่อน Place และ tick ที่เลื่อนที่ decision stage (จาก audit 21 ต.ค.)
+
+เหตุการณ์จริง 20 ต.ค.: BUY ทั้ง 2 ใบของ session ตายเป็น `NOT_PLACED` เพราะ `balances/get` ตอบ 417 `OPENAPI_SYSTEM_ERROR` 3 ครั้ง (14:00:33Z, 16:45:33Z; เหลือ ≈ 14 นาทีของ slot) — `docs/AUDIT_20261021_TH.md` S1.
+ทั้งหมดนี้เป็น**การเลื่อน** ไม่ใช่การเปิดสิทธิ์: ไม่ต้องทำอะไรด้วยมือ และไม่มีอะไรให้ reset (ไม่มี fence, ไม่นับเป็น broker reject)
+
+| อาการ | ความหมาย | ต้องทำอะไร |
+|---|---|---|
+| intent ค้าง `PENDING_DISPATCH` มี `gate_defer_count` 1 หรือ 2 และ `dispatch_check_phase=pre_place_read`; `last_error` เป็น `ServerException … 417` / 504 / timeout | gate อ่าน buying power หรือ Preview ล้มชั่วคราวก่อนถึง fence ของ Place; tick ถัดไปรัน gate **ทั้งชุดใหม่** (quote age, decision age, drift 100 bps, open orders, funding, execution limits) | ไม่ต้องทำอะไร. เลื่อนได้ ≤ 2 ครั้งต่อ intent และ ≤ 1 ครั้งต่อ tick; `business_status` เป็น `ERROR` ทุกครั้งที่พลาด (ได้ถึง 3 tick ต่อ intent — health-policy rate-limit 300 s จึงเป็น incident เดียว) |
+| intent จบ `NOT_PLACED` ที่ `gate_defer_count` = 2 | อ่านล้มชั่วคราวติด 3 tick (≈ 2 นาที) — ผลเดียวกับก่อนแก้ แต่หลังลองใหม่แล้ว | เก็บ request id (`WEBULL_SDK_ERRORS` / `WEBULL_ERRORS` ของ `tools.trace_audit`) ส่งให้ Webull; ไม่ต้อง reset |
+| intent จบ `SUPPRESSED_STATE_CHANGED` หลังเลื่อน | decision age เกินขีด (UAT 360 s, **PROD 120 s** ⇒ PROD เลื่อนได้ไม่เกินราว 2 tick) หรือราคา/ฝั่งเปลี่ยน | ปกติ — slot ถัดไปตัดสินใหม่ |
+| tick `TICK_DEFERRED` โดยไม่มีแถวใหม่ และ trace มี `D08` + `T00` (`tick_deadline`) เมื่อเหลือ ≥ 1 s | decision stage เหลืองบ < 3 s หลัง snapshot (`DECISION_COMMIT_MIN_BUDGET_SECONDS`) จึงไม่เขียนแถว/circuit/intent; tick ถัดไปตัดสิน slot เดิมใหม่ด้วยงบเต็ม | ไม่ต้องทำอะไร; ถ้าเกิดต่อเนื่องหลาย tick แปลว่า `snapshots/list` ช้ามาก (20 ต.ค.: 15.4 s + 10.2 s ใน tick เดียว) — ส่ง request id ให้ Webull |
+| `webull_token` warning บน UAT | หลัง build นี้ช่องว่าง ≈ 1.5 s ระหว่าง profile กับ pair ของ cache ไม่ทำให้เกิดอีก (เหลือเฉพาะ pair หมด TTL คั่นกลาง tick — เป็น warning ไม่ใช่ gate) ⇒ ถ้าเห็นซ้ำทุกชั่วโมงหรือบ่อยกว่านั้น ให้สงสัย identity/secret ที่เปลี่ยนจริง | ตรวจ `WEBULL_TOKEN_DIR` และ secret ตามข้อ 7; บน PROD token check เปิดอยู่เสมอ — warning นี้เป็นของจริง |
+
+**เกณฑ์ canary เพิ่ม**: นับสัดส่วน intent ที่ถูกเลื่อน (`gate_defer_count` ≥ 1) ต่อ order ที่ถึง Place และสัดส่วนที่เลื่อนจนจบเป็น `NOT_PLACED` — บน PROD ถ้า `balances/get` ล้มบ่อยพอจะกินขีด decision age 120 s ให้หยุดและส่ง request id ให้ Webull ก่อนขยาย caps.
+การเลื่อนไม่ผ่อนผัน guard ใด: ถ้าสงสัยว่า order ถูกส่งซ้ำหรือผิดฝั่ง ให้ดู `webull_lego_order_audit` (`dispatch_quote_check`) และ `webull_lego_execution_transitions` ก่อนสรุป

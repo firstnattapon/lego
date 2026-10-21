@@ -1,5 +1,16 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 21 ตุลาคม: [audit gate ของ dispatch ทิ้ง BUY เพราะ `balances/get` 417 ชั่วคราว และ commit แถวโดยไม่เช็กงบ](docs/AUDIT_20261021_TH.md) — revision `00049-duk` (main@befa78c หลัง PR #31), log 20 ต.ค. 13:29–20:45Z: 437 tick ↔ 437 request (instance เดียว),
+แถว 780–805 ต่อเนื่อง, สมการคำนวณใหม่จากหลักการเบื้องต้นตรงทั้ง 26 แถว, ไม่มี fill, candidate `d06333fe…` ตรงกับ checkout สะอาดของ `befa78c`. broker UAT ทำ SELL UBER 5 ใบ `FAILED` โดยไม่ให้เหตุผล
+(รวม 15 ใบติดตั้งแต่ 16 ต.ค.; probe 2 ใบล้มทั้งคู่; halt ค้าง streak 2). **ข้อบกพร่องที่พบ**: (S1) BUY ทั้ง 2 ใบของ session (14:00 และ 16:45Z) ตายเป็น `NOT_PLACED` เพราะ `balances/get` ตอบ 417 ×3 ทั้งที่เหลือ ≈ 14 นาทีของ slot;
+(S2) `TickDeadlineExceeded` ใน gate ถูกกลืนเป็น `NOT_PLACED` (ซ่อนอยู่ — reproduce ด้วยเทสต์); (S3) decision commit แถวโดยไม่เช็กงบ — v2 เหลือ 1.72 s จึงไม่มีสมการใน trace; (S4) `webull_token` warning ผิดที่ 16:45:07Z.
+**แก้ใน source**: gate ไม่กลืน deadline และเลื่อน intent ≤ 2 ครั้งเมื่ออ่าน buying power/Preview ล้มชั่วคราว (guard ทุกตัวรันซ้ำทุกครั้ง); decision เลื่อนทั้ง tick เมื่อหลัง snapshot เหลือ < 3 s; `_token_check_disabled()` นับ pair ที่ยังไม่หมด TTL.
+ไม่แตะสูตรตัดสินใจ/ledger/fence/recovery/circuit. เทสต์ 2,102 passed / 9 skipped (+47, ไม่แก้เทสต์เดิม), mutation จับ 24/24.
+ข้อจำกัดที่เปิดอยู่ (ไม่แก้ใน PR นี้): สาเหตุ FAILED ฝั่ง Webull ไม่ทราบ (evidence pack อยู่ใน audit); ไม่มี alert (G4); chain ถูกล้างอีกครั้ง (G1 นับไม่ได้).
+สถานะ: **code-ready, live-evidence-pending (NO-GO เงินจริง)** — halt ที่ค้างเลือกได้สามทางก่อน 13:30Z (ปล่อยให้ probe ทำงาน / `reset-reject-halt` / `halt-orders`; ข้อ 0 ใน audit); PR นี้เปลี่ยน candidate hash จึงต้อง `release-plan` + `continuous-uat.sh` ใหม่ **ก่อน 2026-11-02T21:00Z**;
+เงินจริงยังต้อง alert ถึงคนจริง (G4), PROD observe ≥2 session + quote real-time, token ที่คนหมุน, DB/rules PROD แยก, fee PROD ที่วัดแล้ว และการตัดสินใจเชิงเศรษฐศาสตร์ของเจ้าของ.
+ผล local และ evidence อยู่ใน `release_evidence/20261021-pr/`.
+
 ล่าสุด 20 ตุลาคม: [audit recorder ทิ้ง tick หลักฐาน และ halt ส่ง ERROR ทุก tick](docs/AUDIT_20261020_TH.md) — revision `00048-kap` (main@e039b48 หลัง PR #30), log 19 ต.ค. 13:30–20:47Z: 438 tick ↔ 438 request (instance เดียว 82 ชม. 5 นาที),
 แถว 754–779 ต่อเนื่อง, สมการคำนวณใหม่จากหลักการเบื้องต้นตรงทั้ง 26 แถว, ไม่มี fill, candidate `eb7495ec…` ตรงกับ checkout สะอาดของ `e039b48`. broker UAT ทำ SELL UBER 7 ใบ `FAILED` โดยไม่ให้เหตุผล
 (auto-probe ของ PR #30 ทำงานจริง 4 ครั้ง ล้มทุกครั้ง; streak 4, cooldown เพดาน 4 ชม. หมด 23:00:19Z). **ข้อบกพร่องที่พบ**: (S1) flight recorder ทิ้งทุก tick ที่จบเพราะงบหมด — สมการครบ 23/26 แถว, probe warning 2/4, Preview 7/9;
