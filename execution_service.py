@@ -93,6 +93,11 @@ PROD_MAX_DISPATCH_DECISION_AGE_SECONDS = 120.0
 # A broker timestamp a fraction ahead of the worker can be ordinary clock skew.
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
+# 2026-10-20: balances/get answered 417 three times on both BUY intents and each ended as NOT_PLACED
+# with 14 minutes of its slot left. A transient broker read that fails before the place fence defers
+# the intent at most this many times (one deferral = one tick). The next tick runs the whole gate
+# again, so no guard is skipped; the count is kept on the intent as gate_defer_count.
+MAX_GATE_DEFERRALS = 2
 RECONCILE_STATUSES = {
     "CANCEL_REQUESTED", "CANCEL_UNKNOWN",
     "PLACING_UNKNOWN", "PLACING", "PENDING", "SUBMITTED", "UNKNOWN",
@@ -440,6 +445,14 @@ def _persist_error(chain_key_: str, run_id: str, status: str, exc: Exception,
     return {"run_id": run_id, "status": status, "error": err,
             "error_type": type(exc).__name__, "broker_error": details,
             **({"needs_manual_check": True} if (extra or {}).get("needs_manual_check") else {})}
+
+
+def _gate_defer_count(intent: dict) -> int:
+    """Deferrals this intent has already used; a value that cannot be read counts as all of them."""
+    try:
+        return int(intent.get("gate_defer_count", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return MAX_GATE_DEFERRALS
 
 
 def _intent_is_v2(intent: dict) -> bool:
@@ -1537,6 +1550,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             if capability is None and (runtime is not None or hasattr(trade_client, "trade_instrument")):
                 try:
                     capability = fetch_instrument_capability(trade_client, cfg.symbol)
+                except tick_runtime.TickDeadlineExceeded:
+                    raise
                 except Exception as cap_exc:
                     raise FractionalGateError(
                         f"unable to verify instrument capability for fractional order: {cap_exc}") from cap_exc
@@ -1597,9 +1612,23 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             ),
         )
         fr.node("W23", "passed", run_id=run_id)
+    except tick_runtime.TickDeadlineExceeded:
+        # Out of tick time while still reading is not a verdict on the order: nothing was sent,
+        # the worker releases its claims, and the next tick runs the whole gate again.
+        fr.node("W23", "deferred", ok=False, run_id=run_id, reason="tick_deadline")
+        raise
     except Exception as exc:
         fr.node("W23", "failed", ok=False, run_id=run_id)
         fr.error("dispatch_gate", exc, "W23")
+        # A transient broker read (balances/get 417, a 504, a timeout) is no verdict on the order
+        # either: defer it a bounded number of times instead of losing the slot. Anything else is
+        # a verdict and ends the intent as before.
+        defers = _gate_defer_count(intent)
+        if is_transient_exception(exc) and 0 <= defers < MAX_GATE_DEFERRALS:
+            return _persist_error(
+                ck, run_id, "PENDING_DISPATCH", exc,
+                {"gate_defer_count": defers + 1, "dispatch_check_phase": "pre_place_read"},
+                claim=intent)
         return _persist_error(ck, run_id, "NOT_PLACED", exc, claim=intent)
 
     # Preview is a network call and can take long enough for both price and
