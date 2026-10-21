@@ -79,6 +79,12 @@ DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS = 360.0
 # A broker timestamp a fraction ahead of the worker can be ordinary clock skew.
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
+# What the decision stage needs left before it writes anything: the row commit took 0.28-0.91 s on
+# 2026-10-20 (25 ticks) and the recorder drops a tick that ends with under 1 s left
+# (FLUSH_MIN_BUDGET_MUTATION_SECONDS). Row v2 had 1.72 s after its snapshot, was committed, and its
+# tick ended with 0.88 s left: nothing was recorded, so v2 has no D08 equation. Of the 26 rows of
+# that session only v2 had less than 17 s after its snapshot.
+DECISION_COMMIT_MIN_BUDGET_SECONDS = 3.0
 RECONCILE_STATUSES = {
     "PLACING_UNKNOWN", "PLACING", "PENDING", "SUBMITTED", "UNKNOWN",
     "PARTIAL_FILLED", "PARTIALLY_FILLED", AWAITING_FILL_CONFIRMATION,
@@ -325,6 +331,9 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             mode = f"{mode}:degraded"
         row = compute_row(cfg, snapshot, anchor, dna_step=effective_step)
         fr.decision_equation(cfg, snapshot, anchor, row, effective_step)
+        # Everything above only reads. Defer before the circuit, the commit and the intent are touched:
+        # the next tick decides this slot again with a full budget and nothing here has to be undone.
+        tick_runtime.require_budget(DECISION_COMMIT_MIN_BUDGET_SECONDS)
 
         # The deployed v2 entrypoint supplies the typed runtime and therefore
         # has one explicit gate. Calling this legacy handler directly keeps the

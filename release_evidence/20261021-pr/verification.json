@@ -1,0 +1,125 @@
+{
+  "schema": "lego_audit_verification_v1",
+  "generated_at": "2026-10-21T10:31:32.079610+00:00",
+  "base_commit": "befa78c2878fc5d6d19363e2331b20949f0c83fa",
+  "python": "Python 3.12.3 (the version CI runs), numpy 2.4.6 as pinned in requirements.txt",
+  "local_status": "PASS",
+  "failed_checks": [],
+  "real_money_ready": false,
+  "release_state": "NO_GO",
+  "candidate": {
+    "hash_of_this_tree": "b24b3df7c157eb451245ec0e54248c7434bb5fde996f33a58f3f1837d3890499",
+    "file_count": 204,
+    "scope": "backend-only",
+    "computed_with": "tools/candidate_manifest.py build_manifest() on the working tree that was committed (release_evidence/ is excluded from the hash)",
+    "deployed_before_this_change": "d06333fe5d6f4f4c9a8df8116e567d2562db5b7f792bf4842882a26d4eb5a89d"
+  },
+  "note": "The operator recomputes the candidate hash from a clean checkout of the merged commit (ops.py release-plan); it changes with this PR and with any later edit, so UAT needs a new release before 2026-11-02T21:00:00Z to get these changes. Nothing here touched a broker, a Firebase project or a deployed revision. Decision formula, ledger, fence, recovery, order limits and the broker-reject circuit rules are unchanged; every change only defers an order or stops swallowing an error, and every dispatch guard runs again in full on each try.",
+  "code_change": {
+    "files": {
+      "execution_service.py": "+29/-0",
+      "decision_service.py": "+9/-0",
+      "webull_io.py": "+9/-2"
+    },
+    "new_files": [
+      "test_audit_20261021.py",
+      "docs/AUDIT_20261021_TH.md",
+      "release_evidence/20261021-pr/"
+    ],
+    "docs_changed": [
+      "README.md",
+      "RELEASE_STATUS_TH.md",
+      "docs/PROD_LIVE_RUNBOOK_TH.md (section 15)"
+    ],
+    "existing_tests_changed": 0
+  },
+  "full_suite": {
+    "command": "pytest -q",
+    "junit_sha256": "726faa594496f8d410c0f5042a370624671e7451cf57291c61c18ed17c325b3b",
+    "counts": {
+      "tests": 2111,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 2102
+    },
+    "baseline_before_change": {
+      "tests": 2064,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 9,
+      "passed": 2055
+    },
+    "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +47 tests (test_audit_20261021.py); no existing test was modified."
+  },
+  "mutation": {
+    "mutants": 24,
+    "killed": 24,
+    "survivors": [],
+    "by_file": {
+      "execution_service.py": 13,
+      "decision_service.py": 3,
+      "webull_io.py": 8
+    },
+    "note": "each mutant applied to a copy of the tree and test_audit_20261021.py run; first sweep: 23/24, the survivor (the count reader without its 'or 0': an absent or empty gate_defer_count read as spent) got its own test, then 24/24"
+  },
+  "checks": [
+    {
+      "id": "py_compile",
+      "command": "python -m py_compile *.py tools/*.py",
+      "exit_code": 0
+    },
+    {
+      "id": "shell_syntax",
+      "command": "bash -n deploy/*.sh",
+      "exit_code": 0
+    },
+    {
+      "id": "new_tests",
+      "command": "pytest -q test_audit_20261021.py",
+      "tests": {
+        "test_audit_20261021.py": 47
+      },
+      "result": "on main@befa78c without the change 21 of the 47 fail (the positive cases of C1a, C1b, C2 and C3) and 26 pass (guards that must hold before and after); all 47 pass after the change"
+    },
+    {
+      "id": "independent_ledger_recompute",
+      "command": "plain Python on webull_lego_rows, no repo code",
+      "result": "26/26 rows: V=H*P, gap=V-FIX_C, R=FIX_C*ln(P/P0), E=A-R, qty=floor(|gap|/P at 2 places) when |gap|>DIFF else 0; 0 failures; holdings 145.1328, A=0, dA=0 on every row"
+    },
+    {
+      "id": "decision_budget_after_snapshot",
+      "command": "remaining_budget_ms of the first successful snapshot call of each of the 26 ticks that committed a row (Cloud Run log)",
+      "result": "min 1.715 s (v2), next 17.057 s (v17), then 20.187 / 20.797 / 22.201 s; median 28.05 s; so the 3.0 s guard of C2 touches v2 only"
+    },
+    {
+      "id": "reproduce_before_after",
+      "command": "tests of this PR run against main@befa78c and against the change",
+      "result": "before: a tick deadline or a balances/get 417/504 in the pre-place gate ends the intent as terminal NOT_PLACED (last_error TickDeadlineExceeded / ServerException 417) at the real worker; row v2 is committed with 1.715 s left; the token check reports a problem when the profile stamp is older than the client pair's. after: the intent stays PENDING_DISPATCH (gate_defer_count 1, 2; the third transient failure ends NOT_PLACED), places once when the next tick can read, v2 is deferred with no row, and the pair keeps the check disabled"
+    },
+    {
+      "id": "trace_audit_on_this_evidence",
+      "command": "python tools/trace_audit.py --logs ... --rtdb ... --yaml ... --repo <clean checkout of befa78c>",
+      "result": "0 P0 / 7 P1 / 7 P2 / 3 info: P1 ORDER_FAILED_REASON_UNKNOWN x5, ALERTING_NOT_CONFIGURED, BROKER_REJECT_HALT_ACTIVE; P2 TRACE_GAP_ROWS (v2), RECORDER_SKIPPED_TICKS (1), TICKS_DEFERRED (2), TICK_NEAR_BUDGET (1), WEBULL_ERRORS (2x balance 417), WEBULL_SDK_ERRORS x2 (6x balances/get 417, 2x positions/list 504); info QUOTE_AGE, LOG_EXPORT_SHORT (7.0 h), UAT_ONLY; 0 equation, row, fill or ledger mismatches; candidate d06333fe... matches the clean checkout of befa78c (backend_only)"
+    },
+    {
+      "id": "readiness_audit_on_this_evidence",
+      "output": "release_evidence/20261021-pr/readiness-audit.json",
+      "result": "BLOCKED: 6 PASS, 1 FAIL (snapshot_integrity: broker_rejection_reason_missing x5), 7 BLOCKED (external operational evidence); real_money_ready false"
+    },
+    {
+      "id": "operator_commands_local_dry_run",
+      "command": "python ops.py release-plan --env-file deploy/uat-continuous.env.example --account-id-stdin with a made-up account id on stdin, once with --window-end and once with --window-sessions 10 --enforce",
+      "result": "both exit 0 and print the deploy_env block and next_steps; read-only, nothing deployed, no real account id used"
+    },
+    {
+      "id": "pip_audit",
+      "command": "pip-audit -r requirements.txt",
+      "result": "No known vulnerabilities found (2026-10-21)"
+    },
+    {
+      "id": "ci_on_base",
+      "result": "GitHub Actions CI run 39401177914 on main@befa78c: success"
+    }
+  ]
+}

@@ -915,8 +915,15 @@ def _token_check_disabled() -> bool:
     if _AUTH_PROFILE is None:
         return False
     key, verified_at, enabled = _AUTH_PROFILE
-    return (enabled is False and key == _client_identity()
-            and time.monotonic() - verified_at < _client_cache_ttl())
+    if enabled is not False or key != _client_identity():
+        return False
+    now, ttl = time.monotonic(), _client_cache_ttl()
+    # build_clients() stamps the profile before the token refresh and the account-list call and the pair
+    # after them (1.5 s later on 2026-10-20), then serves the pair until the pair's own TTL. Judged alone,
+    # the profile expired that long before the pair, and a tick that began inside the gap reported a
+    # token problem UAT does not have (webull_token warning, 2026-10-20 16:45:07Z).
+    return (now - verified_at < ttl
+            or (_CLIENTS is not None and _CLIENTS[0] == key and now - _CLIENTS[1] < ttl))
 
 
 _MUTATING_OPERATIONS = frozenset({"place", "cancel"})
