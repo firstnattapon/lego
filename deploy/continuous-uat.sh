@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Continuous UAT release (MSFT, FIX_C=10000). Run `python ops.py release-plan
+# Continuous UAT release (AAPL, FIX_C=10000). Run `python ops.py release-plan
 # --env-file deploy/uat-continuous.env.example --window-sessions 10 --reference-price <price>`
 # first: it prints the three values required below for the release you mean to deploy.
 set -Eeuo pipefail
@@ -7,7 +7,7 @@ set -Eeuo pipefail
 : "${LEGO_RELEASE_AUTHORIZATION_OVERRIDE:?v4 release authorization required}"
 : "${LEGO_TRADING_WINDOW_END_OVERRIDE:?New explicit approval expiry required}"
 export WEBULL_ENV_OVERRIDE=UAT LEGO_MODE_OVERRIDE=trade LEGO_ACTIVE_OVERRIDE=true
-export LEGO_SYMBOL_OVERRIDE=MSFT LEGO_FIX_C_OVERRIDE=10000 LEGO_DIFF_OVERRIDE=25
+export LEGO_SYMBOL_OVERRIDE=AAPL LEGO_FIX_C_OVERRIDE=10000 LEGO_DIFF_OVERRIDE=25
 export LEGO_SESSION_KEY_MODE_OVERRIDE=market_day
 export LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-strategy.uat-continuous.json}"
 # true = fractional orders (this policy file's default). false = the whole-share control run, the
