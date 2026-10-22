@@ -1,5 +1,16 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 22 ตุลาคม: [audit guard อายุ quote ของ UAT กัน order ทุกใบเพราะ feed ของ sandbox ช้ากว่าเวลาจริงหลายชั่วโมง](docs/AUDIT_20261022_TH.md) — revision `00050`–`00054` (main@99000da หลัง PR #35), log 21 ต.ค. 13:23Z → 22 ต.ค. 04:22Z: 903 tick ↔ 903 request,
+แถว AAPL 816–831 ต่อเนื่อง, สมการคำนวณใหม่จากหลักการเบื้องต้นตรงทั้ง 16 แถว, ไม่มี fill, candidate `a465c2d8…` ตรงกับ checkout สะอาดของ `99000da`. **ไม่มี order ถึง broker ทั้ง session**:
+`READY_BUY` 22 slot (UBER 6, AAPL 16) จบ `SUPPRESSED_STATE_CHANGED` ด้วย `quote_age_limit` — snapshot ของ sandbox ตามหลัง 8,987 → 21,154 s เทียบเพดาน UAT 1,260 s; NFLX/MSFT ไม่ OC บน UAT (ERROR 45 tick);
+00050 ล้มที่ instrument profile 15 tick ด้วยสาเหตุที่หาไม่ได้ (RTDB ถูกล้าง); deploy AAPL เป็น initial-funding release (2 order ต่อ session, window 2 session).
+**แก้ใน source**: UAT ตัดสิน quote ด้วย session ที่เปิดอยู่ (ราคาปิดวันก่อนยังถูกกัน) ที่ทั้ง 5 จุดของ dispatch, PROD 60 s ไม่เปลี่ยน; tick log มี `state_change_reasons` และ `errors[].reason` (enum ของ instrument profile);
+`trace_audit` เพิ่ม `DISPATCH_SUPPRESSED`; policy UAT กลับเป็น UBER (30 / 1,500 / 26). ไม่แตะสูตรตัดสินใจ/ledger/fence/recovery/circuit/caps. เทสต์ 2,165 passed / 9 skipped (+63, ไม่แก้เทสต์เดิม), mutation จับ 15/15.
+ข้อจำกัดที่เปิดอยู่ (ไม่แก้ใน PR นี้): broker UAT อาจ `FAILED` order UBER ต่อ (15 ใบติด 16–20 ต.ค.); ไม่มี alert (G4); RTDB ถูกล้างอีกครั้ง (G1 นับไม่ได้).
+สถานะ: **code-ready, live-evidence-pending (NO-GO เงินจริง)** — ตรวจ halt/position ของ UBER ด้วย `ops.py status` แล้วออก release ใหม่ด้วยคำสั่งใน deploy.txt (`WINDOW_SESSIONS=10`) **ก่อน 2026-10-23T20:00Z** ที่ window ของ 00054 จบ;
+เงินจริงยังต้อง alert ถึงคนจริง (G4), PROD observe ≥2 session + quote real-time, token ที่คนหมุน, DB/rules PROD แยก, fee PROD ที่วัดแล้ว และการตัดสินใจเชิงเศรษฐศาสตร์ของเจ้าของ.
+ผล local และ evidence อยู่ใน `release_evidence/20261022-pr/`.
+
 ล่าสุด 21 ตุลาคม: [audit gate ของ dispatch ทิ้ง BUY เพราะ `balances/get` 417 ชั่วคราว และ commit แถวโดยไม่เช็กงบ](docs/AUDIT_20261021_TH.md) — revision `00049-duk` (main@befa78c หลัง PR #31), log 20 ต.ค. 13:29–20:45Z: 437 tick ↔ 437 request (instance เดียว),
 แถว 780–805 ต่อเนื่อง, สมการคำนวณใหม่จากหลักการเบื้องต้นตรงทั้ง 26 แถว, ไม่มี fill, candidate `d06333fe…` ตรงกับ checkout สะอาดของ `befa78c`. broker UAT ทำ SELL UBER 5 ใบ `FAILED` โดยไม่ให้เหตุผล
 (รวม 15 ใบติดตั้งแต่ 16 ต.ค.; probe 2 ใบล้มทั้งคู่; halt ค้าง streak 2). **ข้อบกพร่องที่พบ**: (S1) BUY ทั้ง 2 ใบของ session (14:00 และ 16:45Z) ตายเป็น `NOT_PLACED` เพราะ `balances/get` ตอบ 417 ×3 ทั้งที่เหลือ ≈ 14 นาทีของ slot;

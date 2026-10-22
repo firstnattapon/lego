@@ -1,0 +1,1150 @@
+{
+ "schema": "lego_audit_input_hashes_v1",
+ "generated_at": "2026-10-22T04:58:48.773616+00:00",
+ "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates are the numbers quoted in docs/AUDIT_20261022_TH.md and are reproducible with: python -m tools.trace_audit --json --logs ... --rtdb ... --yaml ... --repo <clean checkout of 99000da> (with this PR's tools/trace_audit.py, which adds DISPATCH_SUPPRESSED). Per-tick lists (failing ticks, notable traces, equation runs) are left out; their counts are kept.",
+ "inputs": [
+  {
+   "name": "downloaded-logs-20261022-112249.json",
+   "role": "Cloud Run logs of lego-tick-uat, revisions 00050-jov .. 00054-wel, 2026-10-21T13:23Z..2026-10-22T04:22Z",
+   "bytes": 4422115,
+   "sha256": "33ffb59e6af4780fc827f25e871bebd4f24852968d12a3a4ec532d1e2a7f6699"
+  },
+  {
+   "name": "lego-firebase-default-rtdb-export.json",
+   "role": "RTDB export (chain AAPL_5cac601a0865 v16, 16 intents, 49 traces, heartbeat 2026-10-22T04:19:06Z; no UBER chain, lock, warnings or errors: deleted before the export)",
+   "bytes": 541950,
+   "sha256": "7bef63cdf046d527afdd05da82ab287e5f518507ad369dde4bf259c0ed95b43f"
+  },
+  {
+   "name": "YAML.txt",
+   "role": "Cloud Run service and revision lego-tick-uat-00054-wel (generation 54)",
+   "bytes": 13189,
+   "sha256": "3f113de6d6dad1aaa03f6a0507802eb1b4721317573f6c8d874b99c0870fb18f"
+  },
+  {
+   "name": "webull-llms.txt",
+   "role": "Webull Thailand API index; identical to every previous round",
+   "bytes": 9289,
+   "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+  },
+  {
+   "name": "deploy.txt",
+   "role": "the operator's deploy command: deploy/cloudshell-uat-release.sh of commit ee5d44d (clones main)",
+   "bytes": 240,
+   "sha256": "65f79bbd4ad4337e4b35e202b17da70953cf6acdccbdbf755114cbd1bedac0b6"
+  }
+ ],
+ "aggregates": {
+  "logs": {
+   "entries": 2094,
+   "ticks": {
+    "n": 903,
+    "first": "2026-10-21T13:23:05Z",
+    "last": "2026-10-22T04:22:06Z",
+    "interval_s": 60.0,
+    "by_severity": {
+     "WARNING": 503,
+     "INFO": 340,
+     "ERROR": 60
+    },
+    "by_http": {
+     "200": 843,
+     "500": 59,
+     "503": 1
+    },
+    "by_pipeline": {
+     "TICK_OK": 843,
+     "TICK_DECISION_ERROR": 60
+    },
+    "by_business": {
+     "RELEASE_EXPIRING": 503,
+     "SLOT_CONSUMED": 309,
+     "ERROR": 60,
+     "ROW_COMMITTED": 24,
+     "MARKET_CLOSED": 7
+    },
+    "duration_ms": {
+     "n": 903,
+     "p50": 808.6,
+     "p95": 2818.7,
+     "max": 30655.3
+    },
+    "slowest": [
+     {
+      "at": "2026-10-21T15:49:36Z",
+      "tick": "4124a936",
+      "ms": 30655.256,
+      "business": "ERROR"
+     },
+     {
+      "at": "2026-10-21T14:15:31Z",
+      "tick": "3d10b10f",
+      "ms": 26831.384,
+      "business": "ROW_COMMITTED"
+     },
+     {
+      "at": "2026-10-21T16:15:24Z",
+      "tick": "af474c25",
+      "ms": 20116.534,
+      "business": "ROW_COMMITTED"
+     },
+     {
+      "at": "2026-10-21T14:45:22Z",
+      "tick": "00edcdba",
+      "ms": 17823.801,
+      "business": "ROW_COMMITTED"
+     },
+     {
+      "at": "2026-10-21T15:15:21Z",
+      "tick": "878959fe",
+      "ms": 16419.3,
+      "business": "ROW_COMMITTED"
+     }
+    ],
+    "near_budget": 0,
+    "gaps": [],
+    "gap_count": 0,
+    "segments": [
+     {
+      "status": "MARKET_CLOSED",
+      "from": "2026-10-21T13:23:05Z",
+      "to": "2026-10-21T13:29:06Z",
+      "n": 7
+     },
+     {
+      "status": "ERROR",
+      "from": "2026-10-21T13:30:17Z",
+      "to": "2026-10-21T13:44:08Z",
+      "n": 15
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T13:44:47Z",
+      "to": "2026-10-21T13:45:10Z",
+      "n": 2
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T13:46:06Z",
+      "to": "2026-10-21T13:59:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T14:00:19Z",
+      "to": "2026-10-21T14:00:19Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T14:01:05Z",
+      "to": "2026-10-21T14:14:05Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T14:15:31Z",
+      "to": "2026-10-21T14:15:31Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T14:16:06Z",
+      "to": "2026-10-21T14:29:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T14:30:18Z",
+      "to": "2026-10-21T14:30:18Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T14:31:06Z",
+      "to": "2026-10-21T14:44:05Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T14:45:22Z",
+      "to": "2026-10-21T14:45:22Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T14:46:05Z",
+      "to": "2026-10-21T14:59:07Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T15:00:15Z",
+      "to": "2026-10-21T15:00:15Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T15:01:06Z",
+      "to": "2026-10-21T15:14:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T15:15:21Z",
+      "to": "2026-10-21T15:15:21Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T15:16:06Z",
+      "to": "2026-10-21T15:25:06Z",
+      "n": 10
+     },
+     {
+      "status": "ERROR",
+      "from": "2026-10-21T15:26:12Z",
+      "to": "2026-10-21T16:09:08Z",
+      "n": 45
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T16:10:18Z",
+      "to": "2026-10-21T16:10:18Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T16:10:19Z",
+      "to": "2026-10-21T16:14:05Z",
+      "n": 5
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T16:15:24Z",
+      "to": "2026-10-21T16:15:24Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T16:16:06Z",
+      "to": "2026-10-21T16:29:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T16:30:14Z",
+      "to": "2026-10-21T16:30:14Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T16:31:05Z",
+      "to": "2026-10-21T16:44:05Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T16:45:12Z",
+      "to": "2026-10-21T16:45:12Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T16:46:05Z",
+      "to": "2026-10-21T16:59:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T17:00:14Z",
+      "to": "2026-10-21T17:00:14Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T17:01:07Z",
+      "to": "2026-10-21T17:14:05Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T17:15:16Z",
+      "to": "2026-10-21T17:15:16Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T17:16:05Z",
+      "to": "2026-10-21T17:29:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T17:30:12Z",
+      "to": "2026-10-21T17:30:12Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T17:31:05Z",
+      "to": "2026-10-21T17:44:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T17:45:13Z",
+      "to": "2026-10-21T17:45:13Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T17:46:06Z",
+      "to": "2026-10-21T17:59:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T18:00:12Z",
+      "to": "2026-10-21T18:00:12Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T18:01:05Z",
+      "to": "2026-10-21T18:14:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T18:15:15Z",
+      "to": "2026-10-21T18:15:15Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T18:16:05Z",
+      "to": "2026-10-21T18:29:05Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T18:30:13Z",
+      "to": "2026-10-21T18:30:13Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T18:31:05Z",
+      "to": "2026-10-21T18:44:07Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T18:45:12Z",
+      "to": "2026-10-21T18:45:12Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T18:46:06Z",
+      "to": "2026-10-21T18:59:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T19:00:13Z",
+      "to": "2026-10-21T19:00:13Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T19:01:06Z",
+      "to": "2026-10-21T19:14:05Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T19:15:12Z",
+      "to": "2026-10-21T19:15:12Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T19:16:05Z",
+      "to": "2026-10-21T19:29:06Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T19:30:15Z",
+      "to": "2026-10-21T19:30:15Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T19:31:05Z",
+      "to": "2026-10-21T19:44:05Z",
+      "n": 14
+     },
+     {
+      "status": "ROW_COMMITTED",
+      "from": "2026-10-21T19:45:13Z",
+      "to": "2026-10-21T19:45:13Z",
+      "n": 1
+     },
+     {
+      "status": "SLOT_CONSUMED",
+      "from": "2026-10-21T19:46:05Z",
+      "to": "2026-10-21T19:59:06Z",
+      "n": 14
+     },
+     {
+      "status": "RELEASE_EXPIRING",
+      "from": "2026-10-21T20:00:05Z",
+      "to": "2026-10-22T04:22:06Z",
+      "n": 503
+     }
+    ],
+    "error_runs": [
+     {
+      "from": "2026-10-21T13:30:17Z",
+      "to": "2026-10-21T13:44:08Z",
+      "n": 15,
+      "pipeline": {
+       "TICK_DECISION_ERROR": 15
+      },
+      "types": {
+       "WebullConfigError": 15
+      }
+     },
+     {
+      "from": "2026-10-21T15:26:12Z",
+      "to": "2026-10-21T16:09:08Z",
+      "n": 45,
+      "pipeline": {
+       "TICK_DECISION_ERROR": 45
+      },
+      "types": {
+       "WebullConfigError": 44,
+       "ClientException": 1
+      }
+     }
+    ],
+    "broker_halt": null,
+    "halt_since": null,
+    "paused": 0,
+    "environment": {
+     "UAT": 903
+    },
+    "mode": {
+     "trade": 903
+    }
+   },
+   "http": {
+    "n": 903,
+    "by_status": {
+     "200": 843,
+     "500": 59,
+     "503": 1
+    },
+    "latency_s": {
+     "n": 903,
+     "p50": 0.82,
+     "p95": 2.82,
+     "max": 30.72
+    }
+   },
+   "instances": {
+    "0010dd8607e2": 64,
+    "0010dd86072a": 260,
+    "0010dd8607f9": 51,
+    "0010dd860787": 105,
+    "0010dd8607d9": 1590
+   },
+   "revisions": {
+    "lego-tick-uat-00050-jov": 64,
+    "lego-tick-uat-00051-duw": 261,
+    "lego-tick-uat-00052-tev": 52,
+    "lego-tick-uat-00053-sec": 106,
+    "lego-tick-uat-00054-wel": 1591
+   },
+   "webull": {
+    "operations": {
+     "sdk_instrument": {
+      "n": 87,
+      "errors": 4,
+      "ms": {
+       "n": 87,
+       "p50": 1126.3,
+       "p95": 4197.0,
+       "max": 12662.6
+      },
+      "codes": {},
+      "http": {},
+      "request_ids": []
+     },
+     "sdk_snapshot": {
+      "n": 48,
+      "errors": 2,
+      "ms": {
+       "n": 48,
+       "p50": 893.6,
+       "p95": 3446.8,
+       "max": 13598.3
+      },
+      "codes": {},
+      "http": {},
+      "request_ids": []
+     },
+     "sdk_positions": {
+      "n": 46,
+      "errors": 0,
+      "ms": {
+       "n": 46,
+       "p50": 1029.2,
+       "p95": 3863.5,
+       "max": 4719.6
+      },
+      "codes": {},
+      "http": {},
+      "request_ids": []
+     },
+     "sdk_open_orders": {
+      "n": 22,
+      "errors": 0,
+      "ms": {
+       "n": 22,
+       "p50": 836.7,
+       "p95": 1807.3,
+       "max": 1892.9
+      },
+      "codes": {},
+      "http": {},
+      "request_ids": []
+     },
+     "sdk_sdk_request": {
+      "n": 18,
+      "errors": 0,
+      "ms": {
+       "n": 18,
+       "p50": 857.4,
+       "p95": 2413.2,
+       "max": 3809.8
+      },
+      "codes": {},
+      "http": {},
+      "request_ids": []
+     },
+     "sdk_accounts": {
+      "n": 9,
+      "errors": 0,
+      "ms": {
+       "n": 9,
+       "p50": 959.1,
+       "p95": 1951.6,
+       "max": 1951.6
+      },
+      "codes": {},
+      "http": {},
+      "request_ids": []
+     }
+    },
+    "errors": [
+     {
+      "op": "instrument",
+      "code": "SDK.HTTPERROR",
+      "http": null,
+      "n": 1,
+      "first": "2026-10-21T15:49:36Z",
+      "last": "2026-10-21T15:49:36Z",
+      "request_ids": []
+     }
+    ],
+    "sdk_errors": []
+   },
+   "failing_ticks": {
+    "count": 60
+   },
+   "outages": [
+    {
+     "from": "2026-10-21T13:30:05Z",
+     "to": "2026-10-21T13:44:05Z",
+     "ticks": 15,
+     "op": null,
+     "code": null,
+     "http": null,
+     "sources": [
+      "logs"
+     ],
+     "seconds": 840,
+     "slots": 1
+    },
+    {
+     "from": "2026-10-21T15:26:07Z",
+     "to": "2026-10-21T16:09:05Z",
+     "ticks": 45,
+     "op": "instrument",
+     "code": "SDK.HTTPERROR",
+     "http": null,
+     "sources": [
+      "logs"
+     ],
+     "seconds": 2578,
+     "slots": 3
+    }
+   ]
+  },
+  "as_of": "2026-10-22T04:22:06Z",
+  "rtdb": {
+   "collections": {
+    "webull_lego_execution_transitions": 1,
+    "webull_lego_heartbeat": 1,
+    "webull_lego_order_audit": 16,
+    "webull_lego_order_dispatch_locks": 1,
+    "webull_lego_order_outbox": 1,
+    "webull_lego_rows": 16,
+    "webull_lego_state": 1,
+    "webull_lego_trace": 1,
+    "webull_lego_trace_days": 1
+   },
+   "chains": [
+    {
+     "chain": "AAPL_5cac601a0",
+     "state": {
+      "updated_at": "2026-10-21T19:45:07Z",
+      "version": 16,
+      "dna_step": 831,
+      "slot_id": "2026-10-21:25",
+      "semantics": "execution_terminal_funding_v3",
+      "clock_mode": "market",
+      "holdings": 9.89001,
+      "p0": 340.375
+     },
+     "rows": {
+      "n": 16,
+      "fix_c": 10000.0,
+      "diff": {
+       "given": 25.0,
+       "lower": 0.0,
+       "upper": 6628.7922913,
+       "source": "config",
+       "used": 25.0
+      },
+      "p0": 340.375,
+      "rules": {
+       "floor_v2": 16
+      },
+      "gated": {},
+      "mismatch": {
+       "count": 0,
+       "items": []
+      },
+      "versions": {
+       "first": 1,
+       "last": 16,
+       "contiguous": true
+      },
+      "steps": {
+       "first": 816,
+       "last": 831,
+       "gaps": [],
+       "increasing": true
+      },
+      "uncommitted": 0,
+      "cashflow_status": {
+       "PENDING_EXECUTION": 16
+      },
+      "status_counts": {
+       "READY_BUY": 16
+      }
+     },
+     "fills": {
+      "n": 0,
+      "mismatch": {
+       "count": 0,
+       "items": []
+      },
+      "fills": [],
+      "finalized_seq": 0,
+      "applied_seq": null
+     },
+     "ledger": {
+      "applied": 0,
+      "finalized_seq": 0,
+      "net_position_change": 0,
+      "cumulative_realized": null,
+      "problems": []
+     },
+     "economics": {
+      "n": 0
+     },
+     "orders": {
+      "n": 16,
+      "by_status": {
+       "SUPPRESSED_STATE_CHANGED": 16
+      },
+      "unresolved": [],
+      "suppressed_by_guard": {
+       "n": 16,
+       "reasons": {
+        "quote_age_limit": 16
+       }
+      },
+      "failed_without_reason": [],
+      "stuck_pending_released": [],
+      "halts": [],
+      "broker_circuits": [],
+      "halt_audit": []
+     },
+     "trace_gap": {
+      "since": "2026-10-21T16:10:05Z",
+      "missing": []
+     }
+    }
+   ],
+   "traces": {
+    "n": 49,
+    "ticks": {
+     "count": 49
+    },
+    "exchanges": [
+     {
+      "op": "positions",
+      "status": 200,
+      "error": null,
+      "n": 32,
+      "first": "2026-10-21T16:10:12Z",
+      "last": "2026-10-21T19:45:12Z",
+      "ms": {
+       "n": 32,
+       "p50": 1006.7,
+       "p95": 1220.2,
+       "max": 1242.0
+      },
+      "request_ids": [],
+      "mutation": false
+     },
+     {
+      "op": "snapshot",
+      "status": 200,
+      "error": null,
+      "n": 32,
+      "first": "2026-10-21T16:10:13Z",
+      "last": "2026-10-21T19:45:13Z",
+      "ms": {
+       "n": 32,
+       "p50": 847.1,
+       "p95": 1013.6,
+       "max": 1767.0
+      },
+      "request_ids": [],
+      "mutation": false
+     },
+     {
+      "op": "instrument",
+      "status": 200,
+      "error": null,
+      "n": 16,
+      "first": "2026-10-21T16:10:11Z",
+      "last": "2026-10-21T19:45:06Z",
+      "ms": {
+       "n": 16,
+       "p50": 1045.3,
+       "p95": 1312.3,
+       "max": 1320.9
+      },
+      "request_ids": [],
+      "mutation": false
+     },
+     {
+      "op": "open_orders",
+      "status": 200,
+      "error": null,
+      "n": 16,
+      "first": "2026-10-21T16:10:16Z",
+      "last": "2026-10-21T19:45:11Z",
+      "ms": {
+       "n": 16,
+       "p50": 835.9,
+       "p95": 992.6,
+       "max": 1356.9
+      },
+      "request_ids": [],
+      "mutation": false
+     },
+     {
+      "op": "sdk_request",
+      "status": 200,
+      "error": null,
+      "n": 8,
+      "first": "2026-10-21T16:10:08Z",
+      "last": "2026-10-21T19:30:07Z",
+      "ms": {
+       "n": 8,
+       "p50": 947.2,
+       "p95": 1305.7,
+       "max": 1305.7
+      },
+      "request_ids": [],
+      "mutation": false
+     },
+     {
+      "op": "accounts",
+      "status": 200,
+      "error": null,
+      "n": 4,
+      "first": "2026-10-21T16:10:10Z",
+      "last": "2026-10-21T19:30:08Z",
+      "ms": {
+       "n": 4,
+       "p50": 974.5,
+       "p95": 988.5,
+       "max": 988.5
+      },
+      "request_ids": [],
+      "mutation": false
+     },
+     {
+      "op": "snapshot",
+      "status": null,
+      "error": "SDK.HttpError",
+      "n": 1,
+      "first": "2026-10-21T16:15:21Z",
+      "last": "2026-10-21T16:15:21Z",
+      "ms": {
+       "n": 1,
+       "p50": 8285.3,
+       "p95": 8285.3,
+       "max": 8285.3
+      },
+      "request_ids": [],
+      "mutation": false
+     }
+    ],
+    "proof": [],
+    "errors": [],
+    "warnings": {},
+    "transitions": [
+     {
+      "at": "2026-10-21T16:10:18Z",
+      "run": "76cc71ea",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T16:15:24Z",
+      "run": "4fd18990",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T16:30:14Z",
+      "run": "75ff98d4",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T16:45:12Z",
+      "run": "d7f69bea",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T17:00:13Z",
+      "run": "bf2c1932",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T17:15:15Z",
+      "run": "99d2762e",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T17:30:12Z",
+      "run": "a5471a3b",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T17:45:12Z",
+      "run": "c834171d",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T18:00:11Z",
+      "run": "68c20f3c",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T18:15:15Z",
+      "run": "a9fdf96d",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T18:30:13Z",
+      "run": "55bfb715",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T18:45:12Z",
+      "run": "a696f068",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T19:00:13Z",
+      "run": "d20c0289",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T19:15:12Z",
+      "run": "c59ce049",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T19:30:14Z",
+      "run": "5bdb1870",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     },
+     {
+      "at": "2026-10-21T19:45:13Z",
+      "run": "88d2fae0",
+      "from": "PENDING_DISPATCH",
+      "to": "SUPPRESSED_STATE_CHANGED",
+      "changed": {
+       "terminal_reason": "dispatch blocked: quote_age_limit"
+      }
+     }
+    ],
+    "equations": {
+     "checked": 16,
+     "mismatch": {
+      "count": 0,
+      "items": []
+     }
+    },
+    "heartbeat": {
+     "AAPL_5cac601a0": {
+      "at": "2026-10-22T04:19:06.641Z",
+      "biz": "RELEASE_EXPIRING",
+      "boot_at": "2026-10-21T16:09:55.151Z",
+      "boot_id": "acd39108",
+      "cand": "a465c2d8abbf54d1188883142626d37d3f4ab634bc59a923d5a797fd1d11038f",
+      "dropped_events": 0,
+      "env": "UAT",
+      "flush_timeouts": 0,
+      "git": "99000da907691315094851873d63ab3022030016",
+      "http": 200,
+      "internal_errors": 0,
+      "last_trace": "AAPL_5cac601a0865/2026-10-22/041905_76646f35",
+      "level": "notable",
+      "mode": "trade",
+      "notable": 516,
+      "pipe": "TICK_OK",
+      "rev": "lego-tick-uat-00054-wel",
+      "skipped_budget": 0,
+      "skipped_dup": 467,
+      "sym": "AAPL",
+      "tick": "76646f35802447a796703bdab5483fae",
+      "ticks": 731,
+      "write_errors": 0,
+      "written": 49
+     }
+    },
+    "first_at": "2026-10-21T16:10:05.046Z",
+    "equation_runs": {
+     "count": 16
+    },
+    "failing_ticks": [],
+    "outages": [],
+    "quotes": {
+     "n": 16,
+     "median_s": 15184.4,
+     "p95_s": 20281.6,
+     "max_s": 21148.1,
+     "over_limit": 16,
+     "over_limit_share": 1.0
+    }
+   },
+   "error_records": {
+    "n": 0,
+    "failing_ticks": [],
+    "outages": []
+   }
+  },
+  "deploy": {
+   "service": {
+    "revision": "lego-tick-uat-00054-wel",
+    "generation": "54",
+    "timeout_s": 45.0,
+    "concurrency": 1.0,
+    "cpu": "0.3333",
+    "memory": "512Mi",
+    "max_scale": 1.0,
+    "min_scale": null
+   },
+   "env": {
+    "LEGO_ACTIVE": "true",
+    "LEGO_ALLOW_FRACTIONAL": "true",
+    "LEGO_CANCEL_CONFIRM_GRACE_SECONDS": "120",
+    "LEGO_CANDIDATE_HASH": "a465c2d8abbf54d1188883142626d37d3f4ab634bc59a923d5a797fd1d11038f",
+    "LEGO_DIFF": "25",
+    "LEGO_DNA_BUNDLE": "strategy.uat-continuous.json",
+    "LEGO_DNA_CLOCK_MODE": "market",
+    "LEGO_FIX_C": "10000",
+    "LEGO_GIT_COMMIT": "99000da907691315094851873d63ab3022030016",
+    "LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER": "1",
+    "LEGO_MAX_ORDER_NOTIONAL_USD": "12500",
+    "LEGO_MAX_ORDER_QUANTITY": "200",
+    "LEGO_MAX_SESSION_ORDERS": "2",
+    "LEGO_MODE": "trade",
+    "LEGO_RELEASE_AUTHORIZATION": "<set>",
+    "LEGO_SESSION_KEY_MODE": "market_day",
+    "LEGO_STALE_ORDER_ACTION": "cancel_expire",
+    "LEGO_STALE_ORDER_SECONDS": "300",
+    "LEGO_SYMBOL": "AAPL",
+    "LEGO_TRACE_PROJECT_ID": "lego-firebase",
+    "LEGO_TRADING_WINDOW_END": "2026-10-23T20:00:00Z",
+    "WEBULL_ENV": "UAT"
+   },
+   "secret_env": [
+    "WEBULL_ACCOUNT_ID",
+    "WEBULL_APP_KEY",
+    "WEBULL_APP_SECRET"
+   ],
+   "alert_webhook_configured": false,
+   "git_commit": "99000da907691315094851873d63ab3022030016",
+   "candidate_hash": "a465c2d8abbf54d1188883142626d37d3f4ab634bc59a923d5a797fd1d11038f",
+   "window_end": "2026-10-23T20:00:00Z",
+   "window_days_left": 1.65,
+   "revision_in_logs": true,
+   "repo_candidate_hashes": {
+    "backend_only": "a465c2d8abbf54d1188883142626d37d3f4ab634bc59a923d5a797fd1d11038f"
+   },
+   "repo_commit": "99000da907691315094851873d63ab3022030016",
+   "repo_dirty": false,
+   "candidate_comparable": true,
+   "candidate_matches_repo": true,
+   "candidate_variant": "backend_only"
+  },
+  "findings": [
+   {
+    "level": "P1",
+    "code": "DISPATCH_SUPPRESSED",
+    "text": "16 of 16 intents ended SUPPRESSED_STATE_CHANGED before Place (quote_age_limit×16); no order of this export reached the broker. quote_age_limit on UAT means the sandbox feed lagged the clock (docs/AUDIT_20261022_TH.md); on PROD it means the market data is not real-time (gate G6)",
+    "evidence": {
+     "chain": "AAPL_5cac601a0",
+     "reasons": {
+      "quote_age_limit": 16
+     }
+    }
+   },
+   {
+    "level": "P1",
+    "code": "ALERTING_NOT_CONFIGURED",
+    "text": "no ALERT_WEBHOOK_* in the service env; 60 ERROR ticks and any unresolved order paged nobody"
+   },
+   {
+    "level": "P1",
+    "code": "RELEASE_WINDOW",
+    "text": "the trading window ends 2026-10-23T20:00:00Z (1.65 days left)"
+   },
+   {
+    "level": "P1",
+    "code": "DECISION_OUTAGE",
+    "text": "45 decision ticks failed in a row 2026-10-21T15:26:07Z → 2026-10-21T16:09:05Z (43 min, about 3 slots with no decision): op=instrument code=SDK.HTTPERROR http=None. The system fails closed (no order without a fresh read of holdings) and resumes by itself once the broker answers; send the request ids of the first and the last failure to Webull; no ALERT_WEBHOOK_* is configured, so nobody was told",
+    "evidence": {
+     "sources": [
+      "logs"
+     ]
+    }
+   },
+   {
+    "level": "P2",
+    "code": "WEBULL_ERRORS",
+    "text": "1× broker error op=instrument code=SDK.HTTPERROR http=None (2026-10-21T15:49:36Z … 2026-10-21T15:49:36Z) request ids []"
+   },
+   {
+    "level": "P2",
+    "code": "DECISION_OUTAGE",
+    "text": "15 decision ticks failed in a row 2026-10-21T13:30:05Z → 2026-10-21T13:44:05Z (14 min, about 1 slots with no decision): no broker error is attached to these ticks, so this is not the broker's weather: read webull_lego_errors; no ALERT_WEBHOOK_* is configured, so nobody was told",
+    "evidence": {
+     "sources": [
+      "logs"
+     ]
+    }
+   },
+   {
+    "level": "INFO",
+    "code": "QUOTE_AGE",
+    "text": "16 decisions priced on quotes a median 15184.4 s old (p95 20281.6 s, max 21148.1 s); 16 older than the 60 s PROD dispatch limit. Not a PROD export, so the limit is not enforced here (UAT quotes are delayed); gate G6 needs this measured on PROD observe sessions, where it applies"
+   },
+   {
+    "level": "INFO",
+    "code": "UAT_ONLY",
+    "text": "this is UAT evidence; real money also needs real alert delivery, observed PROD sessions and a measured PROD fee (gates G4-G6) which no UAT export can supply"
+   }
+  ],
+  "summary": {
+   "P0": 0,
+   "P1": 4,
+   "P2": 2,
+   "INFO": 2
+  }
+ }
+}
