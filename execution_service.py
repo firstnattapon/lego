@@ -49,9 +49,9 @@ from lego_state import (CASHFLOW_SEMANTICS, CalendarDriftError,
                          update_order_audit,
                          verify_cashflow_semantics, verify_runtime_identity,
                          write_order_audit)
-from market_clock import (MarketClockError, clock_mode, fallback_slot_id,
+from market_clock import (NY, MarketClockError, clock_mode, fallback_slot_id,
                           is_regular_session, resolve_dna_step, resolve_market_slot,
-                          slot_seconds)
+                          session_bounds, slot_seconds)
 from webull_io import (IncompleteOpenOrdersError, build_clients,
                         build_order_payload, canonical_payload_hash,
                         environment_label,
@@ -87,6 +87,10 @@ DEFAULT_MAX_DISPATCH_PRICE_DRIFT_BPS = 100.0
 DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS = 360.0
 # Webull sandbox market data can be delayed by 15 minutes. This allowance is
 # selected only by the v2 UAT deployment; it never extends decision lifetime.
+# During a regular session the UAT deployment judges the quote by the session it
+# belongs to instead (session_quote_floor in _dispatch_quote_safety): on 2026-10-21
+# the sandbox feed fell 2.5 to 5.9 hours behind and this allowance blocked every
+# order of the day. It remains the rule when no session is open.
 UAT_QUOTE_DELAY_SECONDS = 900.0
 PROD_MAX_DISPATCH_QUOTE_AGE_SECONDS = 60.0
 PROD_MAX_DISPATCH_DECISION_AGE_SECONDS = 120.0
@@ -973,7 +977,7 @@ def _stop(chain_key_: str, run_id: str, status: str, extra: dict | None = None,
                       "decision_age_seconds", "dispatch_check_phase", "overshoot_quantity",
                       "overshoot_notional_usd", "dispatch_safe_quantity", "intent_quantity",
                       "holdings_drift", "dispatch_holdings", "max_price_drift_bps",
-                      "max_quote_age_seconds"))
+                      "max_quote_age_seconds", "quote_not_before"))
     return {"run_id": run_id, "status": status, **reported}
 
 
@@ -1004,8 +1008,14 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
                            now_utc: datetime | None = None,
                            max_price_drift_bps: float | None = None,
                            max_quote_age_seconds: float | None = None,
-                           max_decision_age_seconds: float | None = None) -> dict:
+                           max_decision_age_seconds: float | None = None,
+                           session_quote_floor: bool = False) -> dict:
     """Revalidate a committed intent against the quote immediately before send.
+
+    ``session_quote_floor`` (UAT only): while a regular session is open, a quote
+    is fresh enough when it was made in this session, whatever its wall-clock
+    age; one from before the open (the previous close) still fails. Outside a
+    session ``max_quote_age_seconds`` decides as before.
 
     A MARKET order may fill away from either quote, so tiny moves are expected.
     The guard nevertheless refuses a direction change, a stale intent that would
@@ -1104,7 +1114,13 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
         reasons.append("quote_time_in_future")
     if decision_age_seconds > max_decision_age_seconds:
         reasons.append("decision_age_limit")
-    if quote_age_seconds > max_quote_age_seconds:
+    quote_not_before = None
+    if session_quote_floor:
+        bounds = session_bounds(now_utc.astimezone(NY).date())
+        if bounds is not None and bounds[0] <= now_utc < bounds[1]:
+            quote_not_before = bounds[0]
+    if (quote_time < quote_not_before if quote_not_before is not None
+            else quote_age_seconds > max_quote_age_seconds):
         reasons.append("quote_age_limit")
 
     return {
@@ -1120,6 +1136,8 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
         "quote_age_seconds": quote_age_seconds,
         "max_quote_age_seconds": max_quote_age_seconds,
         "max_decision_age_seconds": max_decision_age_seconds,
+        "quote_not_before": (None if quote_not_before is None
+                             else quote_not_before.isoformat().replace("+00:00", "Z")),
         "intent_side": intent_side,
         "dispatch_side": current.side if current.acted else "PASS",
         "intent_quantity": requested_quantity,
@@ -1432,6 +1450,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                      claim=intent, **open_order_blocker.public(blocker))
 
     fresh = fetch_snapshot(trade_client, data_client, cfg)
+    session_quote_floor = False
     try:
         if runtime is not None:
             tolerance = 0.000001
@@ -1440,6 +1459,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             max_decision_age_seconds = DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS
             if runtime.deployment.environment == "UAT":
                 max_quote_age_seconds += UAT_QUOTE_DELAY_SECONDS
+                session_quote_floor = True
             else:
                 max_quote_age_seconds = PROD_MAX_DISPATCH_QUOTE_AGE_SECONDS
                 max_decision_age_seconds = PROD_MAX_DISPATCH_DECISION_AGE_SECONDS
@@ -1483,7 +1503,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             cfg, intent, fresh,
             max_price_drift_bps=max_price_drift_bps,
             max_quote_age_seconds=max_quote_age_seconds,
-            max_decision_age_seconds=max_decision_age_seconds)
+            max_decision_age_seconds=max_decision_age_seconds,
+            session_quote_floor=session_quote_floor)
     except ValueError as exc:
         # Unlike a deploy setting, incomplete/tampered intent provenance cannot
         # heal on retry and must not occupy the queue forever.
@@ -1690,7 +1711,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             cfg, intent, final_fresh,
             max_price_drift_bps=max_price_drift_bps,
             max_quote_age_seconds=max_quote_age_seconds,
-            max_decision_age_seconds=max_decision_age_seconds)
+            max_decision_age_seconds=max_decision_age_seconds,
+            session_quote_floor=session_quote_floor)
     except ValueError as exc:
         return _persist_error(
             ck, run_id, "NOT_PLACED", exc,
@@ -1756,7 +1778,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             cfg, intent, final_fresh,
             max_price_drift_bps=max_price_drift_bps,
             max_quote_age_seconds=max_quote_age_seconds,
-            max_decision_age_seconds=max_decision_age_seconds)
+            max_decision_age_seconds=max_decision_age_seconds,
+            session_quote_floor=session_quote_floor)
     except ValueError as exc:
         return _persist_error(
             ck, run_id, "NOT_PLACED", exc,
@@ -1798,7 +1821,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             final_deadline = _dispatch_quote_safety(
                 cfg, intent, final_fresh, max_price_drift_bps=max_price_drift_bps,
                 max_quote_age_seconds=max_quote_age_seconds,
-                max_decision_age_seconds=max_decision_age_seconds)
+                max_decision_age_seconds=max_decision_age_seconds,
+                session_quote_floor=session_quote_floor)
             if not final_deadline["ok"]:
                 return _reject_unsafe_dispatch_quote(
                     ck, run_id, final_deadline, phase="post_reservation",
@@ -1835,7 +1859,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             last_quote = _dispatch_quote_safety(
                 cfg, intent, final_fresh, max_price_drift_bps=max_price_drift_bps,
                 max_quote_age_seconds=max_quote_age_seconds,
-                max_decision_age_seconds=max_decision_age_seconds)
+                max_decision_age_seconds=max_decision_age_seconds,
+                session_quote_floor=session_quote_floor)
             if not last_quote["ok"]:
                 raise ExecutionLimitError("quote expired after durable attempt marker")
             tick_runtime.require_budget(5.0)
