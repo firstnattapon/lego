@@ -1,0 +1,127 @@
+{
+ "schema": "lego_audit_verification_v1",
+ "generated_at": "2026-10-22T05:02:58.520544+00:00",
+ "base_commit": "99000da907691315094851873d63ab3022030016",
+ "python": "Python 3.12.3 (the version CI runs), dependencies exactly as pinned in requirements-dev.txt",
+ "local_status": "PASS",
+ "failed_checks": [],
+ "real_money_ready": false,
+ "release_state": "NO_GO",
+ "candidate": {
+  "hash_of_this_tree": "57ab596c5aa2fee5b460e1d1e27650c6e596b113ec64e56f04a8f4351dfecd73",
+  "file_count": 206,
+  "scope": "backend-only",
+  "computed_with": "tools/candidate_manifest.py build_manifest() on the working tree that was committed (release_evidence/ is excluded from the hash)",
+  "deployed_before_this_change": "a465c2d8abbf54d1188883142626d37d3f4ab634bc59a923d5a797fd1d11038f"
+ },
+ "note": "The operator recomputes the candidate hash from a clean checkout of the merged commit (ops.py release-plan); it changes with this PR and with any later edit, so UAT needs a new release to get these changes, and the window of 00054 ends 2026-10-23T20:00:00Z anyway. Nothing here touched a broker, a Firebase project or a deployed revision. PROD dispatch (60 s quote, 120 s decision), the decision formula, ledger, fence, recovery, order limits and the broker-reject circuit are unchanged; on UAT the quote has to come from the open session instead of being at most 1,260 s old.",
+ "code_change": {
+  "files": {
+   "execution_service.py": "+35/-10",
+   "observability.py": "+8/-1",
+   "webull_io.py": "+30/-10",
+   "decision_service.py": "+3/-1",
+   "tools/trace_audit.py": "+17/-0",
+   "deploy/uat-continuous.env.example": "+8/-5",
+   "deploy/continuous-uat.sh": "+2/-2"
+  },
+  "new_files": [
+   "test_audit_20261022.py",
+   "docs/AUDIT_20261022_TH.md",
+   "release_evidence/20261022-pr/"
+  ],
+  "docs_changed": [
+   "README.md",
+   "RELEASE_STATUS_TH.md",
+   "docs/CONTINUOUS_RELEASE_V4_TH.md (policy line)"
+  ],
+  "existing_tests_changed": 0
+ },
+ "full_suite": {
+  "command": "pytest -q",
+  "junit_sha256": "0b7882bcf7b16000281087fb79eb8c3778e4835d84f007df1b5e56e1bfa34ba3",
+  "counts": {
+   "tests": 2174,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2165
+  },
+  "baseline_before_change": {
+   "tests": 2111,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2102
+  },
+  "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +63 tests (test_audit_20261022.py); no existing test was modified."
+ },
+ "mutation": {
+  "mutants": 15,
+  "killed": 15,
+  "survivors": [],
+  "by_file": {
+   "execution_service.py": 9,
+   "observability.py": 3,
+   "tools/trace_audit.py": 1,
+   "webull_io.py": 1,
+   "decision_service.py": 1
+  },
+  "note": "each mutant applied in place and test_audit_20261022.py run, then the file restored: the flag dropped at each of the five dispatch checks in turn, the UAT branch not setting it, the floor applied after the close, the floor admitting the previous close, the floor applied on PROD, the log dropping state_change_reasons or reason, the log copying any reason, the digest never paging, a wrong instrument reason, the decision body dropping its reason"
+ },
+ "checks": [
+  {
+   "id": "py_compile",
+   "command": "python -m py_compile *.py tools/*.py",
+   "exit_code": 0
+  },
+  {
+   "id": "shell_syntax",
+   "command": "bash -n deploy/*.sh",
+   "exit_code": 0
+  },
+  {
+   "id": "new_tests",
+   "command": "pytest -q test_audit_20261022.py",
+   "tests": {
+    "test_audit_20261022.py": 63
+   },
+   "result": "on main@99000da without the change 39 of the 63 fail (the positive cases of C1-C4) and 24 pass: the 16 that reproduce what the outbox recorded (quote_age_limit, ages to six decimals) and 8 guards that must hold before and after (PROD 60 s, the previous close refused, no free-form text in the log); all 63 pass after the change"
+  },
+  {
+   "id": "independent_ledger_recompute",
+   "command": "plain Python on webull_lego_rows, no repo code",
+   "result": "16/16 rows: V=H*P, gap=V-FIX_C, R=FIX_C*ln(P/P0), qty=floor(|gap|/P at 2 places) when |gap|>DIFF; 0 failures; holdings 9.89001, A=dA=E=0 on every row; versions 1..16 and steps 816..831 contiguous"
+  },
+  {
+   "id": "log_completeness",
+   "command": "plain Python on the Cloud Run export",
+   "result": "903 ticks <-> 903 requests (trace ids match both ways, 903 unique correlation ids, all from Cloud Scheduler), no gap over 90 s, 5 instances = 5 revisions; 49/49 flight-recorder traces map to a tick correlation id"
+  },
+  {
+   "id": "feed_lag",
+   "command": "quote_time of the 16 AAPL dispatch snapshots against their dispatch time (webull_lego_order_audit)",
+   "result": "quote age 8,986.8 s (16:10Z) rising to 21,154.4 s (19:45Z); the sandbox quote advanced 12 min 7 s in 3 h 35 min; every intent was refused at pre_preview by quote_age_limit only"
+  },
+  {
+   "id": "trace_audit_on_this_evidence",
+   "command": "python -m tools.trace_audit --logs ... --rtdb ... --yaml ... --repo <clean checkout of 99000da> (this PR's tool)",
+   "result": "0 P0 / 4 P1 / 2 P2 / 2 info: P1 DISPATCH_SUPPRESSED (16 of 16, quote_age_limit x16), ALERTING_NOT_CONFIGURED, RELEASE_WINDOW (1.65 days), DECISION_OUTAGE 15:26-16:09Z; P2 WEBULL_ERRORS, DECISION_OUTAGE 13:30-13:44Z; info QUOTE_AGE, UAT_ONLY; 0 equation, row, fill or ledger mismatches; candidate a465c2d8... matches the clean checkout of 99000da (backend_only). Without this PR's tool the digest had no finding for the suppressed intents"
+  },
+  {
+   "id": "readiness_audit_on_this_evidence",
+   "output": "release_evidence/20261022-pr/readiness-audit.json",
+   "result": "BLOCKED: 4 PASS, 3 FAIL (request_tick_pairing: 1 tick logged 3.1 s after its request ended; committed_row_log_lineage: 8 UBER commit events whose rows were deleted with the RTDB; candidate_revision_binding: the window holds 5 revisions), 7 BLOCKED (external operational evidence); real_money_ready false"
+  },
+  {
+   "id": "operator_commands_local_dry_run",
+   "command": "python ops.py release-plan --env-file deploy/uat-continuous.env.example --account-id-stdin --window-sessions 10 --reference-price 69 --enforce, with a made-up account id on stdin",
+   "result": "exit 0: UBER / UAT / trade / active / 10000 / fractional, window 2026-11-04T21:00:00Z (10 sessions), caps 30 / 1,500 / 26 equal to the recommended caps, no finding above INFO; read-only, nothing deployed"
+  },
+  {
+   "id": "pip_audit",
+   "command": "pip-audit -r requirements.txt --progress-spinner off",
+   "result": "No known vulnerabilities found (2026-10-22); requirements unchanged by this PR"
+  }
+ ]
+}

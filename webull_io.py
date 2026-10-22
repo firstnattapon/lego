@@ -208,35 +208,55 @@ class InstrumentCapability:
         object.__setattr__(self, "minimum_notional_usd_if_authoritative", min_notional)
 
 
+def _profile_error(reason: str, message: str) -> WebullConfigError:
+    """A WebullConfigError that also names, as an enum, which instrument check refused.
+
+    The tick log never copies an error message (observability.emit_tick), so without this the
+    Cloud Run log of 2026-10-21 said only "WebullConfigError" for 59 ticks of three symbols.
+    """
+    exc = WebullConfigError(message)
+    exc.lego_reason = reason
+    return exc
+
+
+def error_reason(exc: BaseException) -> str | None:
+    """The enum a refusal of this module carries (see _profile_error), else None."""
+    reason = getattr(exc, "lego_reason", None)
+    return reason if isinstance(reason, str) else None
+
+
 def parse_instrument_capability(payload, symbol: str) -> InstrumentCapability:
     items = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(items, list):
-        raise WebullConfigError("instrument profile ไม่มี data list")
+        raise _profile_error("INSTRUMENT_NOT_FOUND", "instrument profile ไม่มี data list")
     wanted = symbol.strip().upper()
     matches = [x for x in items if isinstance(x, dict)
                and str(x.get("symbol", "")).upper() == wanted]
     if len(matches) != 1:
-        raise WebullConfigError(
-            f"instrument profile ต้องพบ {wanted} หนึ่งรายการ; พบ {len(matches)}")
+        raise _profile_error(
+            "INSTRUMENT_NOT_FOUND", f"instrument profile ต้องพบ {wanted} หนึ่งรายการ; พบ {len(matches)}")
     item = matches[0]
     if str(item.get("status", "")).upper() != "OC":
-        raise WebullConfigError(f"{wanted} ไม่อยู่สถานะ tradable (OC)")
+        raise _profile_error("INSTRUMENT_NOT_TRADABLE",
+                             f"{wanted} ไม่อยู่สถานะ tradable (OC); status={str(item.get('status'))[:20]!r}")
     if str(item.get("currency", "")).upper() != "USD":
-        raise WebullConfigError(f"{wanted} ไม่ใช่ USD instrument")
+        raise _profile_error("INSTRUMENT_NOT_USD", f"{wanted} ไม่ใช่ USD instrument")
     try:
         lot = Decimal(str(item["lot_size"]))
     except (KeyError, InvalidOperation) as exc:
-        raise WebullConfigError("instrument lot_size ไม่ถูกต้อง") from exc
+        raise _profile_error("INSTRUMENT_BAD_LOT", "instrument lot_size ไม่ถูกต้อง") from exc
     if not lot.is_finite() or lot <= 0:
-        raise WebullConfigError("instrument lot_size ต้อง finite และ > 0")
+        raise _profile_error("INSTRUMENT_BAD_LOT", "instrument lot_size ต้อง finite และ > 0")
     category = str(item.get("category", "")).upper()
     if category != "US_STOCK":
-        raise WebullConfigError(f"instrument category {category!r} ไม่รองรับ")
+        raise _profile_error("INSTRUMENT_CATEGORY", f"instrument category {category!r} ไม่รองรับ")
     if "fractionable" not in item:
-        raise WebullConfigError(f"instrument capability unknown: missing fractionable field for {wanted}")
+        raise _profile_error("INSTRUMENT_FRACTIONABLE_UNKNOWN",
+                             f"instrument capability unknown: missing fractionable field for {wanted}")
     raw_fractionable = item["fractionable"]
     if type(raw_fractionable) is not bool:
-        raise WebullConfigError(
+        raise _profile_error(
+            "INSTRUMENT_FRACTIONABLE_UNKNOWN",
             f"instrument capability contradictory: fractionable must be bool, got {type(raw_fractionable).__name__}")
 
     frac_inc = None

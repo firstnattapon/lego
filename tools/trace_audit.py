@@ -707,6 +707,8 @@ def _intent_view(doc, as_of):
         "decision_holdings": doc.get("decision_holdings"),
         "reason_missing": doc.get("broker_reason_missing") is True,
         "terminal_reason": doc.get("terminal_reason"),
+        "guard_reasons": ([str(r) for r in doc.get("reasons") or [] if isinstance(r, str)]
+                          or (["holdings_drift"] if doc.get("holdings_drift") is not None else [])),
         "expiry_basis": doc.get("expiry_basis"), "expiry_released_at": doc.get("expiry_released_at"),
     }
 
@@ -767,7 +769,12 @@ def analyze_orders(db, chain, as_of, run=None) -> dict:
     # system trades on; the broker's behaviour is still a defect to put to Webull, and a later fill
     # of one of them is a position the model ledger cannot attribute (check_fills' position_walk).
     stuck_released = [v for v in views if v["expiry_basis"] == "uat_stuck_pending"]
+    # Intents a dispatch guard stopped before Place. 2026-10-21 all 16 of the session ended so
+    # (quote_age_limit) and the digest named none of them: no order, and no finding either.
+    suppressed = [v for v in views if v["status"] == "SUPPRESSED_STATE_CHANGED"]
     return {"n": len(views), "by_status": counted(v["status"] for v in views), "unresolved": unresolved,
+            "suppressed_by_guard": {"n": len(suppressed), "reasons": counted(
+                r for v in suppressed for r in (v["guard_reasons"] or ["unrecorded"]))},
             "failed_without_reason": failed_without_reason, "stuck_pending_released": stuck_released,
             "halts": halts, "broker_circuits": broker_circuits, "halt_audit": audit}
 
@@ -1173,6 +1180,16 @@ def build_findings(report) -> list[dict]:
                 "Webull explains. Send the broker order id and the place / order-detail request ids from the flight "
                 "recorder (the 'wb' events of that tick) to Webull",
                 {"chain": chain["chain"], "broker_id": o["broker_id"]})
+        guarded = chain["orders"].get("suppressed_by_guard") or {}
+        if guarded.get("n"):
+            every = guarded["n"] == chain["orders"]["n"] and guarded["n"] >= 3
+            reasons = ", ".join(f"{k}×{v}" for k, v in guarded["reasons"].items())
+            add("P1" if every else "P2", "DISPATCH_SUPPRESSED",
+                f"{guarded['n']} of {chain['orders']['n']} intents ended SUPPRESSED_STATE_CHANGED before Place "
+                f"({reasons})" + ("; no order of this export reached the broker" if every else "")
+                + ". quote_age_limit on UAT means the sandbox feed lagged the clock (docs/AUDIT_20261022_TH.md); "
+                "on PROD it means the market data is not real-time (gate G6)",
+                {"chain": chain["chain"], "reasons": guarded["reasons"]})
         for h in chain["orders"]["halts"]:
             blocked = (chain["rows"].get("gated") or {}).get("PASS_RECOVERY_BLOCKED", 0)
             add("P0", "OPERATOR_HALT", f"operator halt {h['halt']} ({h['reason']}) set {h['set_at']} by {h['set_by']}; "

@@ -1,0 +1,125 @@
+{
+  "checks": [
+    {
+      "criterion": "snapshot_integrity",
+      "detail": {
+        "intents": 16,
+        "issues": {},
+        "mirrors_matched": 16,
+        "positive_fills": 0,
+        "statuses": {
+          "SUPPRESSED_STATE_CHANGED": 16
+        }
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "money_fences_resolved",
+      "detail": {
+        "operator_halt_audits_pending": 0,
+        "operator_halts": 0,
+        "unresolved_fences": 0
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "tick_fields",
+      "detail": {
+        "business_statuses": {
+          "ERROR": 60,
+          "MARKET_CLOSED": 7,
+          "RELEASE_EXPIRING": 503,
+          "ROW_COMMITTED": 24,
+          "SLOT_CONSUMED": 309
+        },
+        "malformed_entries": 0,
+        "ticks": 903
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "unique_tick_correlations",
+      "detail": {
+        "ticks": 903
+      },
+      "status": "PASS"
+    },
+    {
+      "criterion": "request_tick_pairing",
+      "detail": {
+        "issues": {
+          "tick_outside_request_window": 1
+        },
+        "matched": 902,
+        "requests": 903,
+        "ticks": 903
+      },
+      "status": "FAIL"
+    },
+    {
+      "criterion": "committed_row_log_lineage",
+      "detail": {
+        "commit_events": 24,
+        "issues": {
+          "commit_event_row_missing_or_mismatched": 8
+        },
+        "matched_rows": 16,
+        "rows_in_request_window": 16
+      },
+      "status": "FAIL"
+    },
+    {
+      "criterion": "candidate_revision_binding",
+      "detail": {
+        "expected_candidate": "a465c2d8abbf54d1188883142626d37d3f4ab634bc59a923d5a797fd1d11038f",
+        "expected_revision": "lego-tick-uat-00054-wel"
+      },
+      "status": "FAIL"
+    },
+    {
+      "criterion": "current_broker_orders_positions_cash_fees",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "complete_transition_history",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "exact_candidate_ci_emulator",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "deployed_identity_config_image_binding",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "uat_buy_sell_restart_timeout_soak",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "alert_delivery_and_operator_drill",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    },
+    {
+      "criterion": "prod_observe_and_canary_authorization",
+      "detail": "requires independently captured operational evidence",
+      "status": "BLOCKED"
+    }
+  ],
+  "cutover_safe": true,
+  "evidence": {
+    "export_sha256": "7bef63cdf046d527afdd05da82ab287e5f518507ad369dde4bf259c0ed95b43f",
+    "logs_sha256": "33ffb59e6af4780fc827f25e871bebd4f24852968d12a3a4ec532d1e2a7f6699"
+  },
+  "generated_at": "2026-10-22T04:57:29.323528+00:00",
+  "real_money_ready": false,
+  "schema_version": 1,
+  "scope": "offline snapshot and supplied log window; not broker certification",
+  "status": "BLOCKED"
+}

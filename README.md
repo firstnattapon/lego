@@ -1,5 +1,13 @@
 # LEGO PRINCIPAL v2
 
+22 October audit: [a UAT quote guard that blocked every order of the day because the sandbox feed ran hours behind the clock, logs that could not say why, and the real-money gates](docs/AUDIT_20261022_TH.md).
+On 21 October no order reached the broker: all 22 `READY_BUY` decisions (6 UBER, 16 AAPL) ended `SUPPRESSED_STATE_CHANGED` with `quote_age_limit`, because the sandbox snapshot fell 2.5 to 5.9 hours
+behind the clock (13:40Z at 16:10Z, 13:52Z at 19:45Z) against a 1,260 s allowance; NFLX and MSFT are not tradable on UAT, and the AAPL deploy was an initial-funding release (2 orders per session).
+Data and equations were correct (903 ticks, 16 rows recomputed from first principles, nothing filled, no fence held). On UAT a quote now has to come from the open session instead (the previous
+close still fails) at all five dispatch checks; PROD keeps its 60 s. The tick log now names the guard reasons and which instrument check refused, `tools/trace_audit.py` reports
+`DISPATCH_SUPPRESSED`, and the continuous UAT policy is UBER again (steady caps 30 / 1,500 / 26). Live acceptance remains **NO-GO**: alert delivery, real-time PROD quotes,
+the 2FA token path, a measured PROD fee and the owner's decision are still open ([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)).
+
 21 October audit: [a dispatch gate that dropped both BUYs of the session on a transient `balances/get` 417, a decision commit that never checked the time left, and the real-money gates](docs/AUDIT_20261021_TH.md).
 The 20 October UAT session was correct (437 ticks, all 26 rows recomputed from first principles, nothing filled) but the broker failed all 5 UBER SELLs without a reason (15 in a row since 16 October),
 and both BUY intents ended as `NOT_PLACED` with 14 minutes of their slot left: `balances/get` answered HTTP 417 three times and the gate treated a transient read as a verdict on the order.

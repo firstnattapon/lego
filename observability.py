@@ -5,6 +5,8 @@ import re
 from datetime import datetime, timezone
 from lego_outbox import TERMINAL, normalize_status
 
+_REASON = re.compile(r"[A-Z_]{3,40}")
+
 
 def request_trace(request) -> dict:
     """Accept only Cloud Trace syntax; never copy arbitrary request headers."""
@@ -192,10 +194,14 @@ def emit_tick(body: dict, code: int, *, request=None, now: datetime | None = Non
                               ("dispatch", body.get("dispatch") or {})):
         if phase.get("error"):
             details = _broker_fields(phase)
+            reason = phase.get("reason")
             event["errors"].append({
                 "phase": phase_name,
                 "type": phase.get("error_type") or phase.get("type") or "UnknownError",
                 **({"broker_error": details} if details else {}),
+                # An enum such as INSTRUMENT_NOT_TRADABLE (webull_io.parse_instrument_capability),
+                # never the message: 59 WebullConfigError ticks of 2026-10-21 named only their type.
+                **({"reason": reason} if isinstance(reason, str) and _REASON.fullmatch(reason) else {}),
             })
     for phase_name in ("recovery", "dispatch"):
         phase = body.get(phase_name) or {}
@@ -206,7 +212,8 @@ def emit_tick(body: dict, code: int, *, request=None, now: datetime | None = Non
                                         "type": item.get("error_type") or "UnknownError",
                                         **({"broker_error": details} if details else {})})
             event["execution"].append({"phase": phase_name, **{
-                key: item.get(key) for key in ("run_id", "status", "broker_status", "broker_fee_status",
+                key: item.get(key) for key in ("run_id", "status", "state_change_reasons", "holdings_drift",
+                                             "broker_status", "broker_fee_status",
                                              "cashflow_finalized", "fee_overdue", "fee_pending_age_seconds",
                                              "broker_reason_missing", "broker_reject_code",
                                              "order_contract_anomaly",
