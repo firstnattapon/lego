@@ -1,0 +1,155 @@
+{
+ "schema": "lego_audit_input_hashes_v1",
+ "generated_at": "2026-10-25T07:10:22.434056+00:00",
+ "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates are the numbers quoted in docs/AUDIT_20261025_TH.md and are reproducible with: python -m tools.trace_audit --json --logs ... --rtdb ... --yaml ... --repo <clean checkout of 9baf9fc>, and python -m tools.readiness_audit (output in this folder). Per-tick lists are left out; their counts are kept.",
+ "inputs": [
+  {
+   "name": "downloaded-logs-20261025-133630.json",
+   "role": "Cloud Run logs of lego-tick-uat, revision 00055-dej only, 2026-10-22T13:30:05Z..2026-10-25T06:35:05Z",
+   "bytes": 18101444,
+   "sha256": "f27d0efd2c1b965bb0ede9893d9aac3e360e084087772af6d64037c5f8d34929"
+  },
+  {
+   "name": "lego-firebase-default-rtdb-export.json",
+   "role": "RTDB export (chain UBER_33b541c2034c v52, 52 rows, 24 intents, 81 traces, heartbeat 2026-10-25T06:29:06Z, dispatch lock clear, circuit 0)",
+   "bytes": 1797673,
+   "sha256": "fcad344a7afa1c362f6dc026cbdbd1ca1931e5e81259a02bc47b960df95e0dfc"
+  },
+  {
+   "name": "YAML.txt",
+   "role": "Cloud Run service and revision lego-tick-uat-00055-dej (generation 55)",
+   "bytes": 13192,
+   "sha256": "6e97eca415c95ed6422d81b4fc653351afa6887e9f58e15976f651cdd4732808"
+  },
+  {
+   "name": "webull-llms.txt",
+   "role": "Webull TH OpenAPI documentation index (same as previous audits)",
+   "bytes": 9289,
+   "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+  }
+ ],
+ "aggregates": {
+  "log_entries": 8668,
+  "log_by_stream": {
+   "stdout": 4742,
+   "requests": 3908,
+   "stderr": 16,
+   "varlog_system": 2
+  },
+  "ticks": 3908,
+  "requests": 3908,
+  "http_status": {
+   "200": 3908
+  },
+  "tick_severity": {
+   "INFO": 3788,
+   "WARNING": 71,
+   "ERROR": 49
+  },
+  "business_status": {
+   "MARKET_CLOSED": 3127,
+   "SLOT_CONSUMED": 631,
+   "WAITING_RECONCILIATION": 68,
+   "RECONCILIATION_OVERDUE": 45,
+   "ROW_COMMITTED": 30,
+   "TICK_DEFERRED": 3,
+   "BROKER_ORDER_FAILED": 3,
+   "ERROR": 1
+  },
+  "tick_duration_ms": {
+   "p50": 813.5,
+   "p95": 1829.6,
+   "max": 34424.8
+  },
+  "gaps_over_90s": [
+   {
+    "from": "2026-10-24T03:48:05Z",
+    "seconds": 104.8,
+    "market": "closed"
+   }
+  ],
+  "revisions": [
+   "lego-tick-uat-00055-dej"
+  ],
+  "instances": 2,
+  "rows": {
+   "count": 52,
+   "versions": "1..52",
+   "steps": "832..883",
+   "contiguous": true,
+   "status": {
+    "PASS_THRESHOLD": 22,
+    "READY_BUY": 16,
+    "READY_SELL": 8,
+    "PASS_RECOVERY_BLOCKED": 6
+   },
+   "independent_recompute_mismatches": 0,
+   "final_A": -113.15212761666027,
+   "final_holdings": 147.9228
+  },
+  "intents": {
+   "count": 24,
+   "FILLED": 13,
+   "SUPPRESSED_STATE_CHANGED": 4,
+   "FAILED": 3,
+   "EXPIRED": 3,
+   "CANCELLED": 1
+  },
+  "fills": {
+   "count": 13,
+   "notional_usd": 780.87,
+   "fees_usd": 8.41,
+   "fee_pct": {
+    "min": 1.06,
+    "median": 1.0756,
+    "max": 1.1132
+   },
+   "placed_to_final_seconds": {
+    "min": 4,
+    "max": 167
+   },
+   "mean_adverse_slippage_bps": 4.1,
+   "realized_after_fees_usd": -5.466776470588222
+  },
+  "flight_recorder": {
+   "traces": 81,
+   "rows_without_equation": [
+    "v4 (2026-10-22:3)"
+   ],
+   "heartbeat_since_boot_2026-10-23T17:11:49Z": {
+    "ticks": 2239,
+    "written": 23,
+    "skipped_dup": 48,
+    "skipped_budget": 0,
+    "write_errors": 0,
+    "flush_timeouts": 0,
+    "internal_errors": 0,
+    "dropped_events": 0
+   }
+  },
+  "warnings": {
+   "day_expiry_released": 3,
+   "uat_stuck_pending_ignored": 5,
+   "webull_token": 1
+  },
+  "f1_tick": {
+   "correlation": "fc098796",
+   "at": "2026-10-22T14:15:04Z",
+   "left_at_gate_s": 8.101,
+   "left_when_logged_s": 0.575,
+   "fence_needs_s": 12.0
+  },
+  "preview_starts": {
+   "count": 25,
+   "placed": 20,
+   "min_left_among_placed_s": 20.63,
+   "under_12s": [
+    "2026-10-22T13:45:06Z (10.52 s, deferred)",
+    "2026-10-22T14:15:06Z (7.99 s, deferred)"
+   ]
+  },
+  "stuck_pending_released": 3,
+  "slots_recovery_blocked": 6,
+  "candidate_deployed": "57ab596c5aa2fee5b460e1d1e27650c6e596b113ec64e56f04a8f4351dfecd73"
+ }
+}

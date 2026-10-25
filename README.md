@@ -1,5 +1,13 @@
 # LEGO PRINCIPAL v2
 
+25 October audit: [two UAT sessions that traded continuously, complete records, a dispatch that spent its last seconds on reads the place fence would refuse, and the real-money gates](docs/AUDIT_20261025_TH.md).
+On 22-23 October revision 00055 (UBER) placed 21 orders and 13 filled, with no halt and no outage; 3,908 ticks matched 3,908 requests and all 52 rows were recomputed from first principles
+without a mismatch. One tick (22 October 14:15Z) had 8.1 s left before the gate yet still ran Preview and two broker reads, ended with 0.575 s, lost its flight-recorder trace (row v4's equation)
+and was logged as an ERROR because the post-Preview refetch swallowed the deadline. The gate now asks for the fence's 12 s before its first read and the refetch passes the deadline on;
+on the log's 25 Previews no placed order is affected. Three BUYs stuck `PENDING` on the UAT broker cost 6 slots and three BUYs `FAILED` without a reason (the broker sends none);
+both go to Webull and the 30-minute UAT release is unchanged. UAT fees (~1.08% per order) put every order below break-even. Live acceptance remains **NO-GO**: alert delivery,
+real-time PROD quotes, the 2FA token path, a measured PROD fee and the owner's decision are still open ([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)).
+
 22 October audit: [a UAT quote guard that blocked every order of the day because the sandbox feed ran hours behind the clock, logs that could not say why, and the real-money gates](docs/AUDIT_20261022_TH.md).
 On 21 October no order reached the broker: all 22 `READY_BUY` decisions (6 UBER, 16 AAPL) ended `SUPPRESSED_STATE_CHANGED` with `quote_age_limit`, because the sandbox snapshot fell 2.5 to 5.9 hours
 behind the clock (13:40Z at 16:10Z, 13:52Z at 19:45Z) against a 1,260 s allowance; NFLX and MSFT are not tradable on UAT, and the AAPL deploy was an initial-funding release (2 orders per session).

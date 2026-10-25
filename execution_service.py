@@ -102,6 +102,11 @@ MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
 # the intent at most this many times (one deferral = one tick). The next tick runs the whole gate
 # again, so no guard is skipped; the count is kept on the intent as gate_defer_count.
 MAX_GATE_DEFERRALS = 2
+# 2026-10-22 14:15Z (row v4): after the second snapshot 8.10 s were left, yet Preview and the
+# post-Preview open orders and positions still ran although the fence before Place needs this much
+# *after* them; the tick ended with 0.58 s, the flight recorder (1 s floor) dropped its trace and v4
+# lost its equation. The gate asks for the fence's budget before its first read and defers instead.
+DISPATCH_FENCE_MIN_BUDGET_SECONDS = 12.0
 RECONCILE_STATUSES = {
     "CANCEL_REQUESTED", "CANCEL_UNKNOWN",
     "PLACING_UNKNOWN", "PLACING", "PENDING", "SUBMITTED", "UNKNOWN",
@@ -1545,6 +1550,9 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         "dispatch_quote_check": {**quote_safety, "dispatch_check_phase": "pre_preview"},
     })
     try:
+        if runtime is not None:
+            # Fewer seconds than the fence needs: no read below can lead to Place in this tick.
+            tick_runtime.require_budget(DISPATCH_FENCE_MIN_BUDGET_SECONDS)
         # Building the payload is part of the gate: a quantity that cannot be
         # expressed at this precision must end the intent, not abort the whole
         # worker run and leave the other intents of this tick unprocessed.
@@ -1681,6 +1689,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 claim=intent, **open_order_blocker.public(blocker))
     try:
         final_fresh = fetch_snapshot(trade_client, data_client, cfg)
+    except tick_runtime.TickDeadlineExceeded:
+        raise  # out of tick time is no verdict: the next tick runs the gate again
     except Exception as exc:
         return _persist_error(
             ck, run_id, "PENDING_DISPATCH", exc,
@@ -1739,7 +1749,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             RuntimeError("ไม่มี chain dispatch lease — ห้าม place order"),
             claim=intent)
     dispatch_scope = str(dispatch_claim.get("dispatch_scope_key") or ck)
-    tick_runtime.require_budget(12.0)
+    tick_runtime.require_budget(DISPATCH_FENCE_MIN_BUDGET_SECONDS)
     try:
         fenced = fence_chain_dispatch(
             dispatch_scope, run_id, str(dispatch_claim.get("owner") or ""),
