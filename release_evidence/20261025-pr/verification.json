@@ -1,0 +1,122 @@
+{
+ "schema": "lego_audit_verification_v1",
+ "generated_at": "2026-10-25T07:10:48.086277+00:00",
+ "base_commit": "9baf9fc38ce6dc68d882c3091af2c38949cd6f90",
+ "python": "Python 3.12.3 (the version CI runs), dependencies exactly as pinned in requirements-dev.txt",
+ "local_status": "PASS",
+ "failed_checks": [],
+ "real_money_ready": false,
+ "release_state": "NO_GO",
+ "candidate": {
+  "hash_of_this_tree": "852c11ec0ded76f010c6d1691c121ea59d35c484483df89a3957dd2ca9406121",
+  "file_count": 208,
+  "scope": "backend-only",
+  "computed_with": "tools/candidate_manifest.py build_manifest() on the working tree that was committed (release_evidence/ is excluded from the hash)",
+  "deployed_before_this_change": "57ab596c5aa2fee5b460e1d1e27650c6e596b113ec64e56f04a8f4351dfecd73"
+ },
+ "note": "The operator recomputes the candidate hash from a clean checkout of the merged commit (ops.py release-plan); it changes with this PR and with any later edit, so UAT needs a new release to get this change, before the window of 00055 ends at 2026-11-04T21:00:00Z. Nothing here touched a broker, a Firebase project or a deployed revision. The decision formula, ledger, fence, recovery (including the 30-minute UAT stuck-PENDING release), order limits, quote guards, PROD limits and the flight recorder floor are unchanged; a dispatch now asks for the place fence's 12 s before its first gate read, and a deadline in the post-Preview refetch is passed on instead of being persisted as an error.",
+ "code_change": {
+  "files": {
+   "execution_service.py": "+11/-1"
+  },
+  "new_files": [
+   "test_audit_20261025.py",
+   "docs/AUDIT_20261025_TH.md",
+   "release_evidence/20261025-pr/"
+  ],
+  "docs_changed": [
+   "README.md",
+   "RELEASE_STATUS_TH.md"
+  ],
+  "existing_tests_changed": 0,
+  "line_endings": "execution_service.py mixes CRLF and LF; every touched line was CRLF and stays CRLF (byte-level patch)"
+ },
+ "full_suite": {
+  "command": "pytest -q",
+  "junit_sha256": "1d85b9422f573a5790ec0cb5a6c0aacc0066a186e7fd95522570731e2294cb95",
+  "counts": {
+   "tests": 2192,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2183
+  },
+  "baseline_before_change": {
+   "tests": 2174,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2165
+  },
+  "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +18 tests (test_audit_20261025.py); no existing test was modified."
+ },
+ "mutation": {
+  "mutants": 6,
+  "killed": 6,
+  "survivors": [],
+  "by_file": {
+   "execution_service.py": 6
+  },
+  "note": "each mutant applied in place and test_audit_20261025.py run, then the file restored byte for byte: guard removed (5 failed), guard at 11.9 s (2), guard moved after Preview (5), re-raise removed (1), fence back to the literal 12.0 (1), guard at 12.01 s (1)"
+ },
+ "checks": [
+  {
+   "id": "py_compile",
+   "command": "python -m py_compile *.py tools/*.py",
+   "exit_code": 0
+  },
+  {
+   "id": "pyflakes_new_test",
+   "command": "python -m pyflakes test_audit_20261025.py",
+   "exit_code": 0
+  },
+  {
+   "id": "new_tests",
+   "command": "pytest -q test_audit_20261025.py",
+   "tests": {
+    "test_audit_20261025.py": 18
+   },
+   "result": "on main@9baf9fc without the change 9 of the 18 fail (W23 'passed' instead of 'deferred' x4, refetch and replay 'DID NOT RAISE' x2, missing constant x3) and 9 pass (the place path at 12.0 / 20.63 / 32.60 s, another refetch failure still persisted as post_preview_refetch, business status, the budget arithmetic, F2 x3); all 18 pass after the change"
+  },
+  {
+   "id": "independent_ledger_recompute",
+   "command": "plain Python on webull_lego_rows, no repo code",
+   "result": "52/52 rows: V=H*P, gap=V-FIX_C, R=FIX_C*ln(P/P0), status, qty=floor(|gap|/P at 0.01), dA=FIX_C*(P_fill/P_prev-1), A, E=A-R_basis and the holdings walk; 0 mismatches; versions 1..52 and steps 832..883 contiguous; final A -113.15, holdings 147.9228 = webull_lego_state"
+  },
+  {
+   "id": "log_completeness",
+   "command": "plain Python on the Cloud Run export",
+   "result": "3,908 ticks <-> 3,908 requests (all HTTP 200, unique correlation ids), one gap over 90 s (104.8 s, Saturday), 1 revision / 2 instances; 52 commit events <-> 52 rows; 51 of 52 rows have their equation in the flight recorder (v4 is F1)"
+  },
+  {
+   "id": "broker_reason_check",
+   "command": "raw order-detail bodies of the 3 FAILED orders in webull_lego_trace",
+   "result": "status FAILED, filled 0, commission 0 and no reason field in the broker response: 'reason unavailable' is what the broker sent"
+  },
+  {
+   "id": "guard_replay_on_this_log",
+   "command": "remaining_budget_ms + duration_ms of the 25 sdk_preview phases",
+   "result": "20 placed orders started Preview with 20.63 s or more; only 13:45:06Z (10.52 s) and 14:15:06Z (7.99 s) started under 12 s and both deferred on the old code too"
+  },
+  {
+   "id": "trace_audit_on_this_evidence",
+   "command": "python -m tools.trace_audit --logs ... --rtdb ... --yaml ... --repo <clean checkout of 9baf9fc>",
+   "result": "0 P0 / 5 P1 / 9 P2 / 2 info: P1 ORDER_FAILED_REASON_UNKNOWN x3, FEE_DRAG, ALERTING_NOT_CONFIGURED; P2 UAT_STUCK_PENDING_RELEASED x3, DISPATCH_SUPPRESSED (4 of 24), TRACE_GAP_ROWS (v4), TICKS_DEFERRED 3, TICK_NEAR_BUDGET 2, WEBULL_SDK_ERRORS x2; 0 equation, row, fill or ledger mismatches; candidate 57ab596c... matches the clean checkout (backend_only)"
+  },
+  {
+   "id": "readiness_audit_on_this_evidence",
+   "output": "release_evidence/20261025-pr/readiness-audit.json",
+   "result": "BLOCKED: 6 PASS, 1 FAIL (snapshot_integrity: broker_rejection_reason_missing x3, F3), 7 BLOCKED (external operational evidence); real_money_ready false"
+  },
+  {
+   "id": "dst_check",
+   "command": "market_clock.session_bounds for 2026-10-30, 2026-11-02, 2026-11-04",
+   "result": "13:30-20:00Z, 14:30-21:00Z, 14:30-21:00Z: DST end on 1 November is handled"
+  },
+  {
+   "id": "pip_audit",
+   "command": "pip-audit -r requirements.txt --progress-spinner off",
+   "result": "No known vulnerabilities found (2026-10-25); requirements unchanged by this PR"
+  }
+ ]
+}

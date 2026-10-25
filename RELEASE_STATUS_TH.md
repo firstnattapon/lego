@@ -1,5 +1,15 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 25 ตุลาคม: [audit UAT เทรดต่อเนื่อง 2 session, บันทึกครบ, แก้ dispatch ที่ใช้เวลาท้าย tick ไปกับการอ่านที่ fence จะปฏิเสธอยู่แล้ว](docs/AUDIT_20261025_TH.md) — revision `00055` (main@9baf9fc หลัง PR #36, UBER),
+log 22 ต.ค. 13:30Z → 25 ต.ค. 06:35Z: 3,908 tick ↔ 3,908 request (HTTP 200 ทั้งหมด), แถว 832–883 ต่อเนื่อง, คำนวณ 52 แถวใหม่จากหลักการเบื้องต้น 0 mismatch, candidate `57ab596c…` ตรงกับ checkout สะอาด.
+**เทรดต่อเนื่องได้จริง**: Place 21 / FILLED 13, ไม่มี halt / outage. **แก้ใน source**: tick 22 ต.ค. 14:15Z เหลือ 8.1 s ก่อน gate แต่ยังเรียก Preview + อ่าน broker อีกสองครั้ง ⇒ จบที่ 0.575 s,
+flight recorder ทิ้ง trace (แถว v4 ไม่มีสมการ) และกลายเป็น ERROR เพราะ refetch กลืน deadline — gate ขอ 12 s ของ fence ก่อนอ่านครั้งแรก และ refetch ส่ง deadline ต่อ (replay บน Preview 25 ครั้งของ log: ไม่กระทบ order ที่ place ได้).
+ไม่แตะสูตรตัดสินใจ/ledger/fence/recovery/circuit/caps/ค่า PROD. เทสต์ 2,183 passed / 9 skipped (+18, ไม่แก้เทสต์เดิม), mutation จับ 6/6.
+ข้อจำกัดที่เปิดอยู่ (ไม่แก้ใน PR นี้): broker UAT ค้าง BUY `PENDING` 3 ใบ (เสีย 6 slot, กฎปล่อย 30 นาทีคงเดิม) และ `FAILED` 3 ใบที่ broker ไม่ส่งเหตุผล; fee UAT ≈ 1.08 % ต่อ order ทำให้ทุก order ต่ำกว่าจุดคุ้มทุน; ไม่มี alert (G4).
+สถานะ: **code-ready, live-evidence-pending (NO-GO เงินจริง)** — ก่อน 26 ต.ค. 13:30Z ตรวจ `ops.py inspect-open-orders` (3 ใบที่ปล่อยแล้ว), หลัง merge ออก release ใหม่ (`WINDOW_SESSIONS=10`) **ก่อน 2026-11-04T21:00Z**;
+เงินจริงยังต้อง alert ถึงคนจริง (G4), PROD observe ≥2 session + quote real-time, token ที่คนหมุน, DB/rules PROD แยก, fee PROD ที่วัดแล้ว และการตัดสินใจเชิงเศรษฐศาสตร์ของเจ้าของ.
+ผล local และ evidence อยู่ใน `release_evidence/20261025-pr/`.
+
 ล่าสุด 22 ตุลาคม: [audit guard อายุ quote ของ UAT กัน order ทุกใบเพราะ feed ของ sandbox ช้ากว่าเวลาจริงหลายชั่วโมง](docs/AUDIT_20261022_TH.md) — revision `00050`–`00054` (main@99000da หลัง PR #35), log 21 ต.ค. 13:23Z → 22 ต.ค. 04:22Z: 903 tick ↔ 903 request,
 แถว AAPL 816–831 ต่อเนื่อง, สมการคำนวณใหม่จากหลักการเบื้องต้นตรงทั้ง 16 แถว, ไม่มี fill, candidate `a465c2d8…` ตรงกับ checkout สะอาดของ `99000da`. **ไม่มี order ถึง broker ทั้ง session**:
 `READY_BUY` 22 slot (UBER 6, AAPL 16) จบ `SUPPRESSED_STATE_CHANGED` ด้วย `quote_age_limit` — snapshot ของ sandbox ตามหลัง 8,987 → 21,154 s เทียบเพดาน UAT 1,260 s; NFLX/MSFT ไม่ OC บน UAT (ERROR 45 tick);
