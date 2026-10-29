@@ -421,6 +421,10 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                     pending_intent["candidate_hash"] = runtime.deployment.candidate_hash
                     pending_intent["release_binding"] = runtime.deployment.expected_release_binding
                     pending_intent["worker_schema_version"] = 4
+                    if runtime.operator.preview_only:
+                        # Born in preview: never placed, whatever mode the deployment
+                        # is in by the time a worker dispatches it.
+                        pending_intent["preview_only"] = True
                 if capability is not None:
                     pending_intent["instrument_capability"] = {
                         "symbol": str(capability.symbol),

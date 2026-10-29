@@ -28,6 +28,10 @@ set -Eeuo pipefail
 # Optional: ALERT_WEBHOOK_SECRET_OVERRIDE=<Secret Manager secret holding the HTTPS
 # receiver URL> so release/DNA/halt alerts are delivered (alerting.py).
 #
+# LEGO_MODE_OVERRIDE=preview LEGO_ACTIVE_OVERRIDE=true runs the whole order path of a
+# trade release, the Preview of each real order included, and never calls Place. It is
+# judged like a trade release (caps, window, authorization) and carries no ack.
+#
 # PRODUCTION is observe/inactive unless a real-money release is requested with
 # WEBULL_ENV_OVERRIDE=PROD LEGO_MODE_OVERRIDE=trade LEGO_ACTIVE_OVERRIDE=true. That
 # run first prints the acknowledgement for the exact release and exits 3; deploy by
@@ -89,10 +93,12 @@ PROD_LIVE=false
 if [[ "${ENVIRONMENT}" == PROD ]]; then
     if [[ "${MODE}" == observe && "${ACTIVE}" == false ]]; then
         :
+    elif [[ "${MODE}" == preview && "${ACTIVE}" == true ]]; then
+        :  # every step but Place; no real-money acknowledgement exists for it
     elif [[ "${MODE}" == trade && "${ACTIVE}" == true ]]; then
         PROD_LIVE=true
     else
-        echo "Production rollout must be observe/inactive, or trade/active (real money) with LEGO_PROD_LIVE_ACK." >&2
+        echo "Production rollout must be observe/inactive, or trade/active (real money) with LEGO_PROD_LIVE_ACK, or preview/active (no Place)." >&2
         exit 1
     fi
     # Real positions and orders are written to this database. Auto-discovery (section 6)
@@ -104,6 +110,13 @@ if [[ "${ENVIRONMENT}" == PROD ]]; then
         echo "Production requires an explicit DATABASE_URL_OVERRIDE: a Realtime Database separate from UAT whose rules deny public reads (docs/PROD_LIVE_RUNBOOK_TH.md). It is never auto-discovered." >&2
         exit 1
     fi
+fi
+
+# trade and preview both run the order path (preview stops before Place), so both need
+# a complete release that is judged before anything is deployed.
+ORDER_PATH=false
+if [[ "${ACTIVE}" == true && ( "${MODE}" == trade || "${MODE}" == preview ) ]]; then
+    ORDER_PATH=true
 fi
 
 step() {
@@ -290,8 +303,8 @@ require_command gcloud
 require_command python3
 require_command git
 
-[[ "${MODE}" == "observe" || "${MODE}" == "trade" ]] || \
-    fail "LEGO_MODE_OVERRIDE ต้องเป็น observe หรือ trade"
+[[ "${MODE}" == "observe" || "${MODE}" == "trade" || "${MODE}" == "preview" ]] || \
+    fail "LEGO_MODE_OVERRIDE ต้องเป็น observe, preview หรือ trade"
 require_boolean "LEGO_ACTIVE_OVERRIDE" "${ACTIVE}"
 if [[ -n "${LEGO_ALLOW_FRACTIONAL_OVERRIDE}" ]]; then
     require_boolean "LEGO_ALLOW_FRACTIONAL_OVERRIDE" "${LEGO_ALLOW_FRACTIONAL_OVERRIDE}"
@@ -323,7 +336,7 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
 fi
 echo "Repo commit: ${DEPLOY_COMMIT}"
 
-if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
+if [[ "${ORDER_PATH}" == true ]]; then
     python3 -c 'import sys; from datetime import datetime,timezone; from execution_limits import ExecutionLimits; x=ExecutionLimits.parse(sys.argv[1:]); sys.exit("trading window expired" if datetime.now(timezone.utc) >= x.end else 0)' \
         "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}"
 fi
@@ -684,7 +697,7 @@ require_sha256 "computed release binding" "${EXPECTED_RELEASE_BINDING}"
 # see exactly the values the function will receive, never ambient LEGO_* values
 # from this shell. The account id is piped in and never printed.
 PLAN_JSON=""
-if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
+if [[ "${ORDER_PATH}" == true ]]; then
     PLAN_STATUS=0
     PLAN_ARGS=(--account-id-stdin --candidate-hash "${CANDIDATE_HASH}" --enforce)
     if [[ "${FUNDING_MODE}" == initial-funding ]]; then
@@ -723,7 +736,7 @@ for finding in json.load(sys.stdin)["assessment"]["findings"]:
 fi
 
 ORDER_SUBMISSION_EXPECTED="false"
-if [[ "${MODE}" == "trade" && "${ACTIVE}" == "true" ]]; then
+if [[ "${ORDER_PATH}" == true ]]; then
     [[ -n "${EXPECTED_CANDIDATE_HASH}" ]] || \
         fail "trade+active ต้องระบุ EXPECTED_CANDIDATE_HASH จาก release evidence"
     [[ -n "${RELEASE_AUTHORIZATION_OVERRIDE}" ]] || \
@@ -798,8 +811,12 @@ echo "Schedule       : ${SCHEDULE} UTC"
 echo "Candidate hash : ${CANDIDATE_HASH} (${CANDIDATE_STATUS})"
 echo "Mode           : ${MODE}"
 echo "Active         : ${ACTIVE}"
-echo "Order submit   : ${ORDER_SUBMISSION_EXPECTED}"
-if [[ "${PROD_LIVE}" == true ]]; then
+if [[ "${MODE}" == preview ]]; then
+    echo "Order submit   : preview only (${ORDER_SUBMISSION_EXPECTED}); Place is never called"
+else
+    echo "Order submit   : ${ORDER_SUBMISSION_EXPECTED}"
+fi
+if [[ "${PROD_LIVE}" == true || ( "${ENVIRONMENT}" == PROD && "${ORDER_PATH}" == true ) ]]; then
     echo "Funding mode   : ${FUNDING_MODE}"
 fi
 if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
@@ -1048,7 +1065,9 @@ FINAL_SCHEDULER_STATE="$(gcloud scheduler jobs describe "${SCHEDULER_JOB}" \
 [[ "${FINAL_SCHEDULER_STATE}" == "${SCHEDULER_ORIGINAL_STATE:-ENABLED}" ]] || \
     fail "Cloud Scheduler state changed unexpectedly: ${FINAL_SCHEDULER_STATE}"
 
-if [[ "${ORDER_SUBMISSION_EXPECTED}" == "true" ]]; then
+if [[ "${ORDER_SUBMISSION_EXPECTED}" == "true" && "${MODE}" == preview ]]; then
+    ORDER_STATUS="PREVIEW ONLY (every check and the Preview of each real order; Place is never called)"
+elif [[ "${ORDER_SUBMISSION_EXPECTED}" == "true" ]]; then
     ORDER_STATUS="ENABLED (explicit release binding verified)"
 else
     ORDER_STATUS="BLOCKED (mode/active/release gate)"

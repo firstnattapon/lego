@@ -144,6 +144,15 @@ class ReleaseInputs:
 
     @property
     def trading(self) -> bool:
+        """The order path runs: trade, or preview, which stops it just before Place.
+
+        Both are judged alike (caps, window, DNA), so a preview exercises the exact
+        release a trade would carry; only trade can carry a real-money ack (live).
+        """
+        return self.mode in ("trade", "preview") and self.active
+
+    @property
+    def live(self) -> bool:
         return self.mode == "trade" and self.active
 
     @property
@@ -411,7 +420,7 @@ def prod_live_ack(inp: ReleaseInputs, binding: str, *, funding: str) -> str | No
     """
     if funding not in FUNDING_MODES:
         raise ValueError("funding must be prefunded or initial-funding")
-    if not (inp.production and inp.trading) or len(str(binding)) < 16:
+    if not (inp.production and inp.live) or len(str(binding)) < 16:
         return None
     static = findings(replace(inp, initial_funding=(funding == "initial-funding")))
     if any(f["severity"] == BLOCK for f in static):

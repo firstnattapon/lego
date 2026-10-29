@@ -158,7 +158,7 @@ def release_plan_command(args, *, now=None) -> dict:
     limits = runtime.deployment.execution_limits
     funding = "initial-funding" if args.initial_funding else "prefunded"
     acks = horizon.prod_live_acks(inputs, binding) if (
-        runtime.deployment.environment == "PROD" and runtime.operator.allows_new_intents) else {}
+        runtime.deployment.environment == "PROD" and inputs.live) else {}
 
     deploy_env = {"EXPECTED_CANDIDATE_HASH": candidate}
     deploy_env.update({override: env[name] for name, override in DEPLOY_OVERRIDES.items()

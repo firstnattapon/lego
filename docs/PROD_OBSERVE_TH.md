@@ -1,4 +1,6 @@
-# PROD observe: ใช้ PROD โดยไม่ใช้เงินจริง
+# PROD observe และ preview: ใช้ PROD โดยไม่ใช้เงินจริง
+
+มีสองขั้นตามลำดับ: **observe** (หัวข้อแรก) แล้วตามด้วย **preview** ([หัวข้อท้าย](#preview-ทุกขั้นเหมือนเงินจริง-ยกเว้น-place))
 
 `lego-tick-prod` อ่านบัญชีจริงและราคาจริงที่ `api.webull.co.th` แล้วคำนวณแถวทุก slot เหมือน UAT
 แต่ทำงานแบบ `observe/inactive`:
@@ -65,3 +67,54 @@ gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.serv
   observe พิสูจน์การอ่าน token และ quote ได้ แต่ไม่ได้จำลองกำไร ถ้าจะจำลองด้วยเงินปลอมให้ใช้ UAT
 - หยุดได้ด้วย `gcloud scheduler jobs pause lego-tick-prod --location=asia-southeast1 --project=lego-firebase` เพราะไม่มี order ให้ reconcile
 - เงินจริงเป็น release แยกที่ต้องมี acknowledgement ดู [PROD_LIVE_RUNBOOK_TH.md](PROD_LIVE_RUNBOOK_TH.md) สคริปต์นี้เปิดเงินจริงไม่ได้
+
+## Preview: ทุกขั้นเหมือนเงินจริง ยกเว้น Place
+
+ใช้หลังจาก observe ผ่านแล้ว (token และ quote ใช้ได้) โหมดนี้ทำทุกอย่างที่ order จริงทำตามลำดับเดียวกัน:
+1. decision สร้าง intent
+2. ตรวจ token และ caps
+3. อ่าน open orders และราคาสด แล้วตรวจอายุ quote ≤ 60 วินาที, อายุ decision ≤ 120 วินาที และราคาที่เลื่อน
+4. **Preview จริง** ที่ broker (ได้ fee จริง) และตรวจ buying power
+5. อ่านซ้ำหลัง Preview แล้วตรวจ caps อีกรอบ
+
+จากนั้นหยุด: intent จบเป็น `UNSENT_ABORTED` ก่อน chain fence ไม่มีการ reserve quota, ไม่มี marker และ**ไม่เคยเรียก Place**
+
+```bash
+LEGO_MODE_OVERRIDE=preview bash deploy/cloudshell-prod-observe.sh
+```
+
+สคริปต์ถามเพิ่ม 3 ข้อ ก่อนเรียก cloud:
+
+| คำถาม | ใช้ทำอะไร | ข้ามด้วย env |
+|---|---|---|
+| ราคาล่าสุดของ symbol | คิด cap จำนวนหุ้น | `LEGO_REFERENCE_PRICE` |
+| บัญชีมีหุ้นประมาณ FIX_C แล้วหรือยัง | ยังไม่มี: ใช้ caps แบบ funding (≤ 125% ของ FIX_C) เพราะ order แรกของบัญชีว่างคือ FIX_C ทั้งก้อน; มีแล้ว: ใช้ caps แบบ canary | `LEGO_FUNDING_MODE_OVERRIDE=initial-funding` หรือ `prefunded` |
+| Webull ยืนยันแล้วหรือยังว่า Preview ไม่สร้าง order | repo ยังไม่ได้ยืนยันเรื่องนี้กับหน้าเอกสารเต็ม ([runbook ข้อ 11](PROD_LIVE_RUNBOOK_TH.md)) | `LEGO_PREVIEW_CONFIRMED=yes` |
+
+caps, window 5 session และ release authorization คำนวณให้เองด้วย `ops.py release-plan --recommended-limits`
+release นี้ผูกกับ mode จึงใช้เปิด trade ไม่ได้ และ preview ไม่มี `LEGO_PROD_LIVE_ACK` ไม่ว่ากรณีใด
+
+**ก่อนรัน**
+- **มีเงินสด USD อย่างน้อยเท่าขนาด order:** บัญชีว่างจะได้ BUY ประมาณ FIX_C ทุก slot จึงต้องมีเงินสดประมาณ FIX_C + fee เช่น FIX_C 450 ต้องมีประมาณ 460
+- **ใช้ FIX_C เล็ก:** ถ้า Preview บน PROD สร้าง order ขึ้นมาจริงจะได้เสียไม่เกินก้อนนี้
+- **เฝ้าแอป Webull ตอน slot `READY` แรก:** ต้องไม่มี order เกิดขึ้น
+
+**อ่านผล:** แถวที่ `preview_only=true` คือ Preview ที่ผ่านทุกด่านแล้ว ส่วน `preview_fee_pct` คือ fee จริงเป็น % ของมูลค่า
+
+```bash
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="lego-tick-prod" AND jsonPayload.event="lego_tick_completed" AND jsonPayload.execution.preview_only=true' --project=lego-firebase --freshness=1d --limit=20 --format='table(timestamp,jsonPayload.execution[0].status,jsonPayload.execution[0].preview_fee_pct)'
+```
+
+intent ที่ถูกกันก่อนถึงจุดตัดจะจบเหมือนของจริงพร้อมเหตุผล เช่น `NOT_PLACED`, `SUPPRESSED_STATE_CHANGED` หรือ `quote_age_limit`
+ดูเหตุผลได้ใน `execution[]` ของ log เดียวกัน ส่วน fee ที่วัดได้ใช้เป็น `--fee-pct` ตอนวางแผนเงินจริง
+
+**tripwire:** ถ้าหลัง Preview เห็น open order หรือจำนวนหุ้นเปลี่ยน แปลว่ามีคนเทรดบัญชีนี้ หรือ Preview สร้าง order
+- ระบบจะตั้ง operator halt ชื่อ `preview-tripwire` แล้วหยุดสร้าง intent ทันที
+- ตรวจแอป Webull ก่อน แล้วปลดใน shell ที่ตั้ง `LEGO_ACTIVE=false` ด้วย `python ops.py clear-operator-halt --halt-id <id> --operator <ชื่อคุณ> --reason "<เหตุผล>"` (dry-run ก่อน แล้วจึงเติม `--apply`)
+
+**สิ่งที่ preview พิสูจน์ไม่ได้ (ยังต้องมี canary):**
+- ตัว Place เอง เช่นกรณี UAT 27–28 ต.ค. ที่ Place ได้ 200 แต่ order เป็น `FAILED`
+- fill, fee จาก fill, การกู้ order และ cancel
+
+**กลับไป observe:** รันคำสั่งเดิมโดยไม่ใส่ `LEGO_MODE_OVERRIDE` chain เดิมยังใช้ต่อได้ เพราะ mode ไม่ได้อยู่ใน chain key
+**ต่ออายุหลังครบ 5 session:** รันคำสั่ง preview เดิมซ้ำ

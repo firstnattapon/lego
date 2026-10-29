@@ -3,6 +3,12 @@
 # never an order (docs/PROD_OBSERVE_TH.md). From the repository root:
 #
 #   bash deploy/cloudshell-prod-observe.sh
+#   LEGO_MODE_OVERRIDE=preview bash deploy/cloudshell-prod-observe.sh
+#
+# preview runs the whole order path of a real release, the Preview of each real order
+# included, and never calls Place. It also asks for the last price (share cap), whether
+# the account already holds about FIX_C, and Webull's confirmation that Preview creates
+# no order; caps, a 5-session window and the authorization come from ops.py release-plan.
 #
 # It asks only for what is missing: FIX_C, the PROD app key/secret and account id (first
 # run) and, when the token is missing or has 3 days or less left, the approval of the
@@ -21,6 +27,8 @@ readonly APP_KEY_SECRET="webull-app-key-${SUFFIX}"
 readonly APP_SECRET_SECRET="webull-app-secret-${SUFFIX}"
 readonly ACCOUNT_SECRET="webull-account-id-${SUFFIX}"
 readonly TOKEN_SECRET="webull-token-${SUFFIX}"
+readonly MODE="${LEGO_MODE_OVERRIDE:-observe}"
+readonly SYMBOL="${LEGO_SYMBOL_OVERRIDE:-UBER}"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -49,6 +57,35 @@ fi
 [[ "${DB_INSTANCE}" =~ ^[a-z0-9-]+$ ]] || fail "LEGO_PROD_DB_INSTANCE must be a Realtime Database instance name"
 [[ "${DB_INSTANCE}" != *-default-rtdb ]] || \
     fail "${DB_INSTANCE} is a default instance, the database UAT uses; name another with LEGO_PROD_DB_INSTANCE"
+[[ "${MODE}" == observe || "${MODE}" == preview ]] || \
+    fail "LEGO_MODE_OVERRIDE must be observe or preview here; real money is docs/PROD_LIVE_RUNBOOK_TH.md"
+
+if [[ "${MODE}" == preview ]]; then
+    PRICE="${LEGO_REFERENCE_PRICE:-}"
+    if [[ -z "${PRICE}" ]]; then
+        read -rp "Last price of ${SYMBOL} in USD (sets the share cap): " PRICE || \
+            fail "LEGO_REFERENCE_PRICE is required for preview"
+    fi
+    [[ "${PRICE}" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v v="${PRICE}" 'BEGIN { exit !(v > 0) }' || \
+        fail "the reference price must be a number > 0"
+    # A flat account's first order is the whole FIX_C: only the funding caps let it reach Preview.
+    FUNDING="${LEGO_FUNDING_MODE_OVERRIDE:-}"
+    if [[ -z "${FUNDING}" ]]; then
+        held=""
+        read -rp "Does the PROD account already hold about FIX_C of ${SYMBOL}? [y/N] " held || true
+        if [[ "${held}" =~ ^[Yy] ]]; then FUNDING=prefunded; else FUNDING=initial-funding; fi
+    fi
+    [[ "${FUNDING}" == prefunded || "${FUNDING}" == initial-funding ]] || \
+        fail "LEGO_FUNDING_MODE_OVERRIDE must be prefunded or initial-funding"
+    # Preview runs on every READY slot. That it never creates an order rests on Webull's
+    # documentation index only (docs/PROD_LIVE_RUNBOOK_TH.md section 11).
+    CONFIRMED="${LEGO_PREVIEW_CONFIRMED:-}"
+    if [[ "${CONFIRMED}" != yes ]]; then
+        read -rp "Has Webull confirmed that Preview Order never creates an order? Type yes: " CONFIRMED || true
+    fi
+    [[ "${CONFIRMED}" == yes ]] || \
+        fail "confirm with Webull first that Preview creates no order (docs/PROD_LIVE_RUNBOOK_TH.md section 11)"
+fi
 
 WORK="$(mktemp -d)"
 chmod 700 "${WORK}"
@@ -231,12 +268,12 @@ require_private() {
 }
 require_private
 
-step "3/4 Deploy lego-tick-prod: PROD, observe, inactive"
+step "3/4 Deploy lego-tick-prod: PROD, ${MODE}"
 export WEBULL_ENV_OVERRIDE=PROD LEGO_MODE_OVERRIDE=observe LEGO_ACTIVE_OVERRIDE=false
 export DATABASE_URL_OVERRIDE="${DATABASE_URL}"
 export WEBULL_TOKEN_SECRET_OVERRIDE="projects/${PROJECT_ID}/secrets/${TOKEN_SECRET}"
 export LEGO_FIX_C_OVERRIDE="${FIX_C}"
-export LEGO_SYMBOL_OVERRIDE="${LEGO_SYMBOL_OVERRIDE:-UBER}" LEGO_DIFF_OVERRIDE="${LEGO_DIFF_OVERRIDE:-25}"
+export LEGO_SYMBOL_OVERRIDE="${SYMBOL}" LEGO_DIFF_OVERRIDE="${LEGO_DIFF_OVERRIDE:-25}"
 # bypass:6500 = no DNA gate until 2027-09-07, the bundle UAT runs; the script's own default
 # (strategy.example.json) ended 2026-10-05 and would only ever answer PASS_DNA_EXHAUSTED.
 export LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-strategy.uat-continuous.json}"
@@ -249,11 +286,62 @@ export LEGO_RELEASE_AUTHORIZATION_OVERRIDE='' LEGO_TRADING_WINDOW_END_OVERRIDE='
 export LEGO_MAX_ORDER_QUANTITY_OVERRIDE='' LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE=''
 export LEGO_MAX_SESSION_ORDERS_OVERRIDE=''
 unset LEGO_PROD_LIVE_ACK LEGO_FUNDING_MODE_OVERRIDE
+if [[ "${MODE}" == preview ]]; then
+    # The release a trade would carry, planned for this checkout: caps proportional to
+    # FIX_C, a window of 5 regular sessions, the binding (which includes the mode, so it
+    # can never authorize trade). A clean environment, as in the deploy script.
+    PLAN_ARGS=(--account-id-stdin --window-sessions 5 --reference-price "${PRICE}"
+               --recommended-limits --enforce)
+    [[ "${FUNDING}" == prefunded ]] || PLAN_ARGS+=(--initial-funding)
+    PLAN_STATUS=0
+    PLAN_JSON="$(gcloud secrets versions access latest --secret="${ACCOUNT_SECRET}" \
+            --project="${PROJECT_ID}" | \
+        env -i PATH="${PATH}" HOME="${HOME}" WEBULL_ENV=PROD LEGO_MODE=preview LEGO_ACTIVE=true \
+            LEGO_SYMBOL="${LEGO_SYMBOL_OVERRIDE}" LEGO_FIX_C="${FIX_C}" LEGO_DIFF="${LEGO_DIFF_OVERRIDE}" \
+            LEGO_DNA_BUNDLE="${LEGO_DNA_BUNDLE_OVERRIDE}" \
+            LEGO_ALLOW_FRACTIONAL="${LEGO_ALLOW_FRACTIONAL_OVERRIDE}" \
+            LEGO_STALE_ORDER_ACTION=hold LEGO_STALE_ORDER_SECONDS=300 \
+            LEGO_CANCEL_CONFIRM_GRACE_SECONDS=120 LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER=1 \
+            LEGO_SESSION_KEY_MODE=market_day \
+            python3 ops.py release-plan "${PLAN_ARGS[@]}")" || PLAN_STATUS=$?
+    [[ -n "${PLAN_JSON}" ]] || fail "release-plan produced no report (status ${PLAN_STATUS})"
+    printf '%s' "${PLAN_JSON}" | python3 -c '
+import json, sys
+for finding in json.load(sys.stdin)["assessment"]["findings"]:
+    if finding["severity"] != "INFO":
+        print("  [%s] %s: %s" % (finding["severity"], finding["id"], finding["message"]))'
+    (( PLAN_STATUS == 0 )) || fail "the preview release has BLOCK findings (above)"
+    while IFS='=' read -r key value; do
+        export "${key}=${value}"
+    done < <(printf '%s' "${PLAN_JSON}" | python3 -c '
+import json, re, sys
+for key, value in json.load(sys.stdin)["deploy_env"].items():
+    if re.fullmatch(r"[A-Z0-9_]+", key) and key != "LEGO_PROD_LIVE_ACK":
+        print(f"{key}={value}")')
+    [[ "${LEGO_MODE_OVERRIDE}" == preview && "${LEGO_ACTIVE_OVERRIDE}" == true ]] || \
+        fail "release-plan did not return a preview release"
+    [[ "${LEGO_RELEASE_AUTHORIZATION_OVERRIDE}" =~ ^[0-9a-f]{64}$ ]] || \
+        fail "release-plan returned no release authorization"
+    export LEGO_FUNDING_MODE_OVERRIDE="${FUNDING}"
+fi
 bash deploy/cloudshell-all-in-one.sh
 
 step "4/4 Check the database again"
 # Step 8 of the deploy script deploys database.rules.json to the default instance only.
 require_private
+if [[ "${MODE}" == preview ]]; then
+    cat <<'EOF'
+
+PROD preview is running: every READY slot runs the order path up to its Preview and stops
+before Place. Watch the Webull app at the first READY slot: no order may appear. Previews and fees:
+  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="lego-tick-prod" AND jsonPayload.event="lego_tick_completed" AND jsonPayload.execution.preview_only=true' --project=lego-firebase --freshness=1d --limit=20 --format='table(timestamp,jsonPayload.execution[0].status,jsonPayload.execution[0].preview_fee_pct)'
+OPERATOR_HALT means the tripwire fired: an open order or a position change right after a Preview.
+The release ends after 5 sessions: run this command again. Back to observe: drop LEGO_MODE_OVERRIDE.
+Stop:
+  gcloud scheduler jobs pause lego-tick-prod --location=asia-southeast1 --project=lego-firebase
+EOF
+    exit 0
+fi
 cat <<'EOF'
 
 PROD observe is running: lego-tick-prod reads the real account and quotes and sends no order.

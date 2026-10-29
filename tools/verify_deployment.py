@@ -55,7 +55,15 @@ def verify(service, scheduler, *, candidate, revision, image, function=None, rev
                     "LEGO_PROD_LIVE_ACK", "LEGO_RELEASE_AUTHORIZATION", "LEGO_MAX_ORDER_QUANTITY",
                     "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
                     "LEGO_TRADING_WINDOW_END")))
-        checks["production_mode"] = observe or live
+        # Preview runs the order path up to Place with the same release, and never
+        # carries the real-money acknowledgement.
+        preview = (env.get("LEGO_MODE") == "preview" and env.get("LEGO_ACTIVE") == "true"
+                   and not env.get("LEGO_PROD_LIVE_ACK")
+                   and all(env.get(name) for name in (
+                       "LEGO_RELEASE_AUTHORIZATION", "LEGO_MAX_ORDER_QUANTITY",
+                       "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
+                       "LEGO_TRADING_WINDOW_END")))
+        checks["production_mode"] = observe or live or preview
     config_hash = hashlib.sha256(json.dumps(sorted(containers[0].get("env", []), key=lambda v: v["name"]),
                                           sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks,

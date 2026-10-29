@@ -206,6 +206,23 @@ def test_production_observe_has_no_acknowledgement(tmp_path):
     assert "prod_live_acks" not in result and "LEGO_PROD_LIVE_ACK" not in result["deploy_env"]
 
 
+def test_production_preview_is_judged_like_trade_and_never_acknowledged(tmp_path, monkeypatch):
+    policy = prod_policy(tmp_path, "preview", "true")
+    result = plan(env_file=policy, window_sessions=5, reference_price=PRICE, recommended_limits=True)
+    assert result["mode"] == "preview" and result["assessment"]["trading"] is True
+    assert result["assessment"]["ok"], result["assessment"]["blocking"]
+    assert "prod_live_acks" not in result and "LEGO_PROD_LIVE_ACK" not in result["deploy_env"]
+    assert result["deploy_env"]["LEGO_MODE_OVERRIDE"] == "preview"
+    # Caps a trade release may not carry block a preview release the same way.
+    for name, value in (("LEGO_MAX_ORDER_QUANTITY", "100"), ("LEGO_MAX_ORDER_NOTIONAL_USD", "3000"),
+                        ("LEGO_MAX_SESSION_ORDERS", "10")):
+        monkeypatch.setenv(name, value)
+    loose = plan(env_file=policy, window_sessions=5)
+    trade = plan(env_file=prod_policy(tmp_path, "trade", "true"), window_sessions=5)
+    assert not loose["assessment"]["ok"]
+    assert loose["assessment"]["blocking"] == trade["assessment"]["blocking"]
+
+
 # -------------------------------------------------------------------------- hygiene
 def test_the_account_id_is_never_printed():
     text = json.dumps(plan(window_sessions=10), ensure_ascii=False)

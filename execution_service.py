@@ -61,7 +61,7 @@ from webull_io import (IncompleteOpenOrdersError, build_clients,
                         preview_market_order, preview_market_order_result,
                         redact_sensitive_text,
                         runtime_identity_fingerprint, token_health)
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from webull_io import (validate_order_detail_identity, validate_place_response,
                        validate_preview_funding, FractionalGateError,
                        InstrumentCapability, evaluate_fractional_order_gate,
@@ -94,6 +94,9 @@ DEFAULT_MAX_DISPATCH_QUOTE_AGE_SECONDS = 360.0
 UAT_QUOTE_DELAY_SECONDS = 900.0
 PROD_MAX_DISPATCH_QUOTE_AGE_SECONDS = 60.0
 PROD_MAX_DISPATCH_DECISION_AGE_SECONDS = 120.0
+# LEGO_MODE=preview halts new orders under this name when the tripwire fires; the
+# person who clears it is therefore always a second operator (operator_halt).
+PREVIEW_TRIPWIRE_OPERATOR = "preview-tripwire"
 # A broker timestamp a fraction ahead of the worker can be ordinary clock skew.
 # Anything farther ahead is not evidence about a quote that exists yet.
 MAX_DISPATCH_FUTURE_SKEW_SECONDS = 5.0
@@ -986,6 +989,39 @@ def _stop(chain_key_: str, run_id: str, status: str, extra: dict | None = None,
     return {"run_id": run_id, "status": status, **reported}
 
 
+def _preview_only(runtime, intent: dict) -> bool:
+    """LEGO_MODE=preview, or an intent created under it: the order path ends before the fence."""
+    return intent.get("preview_only") is True or (
+        runtime is not None and runtime.operator.preview_only)
+
+
+def _preview_tripwire(identity: str, symbol: str, run_id: str, reason: str) -> None:
+    """Halt new orders: in preview nothing may trade this account, Preview included.
+
+    An open order or a moved position seen right after Preview means someone else
+    traded the account or a Preview created an order. Either way a person looks
+    before the next one (ops.py clear-operator-halt).
+    """
+    import operator_halt
+    try:
+        operator_halt.set_halt(identity, symbol, operator=PREVIEW_TRIPWIRE_OPERATOR,
+                               reason=f"preview {run_id}: {reason}", apply=True)
+    except Exception as exc:  # noqa: BLE001 - the stop that follows still ends the intent unsent
+        fr.error("preview_tripwire", exc, "W22")
+
+
+def _preview_fee_pct(preview: dict) -> str | None:
+    """estimated_transaction_fee / estimated_cost x 100, as tools/measure_fee.py reports it."""
+    try:
+        cost = Decimal(str(preview["estimated_cost"]))
+        fee = Decimal(str(preview["estimated_transaction_fee"]))
+    except (KeyError, TypeError, InvalidOperation):
+        return None
+    if not (cost.is_finite() and fee.is_finite()) or cost <= 0 or fee < 0:
+        return None
+    return format((fee / cost * 100).quantize(Decimal("0.0001")), "f")
+
+
 def _nonnegative_finite_env(name: str, default: float) -> float:
     """Read a safety limit without letting NaN/inf disable its comparison."""
     raw = os.environ.get(name, str(default))
@@ -1680,13 +1716,18 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 scope = account_symbol_fence_key(identity, cfg.symbol)
                 open_order_blocker.record(scope, dispatch_claim, final_open_orders, now=observed_at)
         if final_open_orders:
+            tripped = _preview_only(runtime, intent)
+            if tripped:
+                _preview_tripwire(identity, cfg.symbol, run_id,
+                                  f"{len(final_open_orders)} open order(s) right after Preview")
             return _stop(
                 ck, run_id, "SUPPRESSED_ACTIVE_ORDER",
                 {"terminal_reason":
                  f"{len(final_open_orders)} active broker order(s) after Preview",
                  "dispatch_check_phase": "post_preview",
                  "broker_open_order_blocker": blocker},
-                claim=intent, **open_order_blocker.public(blocker))
+                claim=intent, **open_order_blocker.public(blocker),
+                **({"preview_tripwire": True} if tripped else {}))
     try:
         final_fresh = fetch_snapshot(trade_client, data_client, cfg)
     except tick_runtime.TickDeadlineExceeded:
@@ -1709,13 +1750,17 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             claim=intent)
     final_holdings_drift = abs(final_holdings - decision_holdings)
     if final_holdings_drift > tolerance:
+        tripped = _preview_only(runtime, intent)
+        if tripped:
+            _preview_tripwire(identity, cfg.symbol, run_id, "position changed across Preview")
         return _stop(
             ck, run_id, "SUPPRESSED_STATE_CHANGED",
             {"holdings_drift": final_holdings_drift,
              "dispatch_holdings": final_fresh["holdings"],
              "dispatch_check_phase": "post_preview",
              "terminal_reason": "fresh holdings invalidated committed intent"},
-            claim=intent, holdings_drift=final_holdings_drift)
+            claim=intent, holdings_drift=final_holdings_drift,
+            **({"preview_tripwire": True} if tripped else {}))
     try:
         final_quote_safety = _dispatch_quote_safety(
             cfg, intent, final_fresh,
@@ -1738,6 +1783,25 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         return _reject_unsafe_dispatch_quote(
             ck, run_id, final_quote_safety, phase="post_preview",
             claim=intent)
+
+    if _preview_only(runtime, intent):
+        # LEGO_MODE=preview ends here. Every read, the Preview and every check above
+        # ran as for a real order; the chain fence, the session quota, the Place
+        # marker and Place are never touched (docs/PROD_OBSERVE_TH.md).
+        fee_pct = None
+        if runtime is not None:
+            try:
+                limits.check(intent["quantity"], final_fresh["price"], now=datetime.now(UTC))
+            except ExecutionLimitError as exc:
+                return _stop(ck, run_id, "NOT_PLACED", {
+                    "terminal_reason": str(exc), "execution_limit_blocked": True},
+                    claim=intent, execution_limit_blocked=True)
+            fee_pct = _preview_fee_pct(preview_result)
+        return _stop(ck, run_id, "UNSENT_ABORTED", {
+            "terminal_reason": "preview: every check before Place passed; Place is never called",
+            "preview_only": True, "preview_fee_pct": fee_pct,
+            "dispatch_check_phase": "preview_cut"},
+            claim=intent, preview_only=True, preview_fee_pct=fee_pct)
 
     # The per-intent claim below prevents a duplicate client_order_id.  This
     # second, chain-wide fence prevents two workers that claimed different

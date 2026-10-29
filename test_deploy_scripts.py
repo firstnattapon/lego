@@ -353,9 +353,10 @@ def test_prod_observe_needs_the_principal_before_any_cloud_call(sandbox):
 
 
 def test_prod_observe_deploys_observe_only_whatever_the_shell_still_holds(sandbox):
-    leftovers = release_env()                     # a live shell: trade/active, caps, token
+    leftovers = release_env()                     # a live shell: active, caps, token, authorization
     leftovers.update(authorized(sandbox, leftovers), LEGO_PROD_LIVE_ACK="LIVE-PROD-UBER-left-over",
                      WEBULL_ENV_OVERRIDE="UAT", LEGO_STALE_ORDER_ACTION_OVERRIDE="cancel_expire")
+    leftovers.pop("LEGO_MODE_OVERRIDE")           # the mode is an input of this script: trade is refused
     result = run_prod_observe(sandbox, {**leftovers, "LEGO_FIX_C_OVERRIDE": "10000"})
     assert result.returncode == 78, result.stderr  # the stub gcloud stops at `functions deploy`
     recorded = log(sandbox)
@@ -382,6 +383,58 @@ def test_prod_observe_stops_when_the_database_answers_anonymous_reads(sandbox):
                                         "STUB_RTDB_BODY": '{"UBER_x": true}'})
     assert result.returncode == 1 and "readable without signing in" in result.stderr
     assert "functions deploy" not in log(sandbox)
+
+
+def test_the_prod_wrapper_never_deploys_trade(sandbox):
+    result = run_prod_observe(sandbox, {"LEGO_FIX_C_OVERRIDE": "10000", "LEGO_MODE_OVERRIDE": "trade"})
+    assert result.returncode == 1 and "must be observe or preview" in result.stderr
+    assert log(sandbox) == ""
+
+
+# --------------------------------------- PROD preview: every step of the order path but Place
+PREVIEW_INPUTS = {"LEGO_FIX_C_OVERRIDE": "10000", "LEGO_MODE_OVERRIDE": "preview",
+                  "LEGO_REFERENCE_PRICE": "67.4", "LEGO_FUNDING_MODE_OVERRIDE": "initial-funding",
+                  "LEGO_PREVIEW_CONFIRMED": "yes"}
+
+
+def test_prod_preview_needs_webulls_word_on_preview_before_any_call(sandbox):
+    inputs = {k: v for k, v in PREVIEW_INPUTS.items() if k != "LEGO_PREVIEW_CONFIRMED"}
+    result = run_prod_observe(sandbox, inputs)
+    assert result.returncode == 1 and "confirm with Webull" in result.stderr
+    assert log(sandbox) == ""
+
+
+def test_prod_preview_plans_its_own_release_and_deploys_without_an_ack(sandbox):
+    result = run_prod_observe(sandbox, PREVIEW_INPUTS)
+    assert result.returncode == 78, result.stderr  # the stub gcloud stops at `functions deploy`
+    recorded = log(sandbox)
+    deployed = re.search(r"functions deploy lego-tick-prod .*", recorded).group(0)
+    assert "LEGO_MODE=preview,LEGO_ACTIVE=true," in deployed
+    assert "LEGO_MAX_ORDER_NOTIONAL_USD=12500," in deployed        # funding caps: a flat account
+    assert re.search(r"LEGO_RELEASE_AUTHORIZATION=[0-9a-f]{64},", deployed)
+    assert re.search(r"LEGO_TRADING_WINDOW_END=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ,", deployed)
+    assert "LEGO_PROD_LIVE_ACK" not in recorded and "REAL-MONEY RELEASE" not in result.stdout
+    assert "Order submit   : preview only (true); Place is never called" in result.stdout
+
+
+def test_production_preview_without_its_release_is_refused_before_deploy(sandbox):
+    result = run(sandbox, release_env(LEGO_MODE_OVERRIDE="preview"))
+    assert result.returncode == 1 and "EXPECTED_CANDIDATE_HASH" in result.stderr
+    assert "FIREBASE_DEPLOY_REACHED" not in log(sandbox)
+
+
+def test_production_preview_deploys_with_its_release_and_without_an_ack(sandbox):
+    result = run(sandbox, authorized(sandbox, release_env(LEGO_MODE_OVERRIDE="preview")))
+    assert result.returncode == 78, result.stderr
+    deployed = re.search(r"functions deploy lego-tick-prod .*", log(sandbox)).group(0)
+    assert "LEGO_MODE=preview,LEGO_ACTIVE=true," in deployed
+    assert "LEGO_PROD_LIVE_ACK" not in log(sandbox) and "REAL-MONEY RELEASE" not in result.stdout
+
+
+def test_an_inactive_production_preview_is_a_half_state(sandbox):
+    result = run(sandbox, release_env(LEGO_MODE_OVERRIDE="preview", LEGO_ACTIVE_OVERRIDE="false"))
+    assert result.returncode == 1 and "preview/active (no Place)" in result.stderr
+    assert log(sandbox) == ""
 
 
 # ---------------------------------------------------------- captured deployments
@@ -422,3 +475,12 @@ def test_a_live_production_revision_missing_any_requirement_fails(missing):
 @pytest.mark.parametrize("mode,active", [("trade", "false"), ("observe", "true")])
 def test_a_half_live_production_revision_fails(mode, active):
     assert captured({**LIVE, "LEGO_MODE": mode, "LEGO_ACTIVE": active})["status"] == "FAIL"
+
+
+def test_a_captured_production_preview_needs_its_release_and_never_an_ack():
+    preview = {**LIVE, "LEGO_MODE": "preview"}
+    preview.pop("LEGO_PROD_LIVE_ACK")
+    assert captured(preview)["status"] == "PASS"
+    assert captured({**preview, "LEGO_PROD_LIVE_ACK": "LIVE-PROD-UBER"})["status"] == "FAIL"
+    assert captured({**preview, "LEGO_RELEASE_AUTHORIZATION": ""})["status"] == "FAIL"
+    assert captured({**preview, "LEGO_ACTIVE": "false"})["status"] == "FAIL"
