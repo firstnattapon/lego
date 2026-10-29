@@ -1,0 +1,123 @@
+{
+ "schema": "lego_audit_verification_v1",
+ "generated_at": "2026-10-29T09:42:23.936164+00:00",
+ "base_commit": "de599043735921d3f986acec1f02d06277204519",
+ "python": "Python 3.12.3 (the version CI runs), dependencies exactly as pinned in requirements-dev.txt",
+ "local_status": "PASS",
+ "failed_checks": [],
+ "real_money_ready": false,
+ "release_state": "NO_GO",
+ "candidate": {
+  "hash_of_this_tree": "1aa6eb8d608d5c7c29d3ae5ab8bc9bd66db23b552962fa812e0dfbe97663cf3c",
+  "file_count": 210,
+  "scope": "backend-only",
+  "computed_with": "tools/candidate_manifest.py build_manifest() on the working tree that was committed (release_evidence/ is excluded from the hash)",
+  "deployed_before_this_change": "852c11ec0ded76f010c6d1691c121ea59d35c484483df89a3957dd2ca9406121"
+ },
+ "note": "No runtime file changed: the re-audit found no defect in the code that explains the FAILED orders or puts money at risk. The candidate hash still changes (the new .md and test file are in the manifest), so the window renewal of 00056 before 2026-11-06T21:00:00Z is a new release, as always. Nothing here touched a broker, a Firebase project or a deployed revision.",
+ "code_change": {
+  "files": {},
+  "new_files": [
+   "test_audit_20261029.py",
+   "docs/AUDIT_20261029_TH.md",
+   "release_evidence/20261029-pr/"
+  ],
+  "docs_changed": [
+   "RELEASE_STATUS_TH.md"
+  ],
+  "existing_tests_changed": 0,
+  "config_changed": {
+   ".gitleaksignore": "+5: the exact fingerprint of one generic-api-key false positive (the UBER chain name in test_audit_20261029.py of fd3d16f, replaced by a placeholder in the next commit); no rule, path or pattern allowlisted"
+  }
+ },
+ "full_suite": {
+  "command": "pytest -q",
+  "junit_sha256": "b3b2f832a8bac8a5fef0524f3875e0ba782863975aab0a9e64ff9dfda9be175d",
+  "counts": {
+   "tests": 2207,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2198
+  },
+  "baseline_before_change": {
+   "tests": 2192,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2183
+  },
+  "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +15 tests (test_audit_20261029.py); no existing test was modified."
+ },
+ "mutation": {
+  "mutants": 5,
+  "killed": 5,
+  "survivors": [],
+  "by_file": {
+   "broker_circuit.py": 3,
+   "webull_io.py": 1,
+   "lego_orders.py": 1
+  },
+  "note": "each mutant applied in place and test_audit_20261029.py run, then the file restored with git checkout: PROBE_BASE_SECONDS 600 (4 failed), MAX_CONSECUTIVE_BROKER_REJECTS 2 (4), AUTO_PROBE_ENVIRONMENTS with PROD (1), support_trading_session ALL (2), broker_reason_missing inverted (1)"
+ },
+ "checks": [
+  {
+   "id": "py_compile",
+   "command": "python -m py_compile *.py tools/*.py",
+   "exit_code": 0
+  },
+  {
+   "id": "pyflakes_new_test",
+   "command": "python -m pyflakes test_audit_20261029.py",
+   "exit_code": 0
+  },
+  {
+   "id": "new_tests",
+   "command": "pytest -q test_audit_20261029.py",
+   "tests": {
+    "test_audit_20261029.py": 15
+   },
+   "result": "all 15 pass on main@de59904 (they lock behaviour that is already correct): payload of the FAILED SELL and the last FILLED BUY = build_order_payload, raw FAILED detail = reasonless reject with no shares moved, replay of 9 FAILED and 16 READY decisions with the real times gives the 6 probes at the logged times and the exported fence document, PROD never probes, 30/10 split of the halted rows, sessions left and DST"
+  },
+  {
+   "id": "independent_ledger_recompute",
+   "command": "plain Python on webull_lego_rows and execution_cashflow.finalized_runs, no repo code",
+   "result": "78/78 rows (v53..v130): V=H*P, gap=V-FIX_C, R=FIX_C*ln(P/P0), status and qty=floor(|gap|/P at 0.01) where the gate did not overwrite the row, dA=0 on rows that did not fill and dA=FIX_C*(P_fill/P_prev-1), A, E=A-R on the 5 that did; holdings walk 147.9228 -> 151.3228 = webull_lego_state = broker position; 0 mismatches"
+  },
+  {
+   "id": "log_completeness",
+   "command": "plain Python on the Cloud export",
+   "result": "4,650 ticks <-> 4,650 requests (unique correlation ids), 5,805 scheduler attempts with 3 failures that match the 503 x2 and 504 x1, gaps only in the daily scheduler pause; 78 commit events <-> 78 rows; 78/78 rows of the window have their equation in the flight recorder"
+  },
+  {
+   "id": "broker_reason_check",
+   "command": "raw place / order-detail bodies of the 9 FAILED orders in webull_lego_trace",
+   "result": "Place HTTP 200 with a broker order id; Order Detail status FAILED, filled 0, commission 0 and no reason field: 'reason unavailable' is what the broker sent"
+  },
+  {
+   "id": "root_cause_hypotheses",
+   "command": "trace bodies, balances, positions, open orders, quote checks, git history of build_order_payload, boot ids",
+   "result": "payload, funds, position, quote age and open orders ruled out; the 'frozen buying power' of the first draft was wrong (cash 4,004,772.01 - 34.65 of the 17:45Z fill = 4,004,737.36); instance correlation (all 9 FAILED from boot 2794539e) cannot be told apart from the day boundary and earlier streaks spanned several revisions"
+  },
+  {
+   "id": "trace_audit_on_this_evidence",
+   "command": "python -m tools.trace_audit --logs logs-00056.json --rtdb ... --yaml ... --repo <clean checkout of de59904>",
+   "result": "0 P0 / 15 P1 / 15 P2 / 2 info: P1 ORDER_FAILED_REASON_UNKNOWN x12, FEE_DRAG, ALERTING_NOT_CONFIGURED, BROKER_REJECT_HALT_ACTIVE; P2 UAT_STUCK_PENDING_RELEASED x4, DISPATCH_SUPPRESSED, TRACE_GAP_ROWS (v4), TICK_GAPS x4, TICKS_DEFERRED 4, TICK_NEAR_BUDGET 1, WEBULL_ERRORS x2, WEBULL_SDK_ERRORS x4; 0 equation, row, fill or ledger mismatches; candidate 852c11ec... matches the clean checkout (backend_only)"
+  },
+  {
+   "id": "readiness_audit_on_this_evidence",
+   "output": "release_evidence/20261029-pr/readiness-audit.json",
+   "result": "BLOCKED: 5 PASS, 2 FAIL (snapshot_integrity: broker_rejection_reason_missing x12, F1; request_tick_pairing: 1 tick logged after its request was cut, F3), 7 BLOCKED (external operational evidence); real_money_ready false"
+  },
+  {
+   "id": "dst_check",
+   "command": "market_clock.session_bounds for 2026-10-30, 2026-11-02, 2026-11-06",
+   "result": "13:30-20:00Z, 14:30-21:00Z, 14:30-21:00Z: DST end on 1 November is handled and the last session of the window closes exactly at its end"
+  },
+  {
+   "id": "pip_audit",
+   "command": "pip-audit -r requirements.txt --progress-spinner off",
+   "result": "No known vulnerabilities found (2026-10-29); requirements unchanged by this PR"
+  }
+ ]
+}

@@ -1,5 +1,13 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 29 ตุลาคม: [audit UAT 3 session — broker ทำทุก order เป็น `FAILED` ไม่มีเหตุผลตั้งแต่ 27 ต.ค. 13:45Z, circuit หยุดการเทรดตามดีไซน์, ไม่มีอะไรให้แก้ในโค้ด](docs/AUDIT_20261029_TH.md) — revision `00056` (main@de59904 หลัง PR #37, UBER),
+log 25 ต.ค. 08:44Z → 29 ต.ค. 08:50Z: 4,650 tick ↔ 4,650 request, แถว 884–961 ต่อเนื่อง (78 slot ครบ), `tools.trace_audit` 0 P0 · แถว 130/130 และ fill 18/18 0 mismatch, holdings 151.3228 และ cash ของ broker ตรงกับ fill ของ LEGO ทุกเซ็นต์, candidate `852c11ec…` ตรงกับ checkout สะอาด.
+**26 ต.ค. เทรดได้** (Place 7 / FILLED 5); **27–28 ต.ค. order 9/9 `FAILED`** (Place 200, Order Detail ไม่มีเหตุผล) ⇒ halt 14:32Z, probe อัตโนมัติ 6 ครั้งตามตาราง UAT ล้มทุกครั้ง, ledger ไม่ขยับ.
+ตรวจซ้ำสองรอบ: payload ของใบที่ FAILED = ใบที่ FILLED = builder ปัจจุบัน (ไม่เปลี่ยนตั้งแต่ 11 ก.ย.), เงิน/position/quote/open orders ไม่ใช่สาเหตุ; streak ครั้งที่ 3 ของ broker UAT ⇒ **ไม่แก้ไฟล์ runtime**.
+เทสต์ 2,198 passed / 9 skipped (+15 บนตัวเลขจริง, ไม่แก้เทสต์เดิม), mutation จับ 5/5. ผล local และ evidence อยู่ใน `release_evidence/20261029-pr/`.
+สถานะ: **code-ready, broker-blocked (UAT), NO-GO เงินจริง** — ส่ง order id + request id ให้ Webull, ห้าม reset halt ซ้ำ (failed-probe streak 6), หลัง merge ต่อ window **ก่อน 2026-11-06T21:00Z**;
+เงินจริงยังต้อง alert ถึงคนจริง (G4), PROD observe ≥2 session + quote real-time, token ที่คนหมุน, DB/rules PROD แยก, fee PROD ที่วัดแล้ว, บัญชีเฉพาะ และการตัดสินใจเชิงเศรษฐศาสตร์ของเจ้าของ.
+
 ล่าสุด 25 ตุลาคม: [audit UAT เทรดต่อเนื่อง 2 session, บันทึกครบ, แก้ dispatch ที่ใช้เวลาท้าย tick ไปกับการอ่านที่ fence จะปฏิเสธอยู่แล้ว](docs/AUDIT_20261025_TH.md) — revision `00055` (main@9baf9fc หลัง PR #36, UBER),
 log 22 ต.ค. 13:30Z → 25 ต.ค. 06:35Z: 3,908 tick ↔ 3,908 request (HTTP 200 ทั้งหมด), แถว 832–883 ต่อเนื่อง, คำนวณ 52 แถวใหม่จากหลักการเบื้องต้น 0 mismatch, candidate `57ab596c…` ตรงกับ checkout สะอาด.
 **เทรดต่อเนื่องได้จริง**: Place 21 / FILLED 13, ไม่มี halt / outage. **แก้ใน source**: tick 22 ต.ค. 14:15Z เหลือ 8.1 s ก่อน gate แต่ยังเรียก Preview + อ่าน broker อีกสองครั้ง ⇒ จบที่ 0.575 s,

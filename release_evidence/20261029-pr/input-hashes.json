@@ -1,0 +1,266 @@
+{
+ "schema": "lego_audit_input_hashes_v1",
+ "generated_at": "2026-10-29T09:42:23.936164+00:00",
+ "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates are the numbers quoted in docs/AUDIT_20261029_TH.md and are reproducible with: python -m tools.trace_audit --json --logs logs-00056.json --rtdb lego-firebase-default-rtdb-export.json --yaml YAML.txt --repo <clean checkout of de59904>, and python -m tools.readiness_audit (output in this folder). logs-00056.json is the five export pages merged by insertId and filtered to the audited revision. Per-tick lists are left out; their counts are kept.",
+ "inputs": [
+  {
+   "name": "downloaded-logs-20261029-155512.json",
+   "role": "Cloud export of project lego-firebase (Cloud Run, Cloud Scheduler, Cloud Build, audit), one of five consecutive pages",
+   "bytes": 7428786,
+   "sha256": "f0765d3ec376f126df5ae37eb5a8fcc6cd7387f89fcf0f42ce7c679cc4e6aae5"
+  },
+  {
+   "name": "downloaded-logs-20261029-155544.json",
+   "role": "Cloud export of project lego-firebase (Cloud Run, Cloud Scheduler, Cloud Build, audit), one of five consecutive pages",
+   "bytes": 6822663,
+   "sha256": "aea9ca7be9fffdc82d4375a2e07b12581b733105c9c5c37351d4847a96245c2d"
+  },
+  {
+   "name": "downloaded-logs-20261029-155617.json",
+   "role": "Cloud export of project lego-firebase (Cloud Run, Cloud Scheduler, Cloud Build, audit), one of five consecutive pages",
+   "bytes": 7478646,
+   "sha256": "3202398d0053213bde5544104d056c4ba13c0e01e1952282631156802ad05cee"
+  },
+  {
+   "name": "downloaded-logs-20261029-155705.json",
+   "role": "Cloud export of project lego-firebase (Cloud Run, Cloud Scheduler, Cloud Build, audit), one of five consecutive pages",
+   "bytes": 7342906,
+   "sha256": "4d84394d6444931b50b6d3509a5f13d0c394b39a314b13bc03f0b4b5a010ad82"
+  },
+  {
+   "name": "downloaded-logs-20261029-155738.json",
+   "role": "Cloud export of project lego-firebase (Cloud Run, Cloud Scheduler, Cloud Build, audit), one of five consecutive pages",
+   "bytes": 7242482,
+   "sha256": "aa87bb54047519b25a3c908b5be772925ca876e002dd5f8268f9b18d03a589eb"
+  },
+  {
+   "name": "merged-logs-20261029.json",
+   "role": "the five pages merged and de-duplicated by insertId (24,555 entries, 2026-10-24T13:30:05Z..2026-10-29T08:50:08Z); input of tools.trace_audit over all streams",
+   "bytes": 30708550,
+   "sha256": "f4862bedd6ab50a137455da1c1f90f66b5cb68e5b5b1bf91abff36883f10d1bf"
+  },
+  {
+   "name": "logs-00056.json",
+   "role": "merged logs filtered to resource.type cloud_run_revision and revision lego-tick-uat-00056-zuw (10,101 entries, 2026-10-25T08:44:38Z..2026-10-29T08:50:05Z); input of both audit tools, same scope as the previous audits",
+   "bytes": 17844049,
+   "sha256": "0ec6f50714fe4646cf92312e82dccea26217ce49bfd975a73dd60ac659b76dbe"
+  },
+  {
+   "name": "downloaded-logs-20261025-133630.json",
+   "role": "the log of docs/AUDIT_20261025_TH.md, byte-identical to the input of that audit; not counted again",
+   "bytes": 18101444,
+   "sha256": "f27d0efd2c1b965bb0ede9893d9aac3e360e084087772af6d64037c5f8d34929"
+  },
+  {
+   "name": "lego-firebase-default-rtdb-export.json",
+   "role": "RTDB export (chain UBER_33b541c2034c v130, 130 rows, 42 intents, 347 traces, heartbeat 2026-10-29T08:55:05Z, broker_reject_circuit halted a8f276d1 probe_streak 6, no lease or inflight run)",
+   "bytes": 4137218,
+   "sha256": "094ffcc5ad9539f02dfefaf68b9ba057e362763c72aaa38715384d256a281792"
+  },
+  {
+   "name": "YAML.txt",
+   "role": "Cloud Run service and revision lego-tick-uat-00056-zuw (generation 56)",
+   "bytes": 13193,
+   "sha256": "8240031e393fdf875d22d92bf12c208acc75ebd25da6c00543d16c128857590a"
+  },
+  {
+   "name": "webull-llms.txt",
+   "role": "Webull TH OpenAPI documentation index (same as previous audits)",
+   "bytes": 9289,
+   "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+  },
+  {
+   "name": "deploy.txt",
+   "role": "operator deploy command (cloudshell-uat-release.sh of ee5d44d, which clones main)",
+   "bytes": 240,
+   "sha256": "65f79bbd4ad4337e4b35e202b17da70953cf6acdccbdbf755114cbd1bedac0b6"
+  }
+ ],
+ "aggregates": {
+  "log_entries_all_streams": 24555,
+  "log_entries_by_source": {
+   "cloud_run": 12413,
+   "cloud_scheduler": 11610,
+   "cloud_build": 493,
+   "cloud_audit": 39
+  },
+  "log_entries_00056": 10101,
+  "log_by_stream_00056": {
+   "stdout": 5391,
+   "requests": 4650,
+   "stderr": 54,
+   "varlog_system": 4,
+   "system_event": 2
+  },
+  "ticks": 4650,
+  "requests": 4650,
+  "http_status": {
+   "200": 4647,
+   "503": 2,
+   "504": 1
+  },
+  "scheduler_attempts": {
+   "total": 5805,
+   "unavailable_503": 2,
+   "deadline_exceeded_504": 1
+  },
+  "tick_severity": {
+   "INFO": 4462,
+   "WARNING": 40,
+   "ERROR": 148
+  },
+  "error_ticks": {
+   "BROKER_REJECT_HALT": 129,
+   "RECONCILIATION_OVERDUE": 15,
+   "BROKER_ORDER_FAILED": 2,
+   "ERROR": 2
+  },
+  "warning_ticks": {
+   "WAITING_RECONCILIATION": 36,
+   "TICK_DEFERRED": 4
+  },
+  "business_status": {
+   "BROKER_REJECT_HALT": 2237,
+   "MARKET_CLOSED": 1938,
+   "SLOT_CONSUMED": 394,
+   "WAITING_RECONCILIATION": 36,
+   "ROW_COMMITTED": 22,
+   "RECONCILIATION_OVERDUE": 15,
+   "TICK_DEFERRED": 4,
+   "BROKER_ORDER_FAILED": 2,
+   "ERROR": 2
+  },
+  "tick_duration_ms": {
+   "p50": 829.4,
+   "p95": 1932.1,
+   "max": 86929.0
+  },
+  "request_latency_s": {
+   "p50": 0.84,
+   "p95": 1.98,
+   "max": 45.0
+  },
+  "gaps_over_3_ticks": "4, each 08:50Z..13:30Z (scheduler pause, market closed)",
+  "revisions": [
+   "lego-tick-uat-00056-zuw"
+  ],
+  "instances": {
+   "0010dd8607f9": "2026-10-25T08:44:40Z..2026-10-26T17:56:06Z",
+   "0010dd860771": "2026-10-26T17:56:47Z..end (boot 2794539e)"
+  },
+  "rows": {
+   "count_window": 78,
+   "versions": "53..130",
+   "steps": "884..961",
+   "contiguous": true,
+   "chain_versions": "1..130",
+   "gated": {
+    "PASS_BROKER_REJECT_HALT": 40,
+    "PASS_RECOVERY_BLOCKED": 2
+   },
+   "halted_rows_that_were_trades": 30,
+   "halted_rows_within_diff": 10,
+   "independent_recompute_mismatches": 0,
+   "final_A": -369.96301890175994,
+   "final_E": -17.58879368440688,
+   "final_holdings": 151.3228
+  },
+  "intents_window": {
+   "count": 18,
+   "FAILED": 9,
+   "FILLED": 5,
+   "SUPPRESSED_STATE_CHANGED": 2,
+   "EXPIRED": 1,
+   "CANCELLED": 1
+  },
+  "fills_window": {
+   "count": 5,
+   "fees_usd": 3.22,
+   "list": [
+    "BUY 2 @ 66.37",
+    "BUY 1.02 @ 66.51",
+    "SELL 0.56 @ 66.60",
+    "BUY 0.42 @ 66.18",
+    "BUY 0.52 @ 65.94"
+   ],
+   "realized_after_fees_usd_chain": -7.209748837209295,
+   "realized_delta_20261026": -1.743
+  },
+  "broker_cash_reconciliation": {
+   "steps_usd": [
+    -134.16,
+    -31.68,
+    -28.1,
+    -34.65
+   ],
+   "matches_lego_fills": true,
+   "buying_power_below_cash_20261026_usd": [
+    20779.12,
+    33599.89,
+    13769.55,
+    13769.55,
+    13807.79,
+    13807.79
+   ]
+  },
+  "failed_orders_window": {
+   "count": 9,
+   "sell": 1,
+   "buy": 8,
+   "first": "2026-10-27T13:45:20Z",
+   "last": "2026-10-28T18:00:18Z",
+   "reason_field_present": 0
+  },
+  "circuit": {
+   "halted_at_first": "2026-10-27T14:32:06.905818Z",
+   "probes": 6,
+   "probe_streak": 6,
+   "halt_id": "a8f276d17a57ef0c8c0da1457cbeda42",
+   "halted_at_last": "2026-10-28T18:00:21.176015Z",
+   "cooldowns_s": [
+    900,
+    1800,
+    3600,
+    7200,
+    14400,
+    14400
+   ]
+  },
+  "hung_tick": {
+   "request_at": "2026-10-28T20:19:05.819Z",
+   "cloud_run_cut_s": 45.0,
+   "tick_logged_at": "2026-10-28T20:20:32.702Z",
+   "duration_ms": 86928.983,
+   "worker_timeout_at": "2026-10-28T20:20:32Z",
+   "next_request_queued_s": 29.65
+  },
+  "flight_recorder": {
+   "traces": 347,
+   "rows_without_equation": [
+    "v4 (2026-10-22:3, before de59904)"
+   ],
+   "heartbeat_since_boot_2026-10-26T17:56:49Z": {
+    "ticks": 756,
+    "written": 49,
+    "skipped_dup": 707,
+    "skipped_budget": 0,
+    "write_errors": 0,
+    "flush_timeouts": 0,
+    "internal_errors": 0,
+    "dropped_events": 0
+   }
+  },
+  "warnings": {
+   "BROKER_REJECT_AUTO_PROBE": 6,
+   "BROKER_REJECT_HALT": 40,
+   "day_expiry_released": 4,
+   "uat_stuck_pending_ignored": 7,
+   "webull_token": 1
+  },
+  "release": {
+   "window_end": "2026-11-06T21:00:00Z",
+   "sessions_left_after_20261028": 7
+  },
+  "candidate_deployed": "852c11ec0ded76f010c6d1691c121ea59d35c484483df89a3957dd2ca9406121"
+ }
+}

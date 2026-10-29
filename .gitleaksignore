@@ -32,3 +32,8 @@ b80fbae0b8faef6a2f44bd0ee9a4d54d1335accc:release_evidence/20260930-pr/candidate-
 946de14fe4489268e3e913e48022481c0a5fcc41:release_evidence/20261005-pr/candidate-final.json:generic-api-key:26
 946de14fe4489268e3e913e48022481c0a5fcc41:release_evidence/20261005-pr/candidate-final.json:generic-api-key:41
 946de14fe4489268e3e913e48022481c0a5fcc41:release_evidence/20261005-pr/candidate-final.json:generic-api-key:152
+
+# test_audit_20261029.py line 166 of fd3d16f: the value is the RTDB chain name of the UBER
+# chain (symbol plus config-hash prefix, public in docs/AUDIT_20261029_TH.md), not a
+# credential; the next commit replaces it with a placeholder. Exact historical finding only.
+fd3d16f981c60588491d2f20a95730b9dc23f11b:test_audit_20261029.py:generic-api-key:166
