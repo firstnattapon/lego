@@ -23,7 +23,9 @@ ENVIRONMENT_HOSTS = {
     "UAT": "th-api.uat.webullbroker.com",
     "PROD": "api.webull.co.th",
 }
-MODES = {"observe", "trade"}
+# preview runs the whole order path of trade, Preview included, and stops before
+# Place (execution_service, docs/PROD_OBSERVE_TH.md).
+MODES = {"observe", "trade", "preview"}
 
 
 class ConfigurationError(ValueError):
@@ -137,14 +139,19 @@ class OperatorSettings:
         _finite_decimal(self.diff_usd, name="diff_usd", positive=False)
         mode = self.mode.strip().lower()
         if mode not in MODES:
-            raise ConfigurationError("mode ต้องเป็น observe หรือ trade")
+            raise ConfigurationError("mode ต้องเป็น observe, preview หรือ trade")
         object.__setattr__(self, "mode", mode)
         if type(self.active) is not bool:
             raise ConfigurationError("active ต้องเป็น boolean")
 
     @property
     def allows_new_intents(self) -> bool:
-        return self.active and self.mode == "trade"
+        return self.active and self.mode in {"trade", "preview"}
+
+    @property
+    def preview_only(self) -> bool:
+        """Every step of the order path except Place; it is never called."""
+        return self.mode == "preview"
 
     def canonical(self) -> dict:
         return {
@@ -257,9 +264,12 @@ class RuntimeConfig:
 
     @property
     def allows_new_broker_mutation(self) -> bool:
+        # Preview needs the release (caps, window, binding) but not the real-money
+        # acknowledgement: the worker stops it before the chain fence and
+        # webull_io.place_market_order refuses it as well.
         return (self.operator.allows_new_intents
                 and self.deployment.release_is_authorized
-                and self.prod_live_gate_open)
+                and (self.operator.preview_only or self.prod_live_gate_open))
 
 
 def _load_bundle(env: Mapping[str, str]) -> DNABundle:

@@ -31,6 +31,7 @@ the next worker invocation; the account-symbol fence stays held.
 | FIFO page write/head checkpoint/projection interruption | immutable page hash + active event/cursor/revision | resume at most 8 pages per tick; never resubmit | no |
 | model commit before projection | finalized run witness/seq | repair projection only | no |
 | pause/observe/DNA exhausted/market closed | attempted intent remains actionable | reconcile/finalize; create no new intent | no new mutation |
+| preview (`LEGO_MODE=preview`, or an intent stamped `preview_only`) | `PREVIEWED` + Preview result | `UNSENT_ABORTED` after the post-Preview checks, before the fence; an order or position change right after Preview sets an operator halt | never |
 | unresolved after bounded reads | NEEDS_RECONCILIATION | audited operator evidence | no |
 
 Lease expiry never deletes the attempt marker. A negative detail lookup once is

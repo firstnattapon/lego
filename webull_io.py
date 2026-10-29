@@ -1568,6 +1568,10 @@ def place_market_order(trade_client, order: list[dict]) -> dict:
     it by asking for the same client_order_id — that is the sanctioned recovery,
     and it works whether or not the first attempt landed.
     """
+    if os.environ.get("LEGO_MODE", "").strip().lower() == "preview":
+        # The second lock behind execution_service's preview cut: a preview
+        # deployment never sends an order, whatever path reaches this call.
+        raise WebullConfigError("LEGO_MODE=preview never places an order")
     account_id = os.environ["WEBULL_ACCOUNT_ID"]
     return trade_client.order_v3.place_order(account_id, order).json()
 

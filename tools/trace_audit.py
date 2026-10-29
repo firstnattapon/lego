@@ -44,7 +44,9 @@ DECISION_STATUSES = frozenset({"SNAPSHOT_READY", "PASS_DNA_ZERO", "PASS_THRESHOL
                                "PASS_MIN_ORDER", "READY_BUY", "READY_SELL"})
 TERMINAL_INTENT = frozenset({
     "FILLED", "CANCELLED", "CANCELED", "REJECTED", "FAILED", "EXPIRED", "EXPIRED_UNSENT",
-    "SUPPRESSED_ACTIVE_ORDER", "SUPPRESSED_STATE_CHANGED", "NOT_PLACED"})
+    "SUPPRESSED_ACTIVE_ORDER", "SUPPRESSED_STATE_CHANGED", "NOT_PLACED",
+    # never sent: a paused deployment, and every LEGO_MODE=preview intent (lego_outbox.UNSENT_TERMINAL)
+    "UNSENT_ABORTED"})
 LEVELS = ("P0", "P1", "P2", "INFO")
 IN_FLIGHT_MINUTES = 30                     # an order older than this and not terminal is stuck, not slow
 TICK_BUDGET_SECONDS = 45.0               # the Cloud Run request timeout the service is deployed with

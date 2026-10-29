@@ -131,10 +131,11 @@ def test_small_overshoot_cannot_override_other_guards():
 
 
 def dispatch_fixture(monkeypatch, *, environment="UAT", final_price=27.6843,
-                     final_holdings=181, fractionable=True, buying_power=10000):
+                     final_holdings=181, fractionable=True, buying_power=10000,
+                     mode="trade"):
     env = {"LEGO_SYMBOL": "PFE", "LEGO_FIX_C": "10000", "LEGO_DIFF": "25",
            "WEBULL_ENV": environment, "WEBULL_ACCOUNT_ID": "dispatch-test",
-           "LEGO_MODE": "trade", "LEGO_ACTIVE": "true",
+           "LEGO_MODE": mode, "LEGO_ACTIVE": "true",
            "LEGO_CANDIDATE_HASH": "test-candidate"}
     env.update(LEGO_MAX_ORDER_QUANTITY="1000", LEGO_MAX_ORDER_NOTIONAL_USD="10000",
                LEGO_MAX_SESSION_ORDERS="10", LEGO_TRADING_WINDOW_END="2030-01-01T00:00:00Z")
@@ -145,7 +146,7 @@ def dispatch_fixture(monkeypatch, *, environment="UAT", final_price=27.6843,
         env["LEGO_MAX_ORDER_NOTIONAL_USD"] = "12500"
     env["LEGO_RELEASE_AUTHORIZATION"] = load_runtime_config(
         env).deployment.expected_release_binding
-    if environment == "PROD":
+    if environment == "PROD" and mode == "trade":       # preview never carries an ack
         import release_horizon
         unacked = load_runtime_config(env)
         env["LEGO_PROD_LIVE_ACK"] = release_horizon.prod_live_acks(

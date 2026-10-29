@@ -225,7 +225,8 @@ def emit_tick(body: dict, code: int, *, request=None, now: datetime | None = Non
                                              "cancel_last_error_code", "cancel_refused_at",
                                              "expiry_released", "expiry_released_at", "expiry_basis",
                                              "expiry_proof_blockers", "expiry_proof_checked_at",
-                                             "open_order_count", "open_order_observed_at", "open_order_fingerprints")}})
+                                             "open_order_count", "open_order_observed_at", "open_order_fingerprints",
+                                             "preview_only", "preview_fee_pct", "preview_tripwire")}})
     print(json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
 
 
