@@ -163,7 +163,7 @@ def fence():
 def record_failed(monkeypatch, run_id, when):
     """The terminal FAILED of the order the fence holds, stamped with the real time."""
     fence().update({"inflight_run_id": run_id})
-    intent = {"run_id": run_id, "chain_key": "UBER_33b541c2034c", "symbol": SYMBOL,
+    intent = {"run_id": run_id, "chain_key": "chain", "symbol": SYMBOL,
               "runtime_identity_fingerprint": IDENT}
     _Clock.current = at(when)
     with monkeypatch.context() as patch:

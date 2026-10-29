@@ -8,7 +8,7 @@
  "real_money_ready": false,
  "release_state": "NO_GO",
  "candidate": {
-  "hash_of_this_tree": "13dc27a532abb3da203fbc97defb0f6bb57ddd68e91e4fc1b60e1956c3acdafd",
+  "hash_of_this_tree": "1aa6eb8d608d5c7c29d3ae5ab8bc9bd66db23b552962fa812e0dfbe97663cf3c",
   "file_count": 210,
   "scope": "backend-only",
   "computed_with": "tools/candidate_manifest.py build_manifest() on the working tree that was committed (release_evidence/ is excluded from the hash)",
@@ -25,11 +25,14 @@
   "docs_changed": [
    "RELEASE_STATUS_TH.md"
   ],
-  "existing_tests_changed": 0
+  "existing_tests_changed": 0,
+  "config_changed": {
+   ".gitleaksignore": "+5: the exact fingerprint of one generic-api-key false positive (the UBER chain name in test_audit_20261029.py of fd3d16f, replaced by a placeholder in the next commit); no rule, path or pattern allowlisted"
+  }
  },
  "full_suite": {
   "command": "pytest -q",
-  "junit_sha256": "037f825a4cfbe53aebe78ad9dbc7f950559cd2c2de1cb65916734bf0a05fb9c7",
+  "junit_sha256": "b3b2f832a8bac8a5fef0524f3875e0ba782863975aab0a9e64ff9dfda9be175d",
   "counts": {
    "tests": 2207,
    "failures": 0,
