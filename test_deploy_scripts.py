@@ -26,7 +26,8 @@ ACCOUNT = "test-account-id"
 COPIED = ["config.py", "dna_engine.py", "recovery_policy.py", "execution_limits.py",
           "release_horizon.py", "operational_health.py", "market_clock.py", "ops.py",
           "firebase.json", "database.rules.json", ".gitignore", "tools/candidate_manifest.py",
-          "requirements.txt", "requirements-dev.txt", "deploy/cloudshell-all-in-one.sh"]
+          "requirements.txt", "requirements-dev.txt", "deploy/cloudshell-all-in-one.sh",
+          "deploy/cloudshell-prod-observe.sh", "database.rules.prod.json"]
 
 GCLOUD = r"""#!/usr/bin/env bash
 echo "gcloud $*" >> "${STUB_LOG}"
@@ -36,6 +37,7 @@ case "$*" in
   "projects describe"*|"config set"*|"services enable"*) ;;
   "iam service-accounts describe"*|"secrets describe"*) ;;
   "secrets versions describe"*) echo "ENABLED" ;;
+  "secrets versions access"*webull-token-prod*) printf 'stub-token\n%s000\nNORMAL\n' "$(( $(date +%s) + 864000 ))" ;;
   "secrets versions access"*) printf '%s' "test-account-id" ;;
   "secrets add-iam-policy-binding"*|"projects add-iam-policy-binding"*) ;;
   "functions describe"*|"scheduler jobs describe"*) exit 1 ;;
@@ -46,9 +48,14 @@ esac
 FIREBASE = r"""#!/usr/bin/env bash
 case "$1" in
   projects:list) echo '[{"projectId": "lego-firebase"}]' ;;
-  deploy) echo "FIREBASE_DEPLOY_REACHED" >> "${STUB_LOG}" ;;
+  database:instances:list) [[ -n "${STUB_RTDB_INSTANCES:-}" ]] || exit 99; echo "${STUB_RTDB_INSTANCES}" ;;
+  deploy) echo "FIREBASE_DEPLOY_REACHED $* $(tr -d ' \n' < firebase.json)" >> "${STUB_LOG}" ;;
   *) echo "unexpected firebase call: $*" >&2; exit 99 ;;
 esac
+"""
+CURL = r"""#!/usr/bin/env bash
+echo "curl $*" >> "${STUB_LOG}"
+if [[ -n "${STUB_RTDB_BODY:-}" ]]; then echo "${STUB_RTDB_BODY}"; else echo '{"error" : "Permission denied"}'; fi
 """
 
 
@@ -66,7 +73,7 @@ def sandbox(tmp_path_factory):
     # A DNA that outlives any clock the tests run under.
     (repo / "strategy.long.json").write_text(
         json.dumps(build_bundle("bypass:20000", ORIGIN, 900), indent=2) + "\n")
-    for name, body in (("gcloud", GCLOUD), ("firebase", FIREBASE)):
+    for name, body in (("gcloud", GCLOUD), ("firebase", FIREBASE), ("curl", CURL)):
         (stubs / name).write_text(body)
         (stubs / name).chmod(0o755)
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
@@ -318,6 +325,63 @@ def test_a_missing_webhook_is_called_out(sandbox):
     result = run(sandbox, observe_env())
     assert "Alert webhook  : NOT configured" in result.stdout
     assert "ALERT_WEBHOOK_URL" not in log(sandbox)
+
+
+# ------------------------------------------- PROD observe in one run (cloudshell-prod-observe.sh)
+PROD_DB = "https://lego-firebase-prod.asia-southeast1.firebasedatabase.app"
+PROD_INSTANCES = json.dumps({"status": "success", "result": [
+    {"name": "lego-firebase-prod", "location": "asia-southeast1", "project": "lego-firebase",
+     "databaseUrl": PROD_DB, "type": "USER_DATABASE", "state": "ACTIVE"}]})
+
+
+def run_prod_observe(sandbox, env):
+    sandbox["log"].write_text("")
+    process_env = {
+        "PATH": f"{sandbox['stubs']}:{Path(sys.executable).parent}:/usr/bin:/bin",
+        "HOME": str(sandbox["repo"]), "STUB_LOG": str(sandbox["log"]),
+        "PYTHONDONTWRITEBYTECODE": "1", "STUB_RTDB_INSTANCES": PROD_INSTANCES,
+        "LEGO_DNA_BUNDLE_OVERRIDE": "strategy.long.json", **env}
+    return subprocess.run(["bash", "deploy/cloudshell-prod-observe.sh"], cwd=sandbox["repo"],
+                          env=process_env, stdin=subprocess.DEVNULL, capture_output=True,
+                          text=True, timeout=180)
+
+
+def test_prod_observe_needs_the_principal_before_any_cloud_call(sandbox):
+    result = run_prod_observe(sandbox, {})
+    assert result.returncode == 1 and "LEGO_FIX_C_OVERRIDE is required" in result.stderr
+    assert log(sandbox) == ""
+
+
+def test_prod_observe_deploys_observe_only_whatever_the_shell_still_holds(sandbox):
+    leftovers = release_env()                     # a live shell: trade/active, caps, token
+    leftovers.update(authorized(sandbox, leftovers), LEGO_PROD_LIVE_ACK="LIVE-PROD-UBER-left-over",
+                     WEBULL_ENV_OVERRIDE="UAT", LEGO_STALE_ORDER_ACTION_OVERRIDE="cancel_expire")
+    result = run_prod_observe(sandbox, {**leftovers, "LEGO_FIX_C_OVERRIDE": "10000"})
+    assert result.returncode == 78, result.stderr  # the stub gcloud stops at `functions deploy`
+    recorded = log(sandbox)
+    # The PROD rules went to the PROD instance only, and anonymous reads were proven denied.
+    assert ('{"database":[{"instance":"lego-firebase-prod","rules":"database.rules.prod.json"}]}'
+            in recorded)
+    for node in ("webull_lego_rows", "webull_lego_state", "webull_lego_order_audit",
+                 "webull_lego_order_audit_archive", "webull_lego_warnings"):
+        assert f"curl -sS --max-time 15 {PROD_DB}/{node}.json?shallow=true" in recorded
+    assert "secrets versions add" not in recorded  # the stored token is still fresh
+    deployed = re.search(r"functions deploy lego-tick-prod .*", recorded).group(0)
+    for value in (f"WEBULL_ENV=PROD,FIREBASE_DB_URL={PROD_DB},LEGO_SYMBOL=UBER,LEGO_FIX_C=10000,",
+                  "LEGO_MODE=observe,LEGO_ACTIVE=false,", "LEGO_RELEASE_AUTHORIZATION=,",
+                  "LEGO_MAX_ORDER_QUANTITY=,LEGO_MAX_ORDER_NOTIONAL_USD=,LEGO_MAX_SESSION_ORDERS=,"
+                  "LEGO_TRADING_WINDOW_END=,", "LEGO_STALE_ORDER_ACTION=hold,",
+                  "LEGO_SESSION_KEY_MODE=market_day",
+                  "WEBULL_TOKEN_SECRET=projects/lego-firebase/secrets/webull-token-prod"):
+        assert value in deployed, value
+    assert "LEGO_PROD_LIVE_ACK" not in recorded
+
+
+def test_prod_observe_stops_when_the_database_answers_anonymous_reads(sandbox):
+    result = run_prod_observe(sandbox, {"LEGO_FIX_C_OVERRIDE": "10000",
+                                        "STUB_RTDB_BODY": '{"UBER_x": true}'})
+    assert result.returncode == 1 and "readable without signing in" in result.stderr
+    assert "functions deploy" not in log(sandbox)
 
 
 # ---------------------------------------------------------- captured deployments
