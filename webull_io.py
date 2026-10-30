@@ -1173,12 +1173,15 @@ def live_token_status(operation, token: str) -> dict | None:
     if not isinstance(payload, dict):
         return None
     answered = payload.get("token")
+    # The SDK (and PROD, 2026-10-29) name the field `expires`; Webull's reference
+    # for Create/Check Token names it `expires_at`. Accept either, never neither.
+    expires = payload.get("expires") if payload.get("expires") else payload.get("expires_at")
     return {
         "status": payload.get("status"),
         "token_matches": isinstance(answered, str) and hmac.compare_digest(
             answered.encode(), token.encode()),
-        "expires": payload.get("expires"),
-        "expires_at": _expires_datetime(payload.get("expires")),
+        "expires": expires,
+        "expires_at": _expires_datetime(expires),
     }
 
 
