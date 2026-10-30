@@ -4,11 +4,17 @@
 #
 #   bash deploy/cloudshell-prod-observe.sh
 #   LEGO_MODE_OVERRIDE=preview bash deploy/cloudshell-prod-observe.sh
+#   LEGO_MODE_OVERRIDE=paper bash deploy/cloudshell-prod-observe.sh
 #
 # preview runs the whole order path of a real release, the Preview of each real order
 # included, and never calls Place. It also asks for the last price (share cap), whether
 # the account already holds about FIX_C, and Webull's confirmation that Preview creates
 # no order; caps, a 5-session window and the authorization come from ops.py release-plan.
+#
+# paper is preview that books, at the point preview stops, the fill a market order would
+# have had: paper holdings move and the 17-column ledger runs, Place is still never called.
+# Its chain lives in a database of its own (lego-firebase-paper), never in lego-firebase-prod,
+# and starts from zero paper shares, so it asks no funding question.
 #
 # It asks only for what is missing: FIX_C, the PROD app key/secret and account id (first
 # run) and, when the token is missing or has 3 days or less left, the approval of the
@@ -20,14 +26,18 @@ set -Eeuo pipefail
 
 readonly PROJECT_ID="lego-firebase"
 readonly SUFFIX="prod"
-readonly DB_INSTANCE="${LEGO_PROD_DB_INSTANCE:-lego-firebase-${SUFFIX}}"
+readonly MODE="${LEGO_MODE_OVERRIDE:-observe}"
+# Paper holdings are fake: they get a database of their own, so lego-firebase-prod holds
+# only what the real account did.
+if [[ "${MODE}" == paper ]]; then DEFAULT_DB_INSTANCE="lego-firebase-paper"
+else DEFAULT_DB_INSTANCE="lego-firebase-${SUFFIX}"; fi
+readonly DB_INSTANCE="${LEGO_PROD_DB_INSTANCE:-${DEFAULT_DB_INSTANCE}}"
 readonly DB_LOCATION="asia-southeast1"
 # Same names as deploy/cloudshell-all-in-one.sh gives WEBULL_ENV=PROD.
 readonly APP_KEY_SECRET="webull-app-key-${SUFFIX}"
 readonly APP_SECRET_SECRET="webull-app-secret-${SUFFIX}"
 readonly ACCOUNT_SECRET="webull-account-id-${SUFFIX}"
 readonly TOKEN_SECRET="webull-token-${SUFFIX}"
-readonly MODE="${LEGO_MODE_OVERRIDE:-observe}"
 readonly SYMBOL="${LEGO_SYMBOL_OVERRIDE:-UBER}"
 
 fail() {
@@ -57,20 +67,31 @@ fi
 [[ "${DB_INSTANCE}" =~ ^[a-z0-9-]+$ ]] || fail "LEGO_PROD_DB_INSTANCE must be a Realtime Database instance name"
 [[ "${DB_INSTANCE}" != *-default-rtdb ]] || \
     fail "${DB_INSTANCE} is a default instance, the database UAT uses; name another with LEGO_PROD_DB_INSTANCE"
-[[ "${MODE}" == observe || "${MODE}" == preview ]] || \
-    fail "LEGO_MODE_OVERRIDE must be observe or preview here; real money is docs/PROD_LIVE_RUNBOOK_TH.md"
+[[ "${MODE}" == observe || "${MODE}" == preview || "${MODE}" == paper ]] || \
+    fail "LEGO_MODE_OVERRIDE must be observe, preview or paper here; real money is docs/PROD_LIVE_RUNBOOK_TH.md"
+# The deployed revision is checked for the same pairing (tools/verify_deployment.py).
+if [[ "${MODE}" == paper ]]; then
+    [[ "${DB_INSTANCE}" == *paper* ]] || \
+        fail "paper keeps its fake holdings in a database named for paper; set LEGO_PROD_DB_INSTANCE to a name with 'paper' in it"
+else
+    [[ "${DB_INSTANCE}" != *paper* ]] || \
+        fail "${DB_INSTANCE} holds paper holdings; ${MODE} keeps its chain in lego-firebase-prod"
+fi
 
-if [[ "${MODE}" == preview ]]; then
+if [[ "${MODE}" == preview || "${MODE}" == paper ]]; then
     PRICE="${LEGO_REFERENCE_PRICE:-}"
     if [[ -z "${PRICE}" ]]; then
         read -rp "Last price of ${SYMBOL} in USD (sets the share cap): " PRICE || \
-            fail "LEGO_REFERENCE_PRICE is required for preview"
+            fail "LEGO_REFERENCE_PRICE is required for ${MODE}"
     fi
     [[ "${PRICE}" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v v="${PRICE}" 'BEGIN { exit !(v > 0) }' || \
         fail "the reference price must be a number > 0"
     # A flat account's first order is the whole FIX_C: only the funding caps let it reach Preview.
     FUNDING="${LEGO_FUNDING_MODE_OVERRIDE:-}"
-    if [[ -z "${FUNDING}" ]]; then
+    if [[ "${MODE}" == paper ]]; then
+        # Paper starts from zero paper shares whatever the real account holds.
+        FUNDING=initial-funding
+    elif [[ -z "${FUNDING}" ]]; then
         held=""
         read -rp "Does the PROD account already hold about FIX_C of ${SYMBOL}? [y/N] " held || true
         if [[ "${held}" =~ ^[Yy] ]]; then FUNDING=prefunded; else FUNDING=initial-funding; fi
@@ -286,7 +307,7 @@ export LEGO_RELEASE_AUTHORIZATION_OVERRIDE='' LEGO_TRADING_WINDOW_END_OVERRIDE='
 export LEGO_MAX_ORDER_QUANTITY_OVERRIDE='' LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE=''
 export LEGO_MAX_SESSION_ORDERS_OVERRIDE=''
 unset LEGO_PROD_LIVE_ACK LEGO_FUNDING_MODE_OVERRIDE
-if [[ "${MODE}" == preview ]]; then
+if [[ "${MODE}" == preview || "${MODE}" == paper ]]; then
     # The release a trade would carry, planned for this checkout: caps proportional to
     # FIX_C, a window of 5 regular sessions, the binding (which includes the mode, so it
     # can never authorize trade). A clean environment, as in the deploy script.
@@ -296,7 +317,7 @@ if [[ "${MODE}" == preview ]]; then
     PLAN_STATUS=0
     PLAN_JSON="$(gcloud secrets versions access latest --secret="${ACCOUNT_SECRET}" \
             --project="${PROJECT_ID}" | \
-        env -i PATH="${PATH}" HOME="${HOME}" WEBULL_ENV=PROD LEGO_MODE=preview LEGO_ACTIVE=true \
+        env -i PATH="${PATH}" HOME="${HOME}" WEBULL_ENV=PROD LEGO_MODE="${MODE}" LEGO_ACTIVE=true \
             LEGO_SYMBOL="${LEGO_SYMBOL_OVERRIDE}" LEGO_FIX_C="${FIX_C}" LEGO_DIFF="${LEGO_DIFF_OVERRIDE}" \
             LEGO_DNA_BUNDLE="${LEGO_DNA_BUNDLE_OVERRIDE}" \
             LEGO_ALLOW_FRACTIONAL="${LEGO_ALLOW_FRACTIONAL_OVERRIDE}" \
@@ -310,7 +331,7 @@ import json, sys
 for finding in json.load(sys.stdin)["assessment"]["findings"]:
     if finding["severity"] != "INFO":
         print("  [%s] %s: %s" % (finding["severity"], finding["id"], finding["message"]))'
-    (( PLAN_STATUS == 0 )) || fail "the preview release has BLOCK findings (above)"
+    (( PLAN_STATUS == 0 )) || fail "the ${MODE} release has BLOCK findings (above)"
     while IFS='=' read -r key value; do
         export "${key}=${value}"
     done < <(printf '%s' "${PLAN_JSON}" | python3 -c '
@@ -318,8 +339,8 @@ import json, re, sys
 for key, value in json.load(sys.stdin)["deploy_env"].items():
     if re.fullmatch(r"[A-Z0-9_]+", key) and key != "LEGO_PROD_LIVE_ACK":
         print(f"{key}={value}")')
-    [[ "${LEGO_MODE_OVERRIDE}" == preview && "${LEGO_ACTIVE_OVERRIDE}" == true ]] || \
-        fail "release-plan did not return a preview release"
+    [[ "${LEGO_MODE_OVERRIDE}" == "${MODE}" && "${LEGO_ACTIVE_OVERRIDE}" == true ]] || \
+        fail "release-plan did not return a ${MODE} release"
     [[ "${LEGO_RELEASE_AUTHORIZATION_OVERRIDE}" =~ ^[0-9a-f]{64}$ ]] || \
         fail "release-plan returned no release authorization"
     export LEGO_FUNDING_MODE_OVERRIDE="${FUNDING}"
@@ -329,6 +350,22 @@ bash deploy/cloudshell-all-in-one.sh
 step "4/4 Check the database again"
 # Step 8 of the deploy script deploys database.rules.json to the default instance only.
 require_private
+if [[ "${MODE}" == paper ]]; then
+    cat <<EOF
+
+PROD paper is running in ${DATABASE_URL}: every READY slot runs the order path up to its
+Preview and books the fill on paper holdings; Place is never called. In the dashboard set the
+secret FIREBASE_DB_URL_PAPER = "${DATABASE_URL}" and choose PAPER. The Webull app must show no
+order. Paper fills:
+  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="lego-tick-prod" AND jsonPayload.event="lego_tick_completed" AND jsonPayload.execution.paper=true' --project=lego-firebase --freshness=1d --limit=20 --format='table(timestamp,jsonPayload.execution[0].status,jsonPayload.execution[0].paper_fill.price,jsonPayload.execution[0].paper_fill.holdings_after,jsonPayload.execution[0].preview_fee_pct)'
+OPERATOR_HALT means the tripwire fired: the real account moved, or an order appeared after a
+Preview. That halt lives in the paper database: check the account before preview or trade.
+The release ends after 5 sessions: run this command again. Back to preview: LEGO_MODE_OVERRIDE=preview.
+Stop:
+  gcloud scheduler jobs pause lego-tick-prod --location=asia-southeast1 --project=lego-firebase
+EOF
+    exit 0
+fi
 if [[ "${MODE}" == preview ]]; then
     cat <<'EOF'
 

@@ -387,7 +387,7 @@ def test_prod_observe_stops_when_the_database_answers_anonymous_reads(sandbox):
 
 def test_the_prod_wrapper_never_deploys_trade(sandbox):
     result = run_prod_observe(sandbox, {"LEGO_FIX_C_OVERRIDE": "10000", "LEGO_MODE_OVERRIDE": "trade"})
-    assert result.returncode == 1 and "must be observe or preview" in result.stderr
+    assert result.returncode == 1 and "must be observe, preview or paper" in result.stderr
     assert log(sandbox) == ""
 
 
@@ -433,7 +433,62 @@ def test_production_preview_deploys_with_its_release_and_without_an_ack(sandbox)
 
 def test_an_inactive_production_preview_is_a_half_state(sandbox):
     result = run(sandbox, release_env(LEGO_MODE_OVERRIDE="preview", LEGO_ACTIVE_OVERRIDE="false"))
-    assert result.returncode == 1 and "preview/active (no Place)" in result.stderr
+    assert result.returncode == 1 and "preview/active or paper/active (no Place)" in result.stderr
+    assert log(sandbox) == ""
+
+
+# ---------------------------------- PROD paper: preview + fills on paper holdings, own database
+PAPER_DB = "https://lego-firebase-paper.asia-southeast1.firebasedatabase.app"
+PAPER_INSTANCES = json.dumps({"status": "success", "result": [
+    {"name": "lego-firebase-paper", "location": "asia-southeast1", "project": "lego-firebase",
+     "databaseUrl": PAPER_DB, "type": "USER_DATABASE", "state": "ACTIVE"}]})
+PAPER_INPUTS = {"LEGO_FIX_C_OVERRIDE": "10000", "LEGO_MODE_OVERRIDE": "paper",
+                "LEGO_REFERENCE_PRICE": "67.4", "LEGO_PREVIEW_CONFIRMED": "yes",
+                "STUB_RTDB_INSTANCES": PAPER_INSTANCES}
+
+
+def test_prod_paper_keeps_its_holdings_in_a_database_of_its_own(sandbox):
+    result = run_prod_observe(sandbox, PAPER_INPUTS)       # no funding answer: paper starts flat
+    assert result.returncode == 78, result.stderr          # the stub gcloud stops at `functions deploy`
+    recorded = log(sandbox)
+    assert ('{"database":[{"instance":"lego-firebase-paper","rules":"database.rules.prod.json"}]}'
+            in recorded)
+    assert f"curl -sS --max-time 15 {PAPER_DB}/webull_lego_rows.json?shallow=true" in recorded
+    assert "lego-firebase-prod" not in recorded
+    deployed = re.search(r"functions deploy lego-tick-prod .*", recorded).group(0)
+    assert f"FIREBASE_DB_URL={PAPER_DB}," in deployed
+    assert "LEGO_MODE=paper,LEGO_ACTIVE=true," in deployed
+    assert "LEGO_MAX_ORDER_NOTIONAL_USD=12500," in deployed        # funding caps: paper starts flat
+    assert re.search(r"LEGO_RELEASE_AUTHORIZATION=[0-9a-f]{64},", deployed)
+    assert "LEGO_PROD_LIVE_ACK" not in recorded and "REAL-MONEY RELEASE" not in result.stdout
+    assert "Order submit   : paper (true)" in result.stdout
+
+
+@pytest.mark.parametrize("mode,instance,message", [
+    ("paper", "lego-firebase-prod", "a database named for paper"),
+    ("preview", "lego-firebase-paper", "holds paper holdings"),
+    ("observe", "lego-firebase-paper", "holds paper holdings"),
+])
+def test_the_prod_wrapper_never_mixes_paper_and_real_databases(sandbox, mode, instance, message):
+    inputs = {**PAPER_INPUTS, "LEGO_MODE_OVERRIDE": mode, "LEGO_PROD_DB_INSTANCE": instance,
+              "LEGO_FUNDING_MODE_OVERRIDE": "initial-funding"}
+    result = run_prod_observe(sandbox, inputs)
+    assert result.returncode == 1 and message in result.stderr
+    assert log(sandbox) == ""
+
+
+def test_production_paper_deploys_with_its_release_and_without_an_ack(sandbox):
+    result = run(sandbox, authorized(sandbox, release_env(LEGO_MODE_OVERRIDE="paper")),
+                 DATABASE_URL_OVERRIDE=PAPER_DB)
+    assert result.returncode == 78, result.stderr
+    deployed = re.search(r"functions deploy lego-tick-prod .*", log(sandbox)).group(0)
+    assert "LEGO_MODE=paper,LEGO_ACTIVE=true," in deployed and f"FIREBASE_DB_URL={PAPER_DB}," in deployed
+    assert "LEGO_PROD_LIVE_ACK" not in log(sandbox) and "REAL-MONEY RELEASE" not in result.stdout
+
+
+def test_an_inactive_production_paper_is_a_half_state(sandbox):
+    result = run(sandbox, release_env(LEGO_MODE_OVERRIDE="paper", LEGO_ACTIVE_OVERRIDE="false"))
+    assert result.returncode == 1 and "paper/active (no Place)" in result.stderr
     assert log(sandbox) == ""
 
 
@@ -484,3 +539,15 @@ def test_a_captured_production_preview_needs_its_release_and_never_an_ack():
     assert captured({**preview, "LEGO_PROD_LIVE_ACK": "LIVE-PROD-UBER"})["status"] == "FAIL"
     assert captured({**preview, "LEGO_RELEASE_AUTHORIZATION": ""})["status"] == "FAIL"
     assert captured({**preview, "LEGO_ACTIVE": "false"})["status"] == "FAIL"
+
+
+def test_a_captured_paper_revision_writes_only_to_a_paper_database():
+    paper = {**LIVE, "LEGO_MODE": "paper", "FIREBASE_DB_URL": PAPER_DB}
+    paper.pop("LEGO_PROD_LIVE_ACK")
+    assert captured(paper)["status"] == "PASS"
+    assert captured({**paper, "LEGO_PROD_LIVE_ACK": "LIVE-PROD-UBER"})["status"] == "FAIL"
+    report = captured({**paper, "FIREBASE_DB_URL": PROD_DB})
+    assert report["status"] == "FAIL" and report["checks"]["database_matches_mode"] is False
+    # A real chain never lands in the paper database either.
+    assert captured({**paper, "LEGO_MODE": "preview"})["status"] == "FAIL"
+    assert captured({**LIVE, "FIREBASE_DB_URL": PAPER_DB})["status"] == "FAIL"

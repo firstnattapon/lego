@@ -364,7 +364,7 @@ def _run_tick(request):
             fix_c=runtime.operator.principal_usd,
             diff=runtime.operator.diff_usd,
             dna_code=runtime.operator.dna_bundle.dna_code,
-            strategy_id="shannon_demon_lego_v2",
+            strategy_id=runtime.operator.strategy_id,
         )
         runtime_identity = runtime_identity_fingerprint()
     except (ConfigurationError, KeyError, ValueError) as exc:

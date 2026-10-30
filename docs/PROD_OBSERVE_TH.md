@@ -1,6 +1,9 @@
 # PROD observe และ preview: ใช้ PROD โดยไม่ใช้เงินจริง
 
-มีสองขั้นตามลำดับ: **observe** (หัวข้อแรก) แล้วตามด้วย **preview** ([หัวข้อท้าย](#preview-ทุกขั้นเหมือนเงินจริง-ยกเว้น-place))
+มีสามขั้นตามลำดับ:
+1. **observe** (หัวข้อแรก)
+2. **preview** ([ทุกขั้นเหมือนเงินจริง ยกเว้น Place](#preview-ทุกขั้นเหมือนเงินจริง-ยกเว้น-place))
+3. **paper** ([หุ้นและ fill ปลอม ให้ตาราง 17 คอลัมน์เดิน](#paper-หุ้นและ-fill-ปลอม-ให้ตาราง-17-คอลัมน์เดิน))
 
 `lego-tick-prod` อ่านบัญชีจริงและราคาจริงที่ `api.webull.co.th` แล้วคำนวณแถวทุก slot เหมือน UAT
 แต่ทำงานแบบ `observe/inactive`:
@@ -118,3 +121,51 @@ intent ที่ถูกกันก่อนถึงจุดตัดจะ�
 
 **กลับไป observe:** รันคำสั่งเดิมโดยไม่ใส่ `LEGO_MODE_OVERRIDE` chain เดิมยังใช้ต่อได้ เพราะ mode ไม่ได้อยู่ใน chain key
 **ต่ออายุหลังครบ 5 session:** รันคำสั่ง preview เดิมซ้ำ
+
+## Paper: หุ้นและ fill ปลอม ให้ตาราง 17 คอลัมน์เดิน
+
+ใช้หลังจาก preview ผ่านแล้ว paper ทำทุกอย่างเหมือน preview แต่ที่จุดที่ preview หยุด ระบบจะลงบัญชี fill ที่ market order น่าจะได้ให้หุ้นปลอม
+slot ถัดไปจะตัดสินใจจากหุ้นปลอมนั้น ตาราง 17 คอลัมน์จึงเดินเหมือนเทรดจริง และ**ไม่เคยเรียก Place**
+
+```bash
+LEGO_MODE_OVERRIDE=paper bash deploy/cloudshell-prod-observe.sh
+```
+
+ถามเหมือน preview (FIX_C, ราคาล่าสุด และคำยืนยันเรื่อง Preview) แต่ไม่ถามว่าบัญชีมีหุ้นหรือยัง
+เพราะ paper เริ่มจาก 0 หุ้นปลอมเสมอ จึงใช้ caps แบบ funding
+
+| ขั้น | paper |
+|---|---|
+| quote, token, caps, window, DNA, decision, intent และด่านก่อน Place | จริง โดยคิดจากหุ้นปลอม |
+| Preview ของ BUY และ SELL | จริง ถ้า Webull ปฏิเสธ SELL เพราะบัญชีจริงไม่มีหุ้น จะเก็บคำตอบไว้ใน `sell_preview` (ไม่นับเป็น error) แล้วไปต่อ |
+| fill | ราคาซื้อขายล่าสุดของ quote ที่อ่านซ้ำหลัง Preview, จำนวนตาม intent, ไม่คิด spread หรือ slippage |
+| ΔAₙ/Aₙ/Eₙ | `finalize_execution_fill` ตัวเดียวกับ fill จริง (fill แรกเป็น initial funding: dA/A/E = 0) |
+| Place, fence, quota, reconcile, FIFO realized | ไม่มี |
+
+**ข้อมูลอยู่ที่ไหน:** RTDB แยกชื่อ `lego-firebase-paper` และ chain แยก (`shannon_demon_lego_paper_v2`) ใน `lego-firebase-prod` จึงไม่มีข้อมูลปลอมปน
+- สคริปต์สร้าง database นี้ วาง rules ปิดอ่านสาธารณะ และพิสูจน์ด้วย `curl` เหมือน PROD
+- paper DB ยังมีข้อมูลบัญชีจริง (balance และผล Preview ใน trace) จึงต้องเป็นส่วนตัวเหมือน PROD
+- ชื่อ RTDB ซ้ำกันทั่วโลกไม่ได้ ถ้า `lego-firebase-paper` มีคนใช้แล้ว ให้ตั้ง `LEGO_PROD_DB_INSTANCE=<ชื่อที่มีคำว่า paper>`
+- `tools/verify_deployment.py` ตอบ FAIL ถ้า paper ชี้ database ที่ชื่อไม่มีคำว่า paper หรือถ้าโหมดอื่นชี้ database ของ paper
+
+**ดูตาราง:** ใน dashboard ใส่ secret `FIREBASE_DB_URL_PAPER = "https://lego-firebase-paper.asia-southeast1.firebasedatabase.app"` แล้วเลือก PAPER ที่ sidebar
+
+**ดู fill ปลอมใน log:**
+
+```bash
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="lego-tick-prod" AND jsonPayload.event="lego_tick_completed" AND jsonPayload.execution.paper=true' --project=lego-firebase --freshness=1d --limit=20 --format='table(timestamp,jsonPayload.execution[0].status,jsonPayload.execution[0].paper_fill.price,jsonPayload.execution[0].paper_fill.holdings_after,jsonPayload.execution[0].preview_fee_pct)'
+```
+
+`preview_fee_pct` ของ order เล็ก (~25–33 USD) คือ fee จริงของ order ขนาดที่กลยุทธ์ส่งบ่อยที่สุด ใช้เป็น `--fee-pct` ตอนวางแผนเงินจริงได้
+
+**tripwire:** หุ้นในบัญชีจริงต้องไม่ขยับระหว่างที่ paper ทำงาน
+- ถ้าขยับ (ตอน decision หรือตอน dispatch) ระบบตั้ง operator halt ชื่อ `preview-tripwire` แล้วหยุดสร้าง intent
+- halt นี้อยู่ใน **paper DB** จึงไม่ตามไปที่ `lego-firebase-prod` ต้องตรวจบัญชีในแอป Webull ก่อนกลับไป preview หรือ trade
+
+**กลับไป preview:** `LEGO_MODE_OVERRIDE=preview bash deploy/cloudshell-prod-observe.sh` ซึ่งเขียน `lego-firebase-prod` และต่อ chain preview เดิม
+**ลบข้อมูลปลอม:** ลบ instance `lego-firebase-paper` ใน Firebase console (Realtime Database) ไม่กระทบ PROD
+
+**สิ่งที่ paper พิสูจน์ไม่ได้ (ยังต้องมี canary):**
+- Place และ fill จริง (spread, slippage, partial fill, `FAILED`)
+- fee ของ SELL ที่ Webull ปฏิเสธ Preview
+- cancel, reconcile และ realized FIFO

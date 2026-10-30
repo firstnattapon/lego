@@ -57,7 +57,8 @@ from webull_io import (IncompleteOpenOrdersError, build_clients,
 from webull_io import broker_error_details, error_reason, fetch_instrument_capability
 from config import RuntimeConfig
 from execution_service import (_announce_identity_adoption, _error_text,
-                               _init_firebase, _iso, _min_dna_remaining,
+                               _holdings_drift_tolerance, _init_firebase, _iso,
+                               _min_dna_remaining, _preview_tripwire,
                                _record_warning, _recover_pending_order_intents,
                                _run_order_worker)
 
@@ -148,6 +149,24 @@ def _outbox_intent(cfg, row: dict, snapshot: dict, slot, decision_time: datetime
             "quantity_increment": cfg.quantity_increment,
         },
     }
+
+
+def _paper_snapshot(cfg, snapshot: dict, anchor, state, runtime_identity: str) -> dict:
+    """LEGO_MODE=paper: decide on the chain's paper position, and watch the real one.
+
+    The paper position is the chain's own prev_holdings, booked by the paper fills
+    (execution_service._paper_fill). The real account must not move while paper runs:
+    a new position there means a Preview created an order or someone trades this
+    account, so new intents stop until a person looks (ops.py clear-operator-halt).
+    """
+    broker = float(snapshot["holdings"])
+    baseline = (state or {}).get("paper_broker_holdings")
+    if (baseline is not None
+            and abs(broker - float(baseline)) > _holdings_drift_tolerance(typed_v2=True)):
+        _preview_tripwire(runtime_identity, cfg.symbol, "decision",
+                          f"paper: real position moved from {float(baseline)} to {broker}")
+    held = 0.0 if anchor is None or anchor.prev_holdings is None else float(anchor.prev_holdings)
+    return {**snapshot, "holdings": held, "broker_holdings": broker}
 
 
 def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=None):
@@ -305,7 +324,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 if k in ("token_dir", "ephemeral_token_dir", "status",
                          "expires_at", "days_left") and v is not None})
         snapshot = fetch_snapshot(trade_client, data_client, cfg)
-        fr.node("D06", **fr.pick(snapshot, "price", "holdings", "captured_at", "quote_time"))
+        paper = runtime is not None and runtime.operator.paper
+        if paper:
+            snapshot = _paper_snapshot(cfg, snapshot, anchor, state, runtime_identity)
+        fr.node("D06", **fr.pick(snapshot, "price", "holdings", "broker_holdings",
+                                 "captured_at", "quote_time"))
         # Reaching this line is live proof that the token can sign a trade
         # request: fetch_snapshot goes through account_v2.get_account_position on
         # the very same authenticated ApiClient that place_order will use, and any
@@ -425,6 +448,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                         # Born in preview: never placed, whatever mode the deployment
                         # is in by the time a worker dispatches it.
                         pending_intent["preview_only"] = True
+                    if paper:
+                        # Filled on paper at the preview cut; the real position must
+                        # still read what it read here when the worker gets to it.
+                        pending_intent["paper"] = True
+                        pending_intent["decision_broker_holdings"] = snapshot["broker_holdings"]
                 if capability is not None:
                     pending_intent["instrument_capability"] = {
                         "symbol": str(capability.symbol),
@@ -444,7 +472,7 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             cfg, snapshot, anchor, row, slot_id=slot_id, clock_mode=mode,
             market_ordinal=None if slot is None else slot.market_ordinal,
             runtime_identity=runtime_identity,
-            pending_intent=pending_intent)
+            pending_intent=pending_intent, paper=paper)
         fr.node("D10", "committed" if result.get("committed") else "idempotent",
                 **fr.pick(result, "run_id", "version", "committed", "idempotent"), slot_id=slot_id)
 

@@ -144,12 +144,12 @@ class ReleaseInputs:
 
     @property
     def trading(self) -> bool:
-        """The order path runs: trade, or preview, which stops it just before Place.
+        """The order path runs: trade, or preview and paper, which stop it just before Place.
 
-        Both are judged alike (caps, window, DNA), so a preview exercises the exact
+        All are judged alike (caps, window, DNA), so a preview exercises the exact
         release a trade would carry; only trade can carry a real-money ack (live).
         """
-        return self.mode in ("trade", "preview") and self.active
+        return self.mode in ("trade", "preview", "paper") and self.active
 
     @property
     def live(self) -> bool:

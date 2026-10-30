@@ -486,7 +486,8 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
                      *, slot_id: str | None = None, market_ordinal: int | None = None,
                      clock_mode: str | None = None,
                      runtime_identity: str | None = None,
-                     pending_intent: dict | None = None) -> dict:
+                     pending_intent: dict | None = None,
+                     paper: bool = False) -> dict:
     """Commit one row and advance the DNA pointer.
 
     Advances the *decision* pointer only. The execution cashflow (P_acted, Aₙ)
@@ -502,8 +503,17 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
     Guards, all fail closed: replayed run_id (idempotent no-op), stale anchor,
     already-consumed slot, calendar drift, and an ordinal that does not move
     forward. Degraded 'epoch:*' slots carry no ordinal, so they skip the last one.
+
+    ``paper`` (LEGO_MODE=paper): ``snapshot['holdings']`` is the chain's paper
+    position, and ``snapshot['broker_holdings']`` the real account's, kept on the
+    state as the baseline the next decision compares the account against.
     """
     validate_row_columns(row)
+    broker_holdings = None
+    if paper:
+        broker_holdings = float(snapshot["broker_holdings"])
+        if not (math.isfinite(broker_holdings) and broker_holdings >= 0):
+            raise ValueError("paper: broker_holdings ต้อง finite และ >= 0")
     ck = chain_key(cfg)
     anchor_version = None if anchor is None else anchor.version
     run_id = make_run_id(ck, anchor_version, snapshot)
@@ -543,6 +553,8 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
                            if meta.get("execution_pending", meta.get("acted"))
                            else CASHFLOW_NO_ACTION,
     })
+    if paper:
+        doc["paper"] = True
     if target_semantics == V2_CASHFLOW_SEMANTICS:
         observed = (state_before or {}).get(EXECUTION_STATE_KEY) or {}
         doc.update({
@@ -674,6 +686,9 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
             })
         if runtime_identity is not None:
             next_state["runtime_identity_fingerprint"] = runtime_identity
+        if paper:
+            next_state["paper"] = True
+            next_state["paper_broker_holdings"] = broker_holdings
         pending = dict((current or {}).get("pending_order_intents") or {})
         if pending_intent is not None:
             pending[run_id] = dict(pending_intent)

@@ -55,15 +55,19 @@ def verify(service, scheduler, *, candidate, revision, image, function=None, rev
                     "LEGO_PROD_LIVE_ACK", "LEGO_RELEASE_AUTHORIZATION", "LEGO_MAX_ORDER_QUANTITY",
                     "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
                     "LEGO_TRADING_WINDOW_END")))
-        # Preview runs the order path up to Place with the same release, and never
-        # carries the real-money acknowledgement.
-        preview = (env.get("LEGO_MODE") == "preview" and env.get("LEGO_ACTIVE") == "true"
+        # Preview and paper run the order path up to Place with the same release, and
+        # never carry the real-money acknowledgement.
+        preview = (env.get("LEGO_MODE") in {"preview", "paper"} and env.get("LEGO_ACTIVE") == "true"
                    and not env.get("LEGO_PROD_LIVE_ACK")
                    and all(env.get(name) for name in (
                        "LEGO_RELEASE_AUTHORIZATION", "LEGO_MAX_ORDER_QUANTITY",
                        "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
                        "LEGO_TRADING_WINDOW_END")))
         checks["production_mode"] = observe or live or preview
+    # Paper holdings live in a database of their own: a paper revision writes only to
+    # an instance named for paper, and no other mode writes to one.
+    instance = re.sub(r"^https://", "", str(env.get("FIREBASE_DB_URL") or "")).split(".")[0]
+    checks["database_matches_mode"] = ("paper" in instance) == (env.get("LEGO_MODE") == "paper")
     config_hash = hashlib.sha256(json.dumps(sorted(containers[0].get("env", []), key=lambda v: v["name"]),
                                           sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks,

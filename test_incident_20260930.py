@@ -154,7 +154,8 @@ def test_blocker_logs_and_monitoring_are_actionable_and_redacted(capsys):
 
 def test_operator_inspection_is_read_only_and_does_not_claim_ownership(monkeypatch):
     runtime = SimpleNamespace(operator=SimpleNamespace(symbol="UBER", principal_usd=10000,
-        diff_usd=25, dna_bundle=SimpleNamespace(dna_code="bypass:500")),
+        diff_usd=25, dna_bundle=SimpleNamespace(dna_code="bypass:500"),
+        strategy_id="shannon_demon_lego_v2"),
         deployment=SimpleNamespace(environment="UAT", account_fingerprint="opaque"))
     monkeypatch.setattr(ops, "load_runtime_config", lambda: runtime)
     monkeypatch.setattr(main, "_init_firebase", lambda: None)
