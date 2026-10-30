@@ -264,6 +264,59 @@ def bootstrap_command(args) -> dict:
     return {"dry_run": False, "secret_version": response.name}
 
 
+_CHECK_TOKEN_STATUSES = {"NORMAL", "PENDING", "INVALID", "EXPIRED"}
+
+
+def token_status_command(_args) -> dict:
+    """Ask Webull's Check Token about the token on stdin. Read-only; never prints it.
+
+    The deploy wrapper asks this instead of trusting the expiry stored with the
+    token when it was issued: Webull decides how long a token lasts. Only an
+    ApiClient and Check Token are used, never TradeClient/DataClient, whose
+    constructors call create_token. exit_code 0: NORMAL, this token, more than the
+    refresh margin left; 1: not usable (or no well-formed token on stdin); 2:
+    Webull could not be asked, so the caller judges by the stored expiry instead.
+    """
+    import logging
+
+    report = {"environment": None, "status": None, "token_matches": False,
+              "live_expires_at": None, "days_left": None, "margin_days": None, "fresh": False}
+    text = sys.stdin.read(4097)
+    lines = text.splitlines()
+    if len(text) > 4096 or len(lines) != 3 or not lines[0].strip():
+        return {**report, "error": "stdin must hold the token/expires/status lines", "exit_code": 1}
+    token = lines[0].strip()
+    # On any non-2xx the SDK logs the whole request, x-access-token included.
+    sdk_logger = logging.getLogger("webull")
+    sdk_logger.addHandler(logging.NullHandler())
+    sdk_logger.propagate = False
+    try:
+        import webull_io
+        report.update(environment=webull_io.environment_label(),
+                      margin_days=webull_io._refresh_margin_days())
+        from webull.core.client import ApiClient
+        from webull.core.http.initializer.token.token_operation import TokenOperation
+        api = ApiClient(os.environ["WEBULL_APP_KEY"], os.environ["WEBULL_APP_SECRET"], "th")
+        api.add_endpoint("th", webull_io._endpoint())
+        api.set_token(token)
+        live = webull_io.live_token_status(TokenOperation(api), token)
+    except Exception as exc:  # noqa: BLE001 - only the type name leaves this function
+        return {**report, "error": f"Check Token unavailable: {type(exc).__name__}", "exit_code": 2}
+    if live is None:
+        return {**report, "error": "Check Token gave no usable answer", "exit_code": 2}
+    expires_at = live["expires_at"]
+    days_left = (None if expires_at is None else
+                 round((expires_at - datetime.now(timezone.utc)).total_seconds() / 86400.0, 3))
+    status = (live["status"] if isinstance(live["status"], str)
+              and live["status"] in _CHECK_TOKEN_STATUSES else "UNKNOWN")
+    fresh = (status == "NORMAL" and live["token_matches"] and days_left is not None
+             and days_left > report["margin_days"])
+    return {**report, "status": status, "token_matches": live["token_matches"],
+            "live_expires_at": (None if expires_at is None
+                                else expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")),
+            "days_left": days_left, "fresh": fresh, "exit_code": 0 if fresh else 1}
+
+
 def alert_drill_command(args) -> dict:
     """Post one clearly-marked drill message to the alert receiver; touches no trading state.
 
@@ -433,7 +486,8 @@ COMMANDS = {"check": check_command, "release-binding": binding_command,
             "release-plan": release_plan_command,
             "inspect-open-orders": inspect_open_orders_command,
             "migrate-market-day": migrate_session_command,
-            "bootstrap-auth": bootstrap_command, "status": status_command,
+            "bootstrap-auth": bootstrap_command, "token-status": token_status_command,
+            "status": status_command,
             "repair-audit": repair_audit_command,
             "alert-drill": alert_drill_command,
             "reset-reject-halt": reset_reject_halt_command,
@@ -475,6 +529,9 @@ def parser() -> argparse.ArgumentParser:
     boot.add_argument("--secret", required=True,
                       help="projects/PROJECT/secrets/NAME")
     boot.add_argument("--apply", action="store_true")
+    sub.add_parser(
+        "token-status", help="ask Webull's Check Token about the token on stdin "
+                             "(read-only; never prints it; exit 0 fresh, 1 not usable, 2 unknown)")
     drill = sub.add_parser(
         "alert-drill", help="post one marked drill message to the alert webhook (dry-run unless --send)")
     drill.add_argument("--secret", help="projects/PROJECT/secrets/NAME holding the HTTPS webhook URL; "
@@ -508,6 +565,8 @@ def main_cli() -> int:
     args = parser().parse_args()
     result = COMMANDS[args.command](args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if isinstance(result, dict) and type(result.get("exit_code")) is int:
+        return result["exit_code"]
     return 1 if isinstance(result, dict) and result.get("blocked") else 0
 
 

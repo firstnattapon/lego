@@ -99,7 +99,7 @@ token จะทิ้ง container อื่นค้าง)
 สิ่งที่ยอมรับไปด้วย:
 
 - token หายเมื่อ instance ถูกรีไซเคิล → ต้องมีคนกด 2FA ในแอปใหม่ ไม่งั้นได้ `ERROR_INIT_TOKEN`
-- `ensure_token_fresh` **ยังข้ามการ refresh** → token ตายเมื่อครบ 15 วันแน่นอน
+- `ensure_token_fresh` **ยังข้ามการ refresh** (Webull TH ไม่มี refresh API) → token ใช้ได้จนถึงวันหมดอายุที่ Check Token ของ Webull ตอบ หรือจนไม่มีการเรียก API 15 วันติดกัน แล้วต้องกด 2FA ใหม่
 - `token_warning` และ `webull_lego_warnings/webull_token` ยังขึ้นทุก slot (ตั้งใจให้ขึ้น)
 
 flag นี้ให้อภัยเฉพาะข้อ "dir ไม่คงอยู่" — `status` ≠ `NORMAL` หรือเหลืออายุน้อยกว่า

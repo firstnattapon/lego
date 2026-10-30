@@ -25,7 +25,7 @@ bash deploy/cloudshell-prod-observe.sh
 |---|---|
 | ทุกครั้งที่ไม่ได้ตั้ง `LEGO_FIX_C_OVERRIDE` | FIX_C: observe ไม่ใช้เงินก้อนนี้ แต่เป็นส่วนหนึ่งของชื่อ chain |
 | ครั้งแรก | app key และ app secret ของ PROD (ไม่แสดงบนจอ) และ account_id ถ้า app เห็นมากกว่าหนึ่งบัญชี |
-| ครั้งแรก และเมื่อ token เหลือไม่เกิน 3 วัน (อายุประมาณ 15 วัน) | กดอนุมัติการ login OpenAPI ในแอป Webull ภายใน 5 นาที |
+| ครั้งแรก และเมื่อ Check Token ของ Webull บอกว่า token ใช้ไม่ได้หรือเหลือไม่เกิน 3 วัน (สคริปต์ถามเองและแสดงวันหมดอายุที่ Webull ตอบ) | กดอนุมัติการ login OpenAPI ในแอป Webull ภายใน 5 นาที |
 
 สิ่งที่สคริปต์ทำให้ (รันซ้ำได้ ขั้นที่เสร็จแล้วจะข้าม):
 1. ตั้ง secrets `webull-*-prod` และเก็บ token ที่อนุมัติแล้วลง `webull-token-prod`

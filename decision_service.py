@@ -307,11 +307,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                 legacy_step=legacy_step, effective_step=effective_step,
                 alignment_error=alignment_error, clock_error=clock_error,
                 anchor_version=getattr(anchor, "version", None))
-        # The token dies of old age silently: nothing in the SDK renews it, and
-        # recovery needs a human to approve 2FA within 300 seconds. build_clients
-        # refreshes it while it is still valid; this reports what is left so the
-        # cases it cannot fix by itself — an ephemeral token dir, a token already
-        # gone — are visible days before they stop the chain.
+        # A token ends at the expiry Webull's Check Token answers, or after 15 days
+        # without an API call, and a new one needs a human to approve 2FA within 300
+        # seconds. build_clients asks Check Token and keeps Webull's expiry; this
+        # reports what is left so a token running out, or an ephemeral token dir,
+        # is visible days before it stops the chain.
         health = token_health()
         if health.get("expiry_warning"):
             import alerting
