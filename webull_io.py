@@ -560,6 +560,23 @@ def _write_local_token(token: str, expires, status: str) -> None:
 _HYDRATED_TOKEN = None
 
 
+def _stored_expiry_defers_to_webull(token: str) -> bool:
+    """May a secret whose stored expiry has passed still go to Webull's Check Token?
+
+    The second line of the secret is the `expires` Webull answered when the token
+    was issued. Webull Thailand documents no fixed lifetime (a token turns INVALID
+    after 15 days without an API call), and Check Token answers the current
+    `expires`, so the stored copy is not the authority. Only in PROD, where
+    build_clients asks Check Token before any SDK constructor can send the token
+    (each one calls create_token, which for a dead token would start a 2FA), and
+    never to replace a different token this instance already holds.
+    """
+    if environment_label() != PROD:
+        return False
+    local = read_local_token()
+    return local is None or local["token"] == token
+
+
 def hydrate_token_from_secret(secret_client=None) -> dict:
     """Materialize the deployment-bound token secret into the SDK cache.
 
@@ -594,8 +611,10 @@ def hydrate_token_from_secret(secret_client=None) -> dict:
     if len(lines) != 3 or not lines[0].strip():
         raise WebullConfigError("token secret ต้องเป็น token/expires/status จำนวน 3 บรรทัด")
     expires_at = _expires_datetime(lines[1])
-    if (expires_at is None or expires_at <= datetime.now(timezone.utc)
-            or lines[2].strip() != "NORMAL"):
+    if expires_at is None or lines[2].strip() != "NORMAL":
+        raise TokenUnavailableError("token secret expiry/status ไม่ถูกต้อง")
+    if (expires_at <= datetime.now(timezone.utc)
+            and not _stored_expiry_defers_to_webull(lines[0].strip())):
         raise TokenUnavailableError("token secret expiry/status ไม่ถูกต้อง")
     path = token_file_path()
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -844,13 +863,16 @@ def new_order_token_block(health: dict, environment: str,
 
 
 def ensure_token_fresh(api_client) -> dict:
-    """Renew the token before it expires, because nothing in the SDK will.
+    """Renew a locally stored token inside the refresh margin (never on PROD or UAT).
 
-    The SDK token refresh endpoint is wrapped by TokenOperation.refresh_token and
-    called from nowhere: TokenManager.init_token reads `expires` out of the file
-    and discards it. The token simply dies at 15 days, mid-session, and recovery
-    needs 2FA that only a human can give. Refreshing while the token is still
-    valid keeps that from ever being the failure mode.
+    The SDK wraps a refresh endpoint (TokenOperation.refresh_token) that Webull
+    Thailand does not document: its API index has only Create Token and Check
+    Token, and the one way it documents a token ending is INVALID after 15 days
+    without an API call (no fixed lifetime is documented). Neither deployment
+    reaches the call: PROD reads its token
+    from Secret Manager (skipped below) and lets Check Token decide its expiry
+    (verify_production_token), and UAT runs with token checking off, so it has no
+    token file.
 
     Never raises. A refresh that fails leaves a token that is still good for the
     whole margin, so blocking the slot over it would cause the outage it exists
@@ -1139,6 +1161,27 @@ def _configure_sdk_stream_logger(api) -> None:
     _install_redaction()
 
 
+def live_token_status(operation, token: str) -> dict | None:
+    """Webull's Check Token answer for *token*; the token itself is never returned.
+
+    None when there is no usable answer (not HTTP 200, or not an object). Otherwise
+    the documented status (NORMAL, PENDING, INVALID, EXPIRED), whether the answer
+    is about this token, and the `expires` Webull gives for it now.
+    """
+    response = operation.check_token(token)
+    payload = response.json() if response.status_code == 200 else None
+    if not isinstance(payload, dict):
+        return None
+    answered = payload.get("token")
+    return {
+        "status": payload.get("status"),
+        "token_matches": isinstance(answered, str) and hmac.compare_digest(
+            answered.encode(), token.encode()),
+        "expires": payload.get("expires"),
+        "expires_at": _expires_datetime(payload.get("expires")),
+    }
+
+
 def verify_production_token(api, operation=None):
     """One read-only live check; never start 2FA or rotate a scheduled token."""
     local = read_local_token()
@@ -1148,17 +1191,16 @@ def verify_production_token(api, operation=None):
         from webull.core.http.initializer.token.token_operation import TokenOperation
         operation = TokenOperation(api)
     api.set_token(local["token"])
-    response = operation.check_token(local["token"])
-    payload = response.json() if response.status_code == 200 else None
-    if not isinstance(payload, dict):
+    live = live_token_status(operation, local["token"])
+    if live is None:
         raise TokenUnavailableError("production token status unavailable")
-    expiry = _expires_datetime(payload.get("expires"))
-    if (payload.get("status") != "NORMAL" or payload.get("token") != local["token"]
-            or expiry is None or expiry <= datetime.now(timezone.utc)):
+    if (live["status"] != "NORMAL" or not live["token_matches"]
+            or live["expires_at"] is None or live["expires_at"] <= datetime.now(timezone.utc)):
         raise TokenUnavailableError("production token failed live verification")
-    # Use the live expiry for the 24-hour new-order floor, even if the durable
-    # secret was published with a later timestamp. Token identity does not change.
-    _write_local_token(local["token"], payload["expires"], "NORMAL")
+    # From here on the margin, the 24-hour new-order floor and the expiry warning
+    # read Webull's expiry, earlier or later than the copy stored with the secret.
+    # Token identity does not change.
+    _write_local_token(local["token"], live["expires"], "NORMAL")
 
 
 def build_clients():
@@ -1200,9 +1242,13 @@ def build_clients():
         hydrate_token_from_secret()
         if environment_label() == PROD:
             health = token_health()
+            # The stored expiry is the copy from when the token was issued. A token
+            # held back by that copy alone (margin_only) still goes to Check Token
+            # below, which answers the expiry that counts.
+            stored_expiry_only = health.get("margin_only") and health.get("status") == "NORMAL"
             if (not health.get("secret_configured")
                     or health.get("token_storage") != "SECRET_MANAGER"
-                    or not token_can_sign_now(health)):
+                    or not (token_can_sign_now(health) or stored_expiry_only)):
                 raise WebullConfigError("PROD requires hydrated token; interactive initialization disabled")
     except Exception as exc:
         reset_clients()
@@ -1216,6 +1262,10 @@ def build_clients():
     try:
         if environment_label() == PROD:
             verify_production_token(api)
+            # Judged again on the expiry Check Token just answered, before any SDK
+            # constructor sends the token (each calls create_token).
+            if not token_can_sign_now(token_health()):
+                raise TokenUnavailableError("production token expires within minutes")
         # Each constructor only asks the broker whether token checking is on (and,
         # when it is, verifies the stored token): repeating it changes nothing at
         # the broker. 2026-10-09 18:45 a single 5 s read timeout on that call failed

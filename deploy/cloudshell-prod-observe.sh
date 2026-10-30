@@ -156,7 +156,7 @@ ask_secret() {
     printf '%s' "${value}" | add_version "$1"
 }
 
-token_is_fresh() {  # NORMAL with more than 3 days left; the token only passes through a pipe
+stored_token_is_fresh() {  # the expiry stored with the token when it was issued: NORMAL, >3 days left
     gcloud secrets versions access latest --secret="${TOKEN_SECRET}" --project="${PROJECT_ID}" \
         2>/dev/null | python3 -c '
 import sys, time
@@ -167,6 +167,30 @@ except (IndexError, ValueError):
     sys.exit(1)
 expires = expires / 1000 if expires > 1e11 else expires  # the API documents milliseconds
 sys.exit(0 if len(lines) == 3 and lines[2] == "NORMAL" and expires > time.time() + 3 * 86400 else 1)'
+}
+
+token_is_fresh() {  # Webull's Check Token decides; the stored expiry only when Webull cannot be asked
+    # Webull documents no fixed token lifetime (INVALID after 15 days without an API
+    # call), so a token can outlive the expiry stored with it. The token only passes
+    # through a pipe and the app credentials through the environment, never argv.
+    local key secret report status=0
+    key="$(gcloud secrets versions access latest --secret="${APP_KEY_SECRET}" --project="${PROJECT_ID}")"
+    secret="$(gcloud secrets versions access latest --secret="${APP_SECRET_SECRET}" --project="${PROJECT_ID}")"
+    report="$(gcloud secrets versions access latest --secret="${TOKEN_SECRET}" --project="${PROJECT_ID}" \
+            2>/dev/null | WEBULL_ENV=PROD WEBULL_APP_KEY="${key}" WEBULL_APP_SECRET="${secret}" \
+            python3 ops.py token-status)" || status=$?
+    case "${status}" in
+        0|1)
+            printf '%s' "${report}" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+print("  Webull Check Token: status=%s, expires=%s, days_left=%s"
+      % (r.get("status"), r.get("live_expires_at"), r.get("days_left")))' || true
+            return "${status}" ;;
+        *)
+            echo "  Webull Check Token could not be asked; judging by the expiry stored with the token"
+            stored_token_is_fresh ;;
+    esac
 }
 
 issue_token() {

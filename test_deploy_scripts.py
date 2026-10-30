@@ -57,6 +57,26 @@ CURL = r"""#!/usr/bin/env bash
 echo "curl $*" >> "${STUB_LOG}"
 if [[ -n "${STUB_RTDB_BODY:-}" ]]; then echo "${STUB_RTDB_BODY}"; else echo '{"error" : "Permission denied"}'; fi
 """
+# Stands in for Webull's Check Token (`ops.py token-status`) and, on request, for the
+# 2FA script of issue_token; every other python3 call is the real interpreter, named
+# here because the scripts also run python3 under `env -i`.
+PYTHON3 = r"""#!/usr/bin/env bash
+if [[ "${1:-}" == ops.py && "${2:-}" == token-status ]]; then
+  cat > /dev/null
+  echo "python3 ops.py token-status WEBULL_ENV=${WEBULL_ENV:-} app_key=${WEBULL_APP_KEY:+set}" >> "${STUB_LOG}"
+  case "${STUB_TOKEN_STATUS:-unreachable}" in
+    fresh) echo '{"status": "NORMAL", "live_expires_at": "2026-12-01T00:00:00Z", "days_left": 30.0, "fresh": true, "exit_code": 0}'; exit 0 ;;
+    rejected) echo '{"status": "INVALID", "live_expires_at": null, "days_left": null, "fresh": false, "exit_code": 1}'; exit 1 ;;
+    *) echo '{"error": "Check Token unavailable: ConnectionError", "exit_code": 2}'; exit 2 ;;
+  esac
+fi
+if [[ "${1:-}" == - && -n "${STUB_ISSUE_TOKEN_FAILS:-}" ]]; then
+  cat > /dev/null
+  echo "python3 - (issue_token)" >> "${STUB_LOG}"
+  exit 1
+fi
+exec "@REAL_PYTHON@" "$@"
+""".replace("@REAL_PYTHON@", sys.executable)
 
 
 @pytest.fixture(scope="module")
@@ -73,7 +93,8 @@ def sandbox(tmp_path_factory):
     # A DNA that outlives any clock the tests run under.
     (repo / "strategy.long.json").write_text(
         json.dumps(build_bundle("bypass:20000", ORIGIN, 900), indent=2) + "\n")
-    for name, body in (("gcloud", GCLOUD), ("firebase", FIREBASE), ("curl", CURL)):
+    for name, body in (("gcloud", GCLOUD), ("firebase", FIREBASE), ("curl", CURL),
+                       ("python3", PYTHON3)):
         (stubs / name).write_text(body)
         (stubs / name).chmod(0o755)
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
@@ -376,6 +397,37 @@ def test_prod_observe_deploys_observe_only_whatever_the_shell_still_holds(sandbo
                   "WEBULL_TOKEN_SECRET=projects/lego-firebase/secrets/webull-token-prod"):
         assert value in deployed, value
     assert "LEGO_PROD_LIVE_ACK" not in recorded
+
+
+def test_a_token_webull_still_accepts_needs_no_new_2fa(sandbox):
+    result = run_prod_observe(sandbox, {"LEGO_FIX_C_OVERRIDE": "10000", "STUB_TOKEN_STATUS": "fresh"})
+    assert result.returncode == 78, result.stderr  # the stub gcloud stops at `functions deploy`
+    recorded = log(sandbox)
+    # The app credentials reach Check Token through the environment, never argv.
+    assert "python3 ops.py token-status WEBULL_ENV=PROD app_key=set" in recorded
+    assert "Webull Check Token: status=NORMAL, expires=2026-12-01T00:00:00Z" in result.stdout
+    assert "Open the Webull app now" not in result.stdout
+    assert "secrets versions add" not in recorded
+    assert "stub-token" not in result.stdout + result.stderr + recorded
+
+
+def test_a_token_webull_rejects_goes_to_2fa_whatever_its_stored_expiry(sandbox):
+    # The expiry stored with the stub token is ten days ahead; Check Token says INVALID.
+    result = run_prod_observe(sandbox, {"LEGO_FIX_C_OVERRIDE": "10000", "STUB_TOKEN_STATUS": "rejected",
+                                        "STUB_ISSUE_TOKEN_FAILS": "1"})
+    assert result.returncode != 0
+    assert "Webull Check Token: status=INVALID" in result.stdout
+    assert "Open the Webull app now" in result.stdout
+    recorded = log(sandbox)
+    assert "python3 - (issue_token)" in recorded and "functions deploy" not in recorded
+
+
+def test_when_webull_cannot_be_asked_the_stored_expiry_decides(sandbox):
+    result = run_prod_observe(sandbox, {"LEGO_FIX_C_OVERRIDE": "10000"})  # Check Token unreachable
+    assert result.returncode == 78, result.stderr
+    assert "could not be asked; judging by the expiry stored with the token" in result.stdout
+    assert "OK token: NORMAL, more than 3 days left" in result.stdout
+    assert "Open the Webull app now" not in result.stdout
 
 
 def test_prod_observe_stops_when_the_database_answers_anonymous_reads(sandbox):
