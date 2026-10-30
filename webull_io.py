@@ -948,6 +948,22 @@ def _token_check_disabled() -> bool:
 
 _MUTATING_OPERATIONS = frozenset({"place", "cancel"})
 _OPAQUE_ACTIONS = ("/auth/", "/openapi/config")
+# The routes the pinned SDK 3.0.1 sends for each call this adapter makes
+# (test_webull_routes.py drives the SDK itself to prove it). An unknown route is
+# logged and traced as a bare "sdk_request", without its operation's projection.
+_OPERATION_BY_ROUTE = {
+    "/trading/accounts/list": "accounts",
+    "/trading/assets/positions/list": "positions",
+    "/trading/assets/balances/get": "balance",
+    "/market-data/stocks/snapshots/list": "snapshot",
+    "/trading/orders/preview": "preview",
+    "/trading/orders/place": "place",
+    "/trading/orders/cancel": "cancel",
+    "/trading/orders/get": "order_detail",
+    "/trading/orders/historical-orders/list": "order_history",
+    "/trading/orders/open-orders/list": "open_orders",
+    "/trading/instruments/stocks/profiles/list": "instrument",
+}
 
 
 def _observe_exchange(operation: str, request, started: float, *, response=None, exc=None) -> None:
@@ -1000,19 +1016,7 @@ def _bounded_api_class(base):
             if tick_runtime.correlation_id():
                 auth_circuit.guard(auth_circuit_key())
             action = request.get_action_name()
-            operation = {
-                "/trading/accounts/list": "accounts",
-                "/trading/assets/positions/list": "positions",
-                "/trading/assets/balances/get": "balance",
-                "/market-data/stocks/snapshots/list": "snapshot",
-                "/trading/orders/preview": "preview",
-                "/trading/orders/place": "place",
-                "/trading/orders/cancel": "cancel",
-                "/trading/orders/get": "order_detail",
-                "/trading/orders/history/list": "order_history",
-                "/trading/orders/open-orders/list": "open_orders",
-                "/trading/instruments/stocks/profiles/list": "instrument",
-            }.get(action, "sdk_request")
+            operation = _OPERATION_BY_ROUTE.get(action, "sdk_request")
             started = time.monotonic()
             try:
                 with tick_runtime.phase("sdk_" + operation):

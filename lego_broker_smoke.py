@@ -2,7 +2,8 @@
 
 This command has no Firebase dependency and deliberately imports no broker
 mutation helper.  It proves authentication, account visibility, positions,
-open-order queries, market data, and (when explicitly requested in UAT) Preview.
+open-order and order-history queries, market data, and (when explicitly
+requested in UAT) Preview.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import os
 import sys
 import uuid
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -22,7 +24,8 @@ from webull_io import (PROD_ENDPOINT, UAT_ENDPOINT, account_id_is_listed, broker
                        build_order_payload, clients_endpoint,
                        environment_label, fetch_holdings, fetch_open_orders,
                        fetch_buying_power, fetch_instrument_capability,
-                       fetch_snapshot, load_config, preview_market_order,
+                       fetch_snapshot, find_recent_order_by_client_id,
+                       load_config, preview_market_order,
                        redact_sensitive_text)
 
 
@@ -96,6 +99,13 @@ def run_smoke(*, preview_side: str | None = None,
     open_orders = fetch_open_orders(trade_client, config.symbol)
     if not isinstance(open_orders, list):
         raise SmokeRefusal("open-orders query returned an unknown shape")
+    # Reconcile's fallback query, run over the last day for a client id no order
+    # carries. Nothing else exercises it before a real order needs it, so this is
+    # where Webull accepting its route, time format and paging is first proved.
+    probe_id = ("legosmoke" + uuid.uuid4().hex)[:32]
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    if find_recent_order_by_client_id(trade_client, probe_id, placed_at=since) is not None:
+        raise SmokeRefusal("order history matched a client id no order was sent with")
     snapshot = fetch_snapshot(trade_client, data_client, config)
     if (not math.isfinite(float(snapshot.get("price", 0)))
             or float(snapshot.get("price", 0)) <= 0
@@ -110,6 +120,7 @@ def run_smoke(*, preview_side: str | None = None,
         "usd_buying_power_read": True,
         "holdings_read": True,
         "open_orders_read": True,
+        "order_history_read": True,
         "snapshot_price_and_time": True,
         "preview_requested": bool(preview_side),
     }
@@ -157,7 +168,8 @@ class _SafeArgumentParser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     parser = _SafeArgumentParser(
         description=(
-            "Webull read-only connectivity smoke; optional Preview is UAT-only."
+            "Webull read-only connectivity smoke (order history included); "
+            "optional Preview is UAT-only."
         ))
     parser.add_argument("--preview-side", choices=("BUY", "SELL"))
     parser.add_argument("--preview-quantity")

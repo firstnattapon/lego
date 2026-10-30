@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import json
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import lego_broker_smoke as smoke
+import webull_io
 from lego_one_row import Config
 from lego_orders import PROD, UAT
 from webull_io import PROD_ENDPOINT, UAT_ENDPOINT, InstrumentCapability
@@ -56,11 +58,55 @@ def broker(monkeypatch):
                         lambda *_a: _capability())
     monkeypatch.setattr(smoke, "fetch_buying_power", lambda *_a: 1000)
     monkeypatch.setattr(smoke, "fetch_open_orders", lambda *_a: [])
+    monkeypatch.setattr(smoke, "find_recent_order_by_client_id", lambda *_a, **_k: None)
     monkeypatch.setattr(smoke, "fetch_snapshot", lambda *_a: {
         "price": 100.0,
         "quote_time": "2026-08-02T09:00:00.000Z",
     })
     return trade, data
+
+
+def test_order_history_is_read_for_a_client_id_no_order_carries(broker, monkeypatch):
+    # The reconcile fallback itself, on a history endpoint that has no such order.
+    monkeypatch.setattr(smoke, "find_recent_order_by_client_id",
+                        webull_io.find_recent_order_by_client_id)
+    queries = []
+    broker[0].order_v3 = SimpleNamespace(list_order_history=lambda account_id, **query: (
+        queries.append((account_id, query)) or Response({"data": []})))
+
+    report = smoke.run_smoke()
+
+    assert report["ok"] is True and report["checks"]["order_history_read"] is True
+    [(account_id, query)] = queries
+    assert account_id == "account-test-123" and query["pagination_key"] is None
+    start, end = (datetime.fromisoformat(query[key].replace("Z", "+00:00"))
+                  for key in ("start_time", "end_time"))
+    assert query["end_time"].endswith("Z") and end <= datetime.now(timezone.utc)
+    assert timedelta(hours=23, minutes=59) < end - start <= timedelta(days=1)
+
+
+def test_an_order_under_the_probe_client_id_fails_the_smoke(broker, monkeypatch):
+    monkeypatch.setattr(smoke, "find_recent_order_by_client_id",
+                        lambda *_a, **_k: {"client_order_id": "legosmoke0"})
+    with pytest.raises(smoke.SmokeRefusal, match="order history"):
+        smoke.run_smoke()
+
+
+def test_a_refused_history_query_fails_the_smoke_and_names_it(broker, monkeypatch, capsys):
+    class Refused(Exception):
+        http_status = 400
+        error_code = "OPENAPI_PARAM_ERR"
+        _lego_operation = "order_history"
+
+    def refuse(*_a, **_k):
+        raise Refused("start_time")
+
+    monkeypatch.setattr(smoke, "find_recent_order_by_client_id", refuse)
+    assert smoke.main([]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is False and report["checks"] == {}
+    assert report["broker_error"] == {"http_status": 400, "code": "OPENAPI_PARAM_ERR",
+                                      "operation": "order_history", "retryable_read": False}
 
 
 def test_connectivity_mode_never_previews(broker, monkeypatch):
@@ -242,7 +288,7 @@ def test_module_imports_no_broker_mutation_helper():
         for alias in node.names
     }
     assert imported.isdisjoint({
-        "place_market_order", "replace_market_order", "cancel_market_order"
+        "place_market_order", "replace_market_order", "cancel_market_order", "cancel_order"
     })
     called_attributes = {
         node.func.attr
