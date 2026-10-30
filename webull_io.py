@@ -568,10 +568,10 @@ def _stored_expiry_defers_to_webull(token: str) -> bool:
     issued. Webull ends a token at the expiry its Check Token answers (`expires` to
     the SDK, `expires_at` in the reference) and after 15 days without an API call;
     that answer can differ from the copy stored at issue, so the copy is not the
-    authority. Only in PROD, where
-    build_clients asks Check Token before any SDK constructor can send the token
-    (each one calls create_token, which for a dead token would start a 2FA), and
-    never to replace a different token this instance already holds.
+    authority. Only in PROD, where build_clients asks Check Token before any SDK
+    constructor can send the token (each one calls create_token, which for a dead
+    token would start a 2FA), and never to replace a different token this
+    instance already holds.
     """
     if environment_label() != PROD:
         return False
@@ -871,10 +871,9 @@ def ensure_token_fresh(api_client) -> dict:
     Thailand does not document: its API index has only Create Token and Check
     Token, whose answers carry the expiry the token ends at; a token is also
     INVALID after 15 days without an API call. Neither deployment reaches the
-    call: PROD reads its token
-    from Secret Manager (skipped below) and lets Check Token decide its expiry
-    (verify_production_token), and UAT runs with token checking off, so it has no
-    token file.
+    call: PROD reads its token from Secret Manager (skipped below) and lets Check
+    Token decide its expiry (verify_production_token), and UAT runs with token
+    checking off, so it has no token file.
 
     Never raises. A refresh that fails leaves a token that is still good for the
     whole margin, so blocking the slot over it would cause the outage it exists
