@@ -227,7 +227,7 @@ def inspect_open_orders_command(_args) -> dict:
     main._init_firebase()
     cfg = main.Config(runtime.operator.symbol, runtime.operator.principal_usd,
                       runtime.operator.diff_usd, runtime.operator.dna_bundle.dna_code,
-                      "shannon_demon_lego_v2")
+                      runtime.operator.strategy_id)
     trade, _ = main.build_clients()
     witness = describe(main.fetch_open_orders(trade, cfg.symbol))
     chain = main.chain_key(cfg)
@@ -304,7 +304,7 @@ def status_command(_args) -> dict:
     cfg = main.Config(
         runtime.operator.symbol, runtime.operator.principal_usd,
         runtime.operator.diff_usd, runtime.operator.dna_bundle.dna_code,
-        "shannon_demon_lego_v2")
+        runtime.operator.strategy_id)
     state = main.read_chain_state(cfg) or {}
     identity = main.runtime_identity_fingerprint()
     from lego_outbox import DISPATCH_LOCK_PATH, read_intent
@@ -348,7 +348,7 @@ def repair_audit_command(args) -> dict:
     runtime = load_runtime_config()
     cfg = main.Config(runtime.operator.symbol, runtime.operator.principal_usd,
                       runtime.operator.diff_usd, runtime.operator.dna_bundle.dna_code,
-                      "shannon_demon_lego_v2")
+                      runtime.operator.strategy_id)
     ck = main.chain_key(cfg)
     intent = read_intent(ck, args.run_id)
     if not intent:

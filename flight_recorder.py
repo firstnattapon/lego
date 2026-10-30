@@ -494,7 +494,7 @@ def fill_equation(cfg, intent, summary, finalized) -> None:
     }
     outputs = {key: finalized.get(key) for key in (
         "applied", "seq", "delta_actual", "actual_cumulative", "excess", "reference",
-        "holdings_after", "funding_reference_offset")}
+        "holdings_after", "funding_reference_offset", "initial_funding")}
     outputs["status"] = "applied" if finalized.get("applied") else "already_applied"
     equation("W13", inputs, outputs, FILL_FORMULA)
 

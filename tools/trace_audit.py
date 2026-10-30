@@ -181,8 +181,14 @@ def recompute_decision(i: dict) -> dict:
     return {"V_n": value, "gap": gap, "R_n": reference, "status": status, "side": side, "qty": qty}
 
 
-def recompute_fill(fix_c, p_fill, p_acted, a_prev, reference):
-    """The fill-time recurrence: dA = FIX_C*(P_fill/P_acted - 1), A = A_prev + dA, E = A - R."""
+def recompute_fill(fix_c, p_fill, p_acted, a_prev, reference, *, initial_funding=False):
+    """The fill-time recurrence: dA = FIX_C*(P_fill/P_acted - 1), A = A_prev + dA, E = A - R.
+
+    An initial funding BUY has no invested interval before it: it books dA = A = E = 0
+    and only seeds P_acted with its fill price (lego_one_row.finalize_recurrence).
+    """
+    if initial_funding:
+        return {"delta_actual": 0.0, "actual_cumulative": 0.0, "excess": 0.0}
     delta = fix_c * (p_fill / p_acted - 1.0)
     cumulative = a_prev + delta
     return {"delta_actual": delta, "actual_cumulative": cumulative, "excess": cumulative - reference}
@@ -324,7 +330,8 @@ def check_fills(state, rows, intents, realized, *, fix_c, p0, limit=20) -> dict:
             _mismatch(result["mismatch"], limit, seq=seq, field="inputs", recorded=None, expected="complete witness")
             previous = w
             continue
-        expect = recompute_fill(fix_c, p_fill, p_acted, a_prev, reference)
+        expect = recompute_fill(fix_c, p_fill, p_acted, a_prev, reference,
+                                initial_funding=w.get("initial_funding") is True)
         for field in ("delta_actual", "actual_cumulative", "excess"):
             if not close(expect[field], num(w.get(field)), 1e-9, 1e-7):
                 _mismatch(result["mismatch"], limit, seq=seq, field=field,
@@ -918,7 +925,8 @@ def _check_equation_event(event, report):
         if None in values or reference is None or not values[2]:
             return
         report["checked"] += 1
-        expect = recompute_fill(values[0], values[1], values[2], values[3], reference)
+        expect = recompute_fill(values[0], values[1], values[2], values[3], reference,
+                                initial_funding=out.get("initial_funding") is True)
         for field in ("delta_actual", "actual_cumulative", "excess"):
             if not close(expect[field], num(out.get(field)), 1e-9, 1e-7):
                 _mismatch(report["mismatch"], 20, node=node, field=field, recorded=out.get(field), expected=expect[field])

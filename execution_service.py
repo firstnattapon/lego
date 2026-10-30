@@ -43,6 +43,7 @@ from lego_state import (CASHFLOW_SEMANTICS, CalendarDriftError,
                          StaleAnchorError, apply_broker_cashflow,
                          apply_realized_fill, chain_key,
                          chain_runtime_identity_is_verified, commit_final_row,
+                         execution_finalization,
                          finalize_execution_fill, mark_order_intent_materialized,
                          pending_order_intents, read_anchor, read_chain_state,
                          repair_pending_intent_row, UNREAD_STATE,
@@ -64,6 +65,7 @@ from webull_io import (IncompleteOpenOrdersError, build_clients,
 from decimal import Decimal, InvalidOperation
 from webull_io import (validate_order_detail_identity, validate_place_response,
                        validate_preview_funding, FractionalGateError,
+                       broker_error_details, is_auth_blocked,
                        InstrumentCapability, evaluate_fractional_order_gate,
                        fetch_instrument_capability, is_fractional_quantity)
 from config import RuntimeConfig
@@ -1022,6 +1024,90 @@ def _preview_fee_pct(preview: dict) -> str | None:
     return format((fee / cost * 100).quantize(Decimal("0.0001")), "f")
 
 
+def _paper(intent: dict) -> bool:
+    """An intent born under LEGO_MODE=paper: filled on paper at the preview cut."""
+    return intent.get("paper") is True
+
+
+def _paper_view(cfg, intent: dict, snapshot: dict) -> tuple[dict, str | None]:
+    """The snapshot with the chain's paper position in place of the broker's.
+
+    Every check is judged on the paper holdings, the chain state's prev_holdings, as a
+    real order's are on the broker position. The broker position is still read, and
+    must read what it read at the decision: the second value says when it does not.
+    """
+    broker = float(snapshot["holdings"])
+    expected = float(intent["decision_broker_holdings"])
+    if not (math.isfinite(broker) and math.isfinite(expected)):
+        raise ValueError("broker holdings ต้อง finite")
+    moved = None
+    if abs(broker - expected) > _holdings_drift_tolerance(typed_v2=True):
+        moved = f"paper: real position moved from {expected} to {broker}"
+    held = float((read_chain_state(cfg) or {}).get("prev_holdings", 0.0) or 0.0)
+    return {**snapshot, "holdings": held, "broker_holdings": broker}, moved
+
+
+def _paper_sell_refused(intent: dict, exc: Exception) -> bool:
+    """A paper SELL Preview the broker answered with a refusal, not one it could not answer."""
+    return (_paper(intent) and str(intent.get("side", "")).upper() == "SELL"
+            and not isinstance(exc, tick_runtime.TickDeadlineExceeded)
+            and not is_transient_exception(exc) and not is_auth_blocked(exc))
+
+
+def _paper_done(chain_key_: str, run_id: str, booked: dict, preview_result: dict | None,
+                fee_pct: str | None, *, sell_preview: dict | None = None,
+                claim: dict | None) -> dict:
+    """Close a paper intent on what finalize_execution_fill booked for it."""
+    paper_fill = {
+        "price": booked.get("filled_price"), "quantity": booked.get("filled_quantity"),
+        "holdings_after": booked.get("holdings_after"),
+        "fee_estimate": (preview_result or {}).get("estimated_transaction_fee"),
+        "price_source": "last_trade_after_preview",
+    }
+    return _stop(chain_key_, run_id, "UNSENT_ABORTED", {
+        "terminal_reason": "paper: every check before Place passed; filled on paper, "
+                           "Place is never called",
+        "preview_only": True, "paper": True, "preview_fee_pct": fee_pct,
+        "paper_fill": paper_fill, "cashflow_finalized": True,
+        "dispatch_check_phase": "paper_fill"},
+        claim=claim, preview_only=True, paper=True, preview_fee_pct=fee_pct,
+        paper_fill=paper_fill, **({"sell_preview": sell_preview} if sell_preview else {}))
+
+
+def _paper_fill(cfg, intent: dict, final_fresh: dict, preview_result: dict | None,
+                fee_pct: str | None, *, sell_preview: dict | None = None,
+                claim: dict | None) -> dict:
+    """LEGO_MODE=paper: book the fill a market order would have had. Place is never called.
+
+    The price is the last trade of the quote read again after Preview, the quantity the
+    committed intent's, and the paper position moves by exactly that quantity. The
+    17-column ledger moves through the same finalize_execution_fill as a broker fill,
+    idempotent on run_id, so a retry after a crash books nothing twice.
+    """
+    ck, run_id = intent["chain_key"], intent["run_id"]
+    try:
+        quantity = Decimal(str(intent["quantity"]))
+        before = Decimal(str(intent["decision_holdings"]))
+        after = before + quantity if str(intent["side"]).upper() == "BUY" else before - quantity
+        if not (quantity.is_finite() and after.is_finite()) or quantity <= 0 or after < 0:
+            raise ValueError("paper fill quantity/holdings อยู่นอกช่วง")
+        booked = finalize_execution_fill(
+            cfg, run_id,
+            ExecutionFill(filled_price=float(final_fresh["price"]),
+                          filled_quantity=float(quantity), holdings_after=float(after)),
+            runtime_identity=intent.get("runtime_identity_fingerprint"))
+    except (ExecutionFinalizeError, InvalidOperation, KeyError, TypeError, ValueError) as exc:
+        return _persist_error(ck, run_id, "NOT_PLACED", exc, {
+            "terminal_reason": "paper fill could not be booked",
+            "dispatch_check_phase": "paper_fill"}, claim=claim)
+    fr.fill_equation(cfg, intent, {
+        "filled_quantity": booked.get("filled_quantity"),
+        "filled_price": booked.get("filled_price"),
+        "filled_fee": (preview_result or {}).get("estimated_transaction_fee")}, booked)
+    return _paper_done(ck, run_id, booked, preview_result, fee_pct,
+                       sell_preview=sell_preview, claim=claim)
+
+
 def _nonnegative_finite_env(name: str, default: float) -> float:
     """Read a safety limit without letting NaN/inf disable its comparison."""
     raw = os.environ.get(name, str(default))
@@ -1431,6 +1517,13 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         return _stop(ck, run_id, "NOT_PLACED",
                      {"terminal_reason": "source row was not committed"},
                      claim=intent)
+    if _paper(intent):
+        booked = execution_finalization(cfg, run_id)
+        if booked is not None:
+            # Booked, then the close was lost: close on that booking, never a second one.
+            return _paper_done(ck, run_id, booked, intent.get("preview_result"),
+                               _preview_fee_pct(intent.get("preview_result") or {}),
+                               sell_preview=intent.get("sell_preview"), claim=intent)
 
     identity = intent.get("runtime_identity_fingerprint") or runtime_identity_fingerprint()
     circuit = broker_circuit.status(identity, cfg.symbol)
@@ -1491,6 +1584,19 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                      claim=intent, **open_order_blocker.public(blocker))
 
     fresh = fetch_snapshot(trade_client, data_client, cfg)
+    if _paper(intent):
+        try:
+            fresh, moved = _paper_view(cfg, intent, fresh)
+        except (KeyError, TypeError, ValueError) as exc:
+            return _persist_error(
+                ck, run_id, "NOT_PLACED", exc,
+                {"terminal_reason": "invalid paper holdings provenance"}, claim=intent)
+        if moved:
+            _preview_tripwire(identity, cfg.symbol, run_id, moved)
+            return _stop(ck, run_id, "SUPPRESSED_STATE_CHANGED", {
+                "terminal_reason": moved, "dispatch_check_phase": "pre_preview",
+                "broker_holdings": fresh["broker_holdings"]},
+                claim=intent, preview_tripwire=True)
     session_quote_floor = False
     try:
         if runtime is not None:
@@ -1585,6 +1691,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         "audit_revision": int(intent.get("audit_revision", 0)),
         "dispatch_quote_check": {**quote_safety, "dispatch_check_phase": "pre_preview"},
     })
+    sell_preview = None
     try:
         if runtime is not None:
             # Fewer seconds than the fence needs: no read below can lead to Place in this tick.
@@ -1644,8 +1751,18 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                    Decimal(str(intent["quantity"]))):
             raise ValueError("order payload identity/quantity differs from committed intent")
         if runtime is not None:
-            preview_result = preview_market_order_result(
-                trade_client, order, strict=True)
+            try:
+                preview_result = preview_market_order_result(
+                    trade_client, order, strict=True)
+            except Exception as exc:
+                if not _paper_sell_refused(intent, exc):
+                    raise
+                # The real account holds none of the paper shares, so the broker may refuse
+                # a SELL Preview it would take with a real position. Its answer is kept for
+                # the record; the paper SELL goes on, with no broker fee to show for it.
+                preview_result = {}
+                sell_preview = {"refused": True, "broker_error": broker_error_details(exc),
+                                "reason": redact_sensitive_text(_error_text(exc))[:300]}
             funding = validate_preview_funding(
                 side=intent["side"], quantity=intent["quantity"],
                 holdings=fresh["holdings"], preview=preview_result,
@@ -1653,15 +1770,20 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                               if str(intent["side"]).upper() == "BUY" else None),
             )
             preview_ok = True
-            fr.node("W22", "previewed", run_id=run_id, preview=preview_result, funding=funding)
-            update_intent(ck, run_id, {
+            fr.node("W22", "previewed" if sell_preview is None else "paper_sell_refused",
+                    run_id=run_id, preview=preview_result, funding=funding,
+                    **({"sell_preview": sell_preview} if sell_preview else {}))
+            previewed = {
                 "order_payload": order,
                 "payload_hash": canonical_payload_hash(order),
                 "preview_result": preview_result,
                 "funding_check": funding,
                 "preview_at": _iso(datetime.now(UTC)),
                 "state": "PREVIEWED",
-            }, **_claim_update_kwargs(intent))
+            }
+            if sell_preview is not None:
+                previewed["sell_preview"] = sell_preview
+            update_intent(ck, run_id, previewed, **_claim_update_kwargs(intent))
         else:
             preview_ok = preview_market_order(trade_client, order)
         # Two independent witnesses: the gate judges the committed row, the
@@ -1737,6 +1859,20 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             ck, run_id, "PENDING_DISPATCH", exc,
             {"dispatch_check_phase": "post_preview_refetch"},
             claim=intent)
+    if _paper(intent):
+        try:
+            final_fresh, moved = _paper_view(cfg, intent, final_fresh)
+        except (KeyError, TypeError, ValueError) as exc:
+            return _persist_error(
+                ck, run_id, "NOT_PLACED", exc,
+                {"terminal_reason": "invalid paper holdings provenance",
+                 "dispatch_check_phase": "post_preview"}, claim=intent)
+        if moved:
+            _preview_tripwire(identity, cfg.symbol, run_id, f"{moved} across Preview")
+            return _stop(ck, run_id, "SUPPRESSED_STATE_CHANGED", {
+                "terminal_reason": moved, "dispatch_check_phase": "post_preview",
+                "broker_holdings": final_fresh["broker_holdings"]},
+                claim=intent, preview_tripwire=True)
     try:
         final_holdings = float(final_fresh["holdings"])
         if not (math.isfinite(final_holdings) and final_holdings >= 0):
@@ -1797,6 +1933,10 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                     "terminal_reason": str(exc), "execution_limit_blocked": True},
                     claim=intent, execution_limit_blocked=True)
             fee_pct = _preview_fee_pct(preview_result)
+        if _paper(intent) and runtime is not None:
+            # LEGO_MODE=paper books here what a filled market order would have booked.
+            return _paper_fill(cfg, intent, final_fresh, preview_result, fee_pct,
+                               sell_preview=sell_preview, claim=intent)
         return _stop(ck, run_id, "UNSENT_ABORTED", {
             "terminal_reason": "preview: every check before Place passed; Place is never called",
             "preview_only": True, "preview_fee_pct": fee_pct,

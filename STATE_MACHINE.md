@@ -32,6 +32,7 @@ the next worker invocation; the account-symbol fence stays held.
 | model commit before projection | finalized run witness/seq | repair projection only | no |
 | pause/observe/DNA exhausted/market closed | attempted intent remains actionable | reconcile/finalize; create no new intent | no new mutation |
 | preview (`LEGO_MODE=preview`, or an intent stamped `preview_only`) | `PREVIEWED` + Preview result | `UNSENT_ABORTED` after the post-Preview checks, before the fence; an order or position change right after Preview sets an operator halt | never |
+| paper (`LEGO_MODE=paper`, an intent stamped `paper`, own chain and database) | `PREVIEWED` + Preview result (or the broker's refusal of a paper SELL) | at the preview cut `finalize_execution_fill` books the paper fill (idempotent on run ID), then `UNSENT_ABORTED` + `paper_fill`; a booked run that lost its close is closed on that booking; a real position that moves sets an operator halt | never |
 | unresolved after bounded reads | NEEDS_RECONCILIATION | audited operator evidence | no |
 
 Lease expiry never deletes the attempt marker. A negative detail lookup once is

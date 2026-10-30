@@ -24,8 +24,12 @@ ENVIRONMENT_HOSTS = {
     "PROD": "api.webull.co.th",
 }
 # preview runs the whole order path of trade, Preview included, and stops before
-# Place (execution_service, docs/PROD_OBSERVE_TH.md).
-MODES = {"observe", "trade", "preview"}
+# Place (execution_service, docs/PROD_OBSERVE_TH.md). paper is preview that books
+# the fill a market order would have had, on a chain of its own.
+MODES = {"observe", "trade", "preview", "paper"}
+STRATEGY_ID = "shannon_demon_lego_v2"
+# Its own chain key: no trade or preview deployment can continue paper holdings.
+PAPER_STRATEGY_ID = "shannon_demon_lego_paper_v2"
 
 
 class ConfigurationError(ValueError):
@@ -139,19 +143,28 @@ class OperatorSettings:
         _finite_decimal(self.diff_usd, name="diff_usd", positive=False)
         mode = self.mode.strip().lower()
         if mode not in MODES:
-            raise ConfigurationError("mode ต้องเป็น observe, preview หรือ trade")
+            raise ConfigurationError("mode ต้องเป็น observe, preview, paper หรือ trade")
         object.__setattr__(self, "mode", mode)
         if type(self.active) is not bool:
             raise ConfigurationError("active ต้องเป็น boolean")
 
     @property
     def allows_new_intents(self) -> bool:
-        return self.active and self.mode in {"trade", "preview"}
+        return self.active and self.mode in {"trade", "preview", "paper"}
 
     @property
     def preview_only(self) -> bool:
         """Every step of the order path except Place; it is never called."""
-        return self.mode == "preview"
+        return self.mode in {"preview", "paper"}
+
+    @property
+    def paper(self) -> bool:
+        """preview whose fills are booked on paper holdings, never at the broker."""
+        return self.mode == "paper"
+
+    @property
+    def strategy_id(self) -> str:
+        return PAPER_STRATEGY_ID if self.paper else STRATEGY_ID
 
     def canonical(self) -> dict:
         return {
