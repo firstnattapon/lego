@@ -1,5 +1,10 @@
 # LEGO PRINCIPAL v2
 
+30 October Webull API audit: [every endpoint LEGO calls checked against Webull Thailand's official reference, the SDK and PROD's own answers](docs/WEBULL_API_AUDIT_20261030_TH.md).
+All 20 routes match. The order-history route was misnamed in the operation map (the reconcile fallback ran as an unclassified call), and a PROD token was
+judged by the expiry copied into Secret Manager when it was issued instead of the one Webull's Check Token answers now; both are fixed, and the wrapper asks
+Check Token before asking for a new 2FA. The read-only smoke now queries order history, which no PROD or UAT run had ever reached.
+
 25 October audit: [two UAT sessions that traded continuously, complete records, a dispatch that spent its last seconds on reads the place fence would refuse, and the real-money gates](docs/AUDIT_20261025_TH.md).
 On 22-23 October revision 00055 (UBER) placed 21 orders and 13 filled, with no halt and no outage; 3,908 ticks matched 3,908 requests and all 52 rows were recomputed from first principles
 without a mismatch. One tick (22 October 14:15Z) had 8.1 s left before the gate yet still ran Preview and two broker reads, ended with 0.575 s, lost its flight-recorder trace (row v4's equation)

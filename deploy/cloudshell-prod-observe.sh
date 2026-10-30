@@ -170,9 +170,10 @@ sys.exit(0 if len(lines) == 3 and lines[2] == "NORMAL" and expires > time.time()
 }
 
 token_is_fresh() {  # Webull's Check Token decides; the stored expiry only when Webull cannot be asked
-    # Webull documents no fixed token lifetime (INVALID after 15 days without an API
-    # call), so a token can outlive the expiry stored with it. The token only passes
-    # through a pipe and the app credentials through the environment, never argv.
+    # Check Token answers the expiry Webull holds for the token now, which can be later
+    # than the one stored with it at issue (a token is also INVALID after 15 days
+    # without an API call). The token only passes through a pipe and the app
+    # credentials through the environment, never argv.
     local key secret report status=0
     key="$(gcloud secrets versions access latest --secret="${APP_KEY_SECRET}" --project="${PROJECT_ID}")"
     secret="$(gcloud secrets versions access latest --secret="${APP_SECRET_SECRET}" --project="${PROJECT_ID}")"

@@ -34,9 +34,10 @@ DEFAULT_TOKEN_DIR = "/tmp/webull_token"
 TOKEN_FILE = "token.txt"
 
 # 408/429 belong here as much as any 5xx, and are likelier: every call this
-# adapter makes sits under a small per-endpoint Webull limit (account 10/30s,
-# market data 60/60s, order query 40/2s). Treating a throttled read as a hard
-# failure turned a two-second wait into a missed slot.
+# adapter makes sits under a small per-endpoint Webull limit (Trading API
+# overview: account 10/30s, instruments 60/60s, orders 15/s, order query 40/2s;
+# market data 300/60s). Treating a throttled read as a hard failure turned a
+# two-second wait into a missed slot.
 _TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
 _TRANSIENT_CODES = {
     "GATEWAY_TIMEOUT", "TIMEOUT", "SERVICE_UNAVAILABLE",
@@ -563,10 +564,11 @@ _HYDRATED_TOKEN = None
 def _stored_expiry_defers_to_webull(token: str) -> bool:
     """May a secret whose stored expiry has passed still go to Webull's Check Token?
 
-    The second line of the secret is the `expires` Webull answered when the token
-    was issued. Webull Thailand documents no fixed lifetime (a token turns INVALID
-    after 15 days without an API call), and Check Token answers the current
-    `expires`, so the stored copy is not the authority. Only in PROD, where
+    The second line of the secret is the expiry Webull answered when the token was
+    issued. Webull ends a token at the expiry its Check Token answers (`expires` to
+    the SDK, `expires_at` in the reference) and after 15 days without an API call;
+    that answer can differ from the copy stored at issue, so the copy is not the
+    authority. Only in PROD, where
     build_clients asks Check Token before any SDK constructor can send the token
     (each one calls create_token, which for a dead token would start a 2FA), and
     never to replace a different token this instance already holds.
@@ -867,9 +869,9 @@ def ensure_token_fresh(api_client) -> dict:
 
     The SDK wraps a refresh endpoint (TokenOperation.refresh_token) that Webull
     Thailand does not document: its API index has only Create Token and Check
-    Token, and the one way it documents a token ending is INVALID after 15 days
-    without an API call (no fixed lifetime is documented). Neither deployment
-    reaches the call: PROD reads its token
+    Token, whose answers carry the expiry the token ends at; a token is also
+    INVALID after 15 days without an API call. Neither deployment reaches the
+    call: PROD reads its token
     from Secret Manager (skipped below) and lets Check Token decide its expiry
     (verify_production_token), and UAT runs with token checking off, so it has no
     token file.

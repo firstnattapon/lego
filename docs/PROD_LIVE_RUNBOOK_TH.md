@@ -142,9 +142,29 @@ symbol เดียว, whole shares, caps ต่ำ, window สั้น, เ�
 ห้ามหยุด Cloud Scheduler เป็นวิธีแรก (หยุด recovery ด้วย), ห้ามลบ outbox/fence/state, ห้ามเปลี่ยน status ใน RTDB เพื่อเปิด gate,
 ห้าม reset origin/p0/ledger หรือเปลี่ยน account เพื่อข้าม fence
 
-## 7. Token rotation (ทุก ≤ 15 วัน, โดยคน)
+## 7. Token: Webull ตัดสินวันหมดอายุ, ออกใหม่โดยคน
 
-token ของ PROD ออกผ่านขั้นตอน Webull ที่รองรับ (ต้องยืนยันตัวตนในแอป) ไม่ต่ออัตโนมัติ — เตือนเมื่อเหลือ ≤ 7 วัน และ runtime หยุดส่ง order ใหม่เมื่อเหลือ ≤ 3 วัน (ไม่ใช่ 24 ชม. ตามที่เอกสารเดิมเขียน — `token_health().ready`); การอ่านและ reconcile order ที่เปิดอยู่ยังทำได้จนกว่า token จะหมดอายุ ([audit 7 ตุลาคม](AUDIT_20261007_TH.md))
+- **วันหมดอายุคือค่าที่ Check Token ของ Webull ตอบ** (`expires` ใน SDK, `expires_at` ในเอกสาร) ไม่ใช่สำเนาที่เก็บใน secret ตอนออก token
+  - runtime ถาม Check Token ทุกครั้งที่สร้าง client (ก่อน SDK จะเรียก create_token) แล้วใช้ค่าของ Webull
+  - wrapper ขั้น 1/4 ก็ถาม `ops.py token-status` ก่อน และสั่ง 2FA เฉพาะเมื่อ Webull บอกว่าใช้ไม่ได้หรือเหลือ ≤ 3 วัน
+  - เอกสาร Webull ไม่บอกว่าวันหมดอายุเลื่อนตามการใช้หรือไม่ ถ้าเลื่อน ระบบเดินต่อเองโดยไม่ต้อง 2FA ใหม่
+- token ยัง `INVALID` ถ้าไม่มีการเรียก API 15 วันติดกัน (เช่นหยุด scheduler นานกว่านั้น)
+- ไม่มี refresh API ใน Webull TH จึงออกใหม่ได้ทางเดียวคือขั้นตอนที่ต้องยืนยันตัวตนในแอป
+- เตือนเมื่อเหลือ ≤ 7 วัน และ runtime หยุดส่ง order ใหม่เมื่อเหลือ ≤ 3 วัน (`token_health().ready`) และเมื่อเหลือ < 24 ชม.; การอ่านและ reconcile order ที่เปิดอยู่ยังทำได้จนกว่า token จะหมดอายุ ([audit 7 ตุลาคม](AUDIT_20261007_TH.md))
+- เห็น `AUTH_BACKOFF` / `INVALID_TOKEN` ทั้งที่ `ops.py token-status` บอก `NORMAL`: ตาม Trading API FAQ มักเป็น signature ไม่ตรง ให้ตรวจเวลาเครื่องและ app key/secret ก่อนออก token ใหม่
+
+ตรวจสถานะ token จริงจาก Webull ใน Cloud Shell (อ่านอย่างเดียว ไม่พิมพ์ token; ค่า secret มาจาก Secret Manager จึงไม่อยู่ใน command line หรือประวัติ shell):
+
+```bash
+export WEBULL_APP_KEY="$(gcloud secrets versions access latest --secret=webull-app-key-prod --project=lego-firebase)"
+export WEBULL_APP_SECRET="$(gcloud secrets versions access latest --secret=webull-app-secret-prod --project=lego-firebase)"
+gcloud secrets versions access latest --secret=webull-token-prod --project=lego-firebase | WEBULL_ENV=PROD python ops.py token-status
+unset WEBULL_APP_KEY WEBULL_APP_SECRET
+```
+
+exit 0 = ใช้ได้และเหลือเกิน 3 วัน, 1 = ใช้ไม่ได้หรือใกล้หมด (ต้องออกใหม่), 2 = ถาม Webull ไม่ได้ (wrapper ขั้น 1/4 ทำขั้นตอนนี้ให้อยู่แล้ว)
+
+ออก token ใหม่:
 
 ```bash
 python ops.py bootstrap-auth --token-file PRIVATE_TOKEN --secret projects/lego-firebase/secrets/<token-secret>          # dry-run

@@ -82,7 +82,9 @@ def test_order_history_is_read_for_a_client_id_no_order_carries(broker, monkeypa
     start, end = (datetime.fromisoformat(query[key].replace("Z", "+00:00"))
                   for key in ("start_time", "end_time"))
     assert query["end_time"].endswith("Z") and end <= datetime.now(timezone.utc)
-    assert timedelta(hours=23, minutes=59) < end - start <= timedelta(days=1)
+    # About a day: the start is taken before the history call reads "now", and both
+    # are cut to milliseconds, so the window can run a little over 24 hours.
+    assert timedelta(hours=23, minutes=59) < end - start < timedelta(days=1, minutes=1)
 
 
 def test_an_order_under_the_probe_client_id_fails_the_smoke(broker, monkeypatch):
