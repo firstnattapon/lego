@@ -147,7 +147,8 @@ symbol เดียว, whole shares, caps ต่ำ, window สั้น, เ�
 - **วันหมดอายุคือค่าที่ Check Token ของ Webull ตอบ** (`expires` ใน SDK, `expires_at` ในเอกสาร) ไม่ใช่สำเนาที่เก็บใน secret ตอนออก token
   - runtime ถาม Check Token ทุกครั้งที่สร้าง client (ก่อน SDK จะเรียก create_token) แล้วใช้ค่าของ Webull
   - wrapper ขั้น 1/4 ก็ถาม `ops.py token-status` ก่อน และสั่ง 2FA เฉพาะเมื่อ Webull บอกว่าใช้ไม่ได้หรือเหลือ ≤ 3 วัน
-  - เอกสาร Webull ไม่บอกว่าวันหมดอายุเลื่อนตามการใช้หรือไม่ ถ้าเลื่อน ระบบเดินต่อเองโดยไม่ต้อง 2FA ใหม่
+  - **วันหมดอายุเลื่อนตามการใช้** (วัดบน PROD 30 ต.ค., [audit 31 ตุลาคม](AUDIT_20261031_TH.md)): call แรกที่ห่างจากการต่อครั้งก่อน ≥ 24 ชม. ทำให้ Webull ตั้งวันหมดอายุใหม่ = เวลานั้น + 15 วัน
+    (2026-11-13T15:12:09Z → 2026-11-14T15:15:04Z ไม่มี 2FA, restart หรือ secret ใหม่) ⇒ ตราบที่ tick เรียก API ทุกวันทำการ ระบบเดินต่อเองโดยไม่ต้อง 2FA ใหม่ (วัดได้ครั้งเดียว จึงยังเฝ้า `token_warning`)
 - token ยัง `INVALID` ถ้าไม่มีการเรียก API 15 วันติดกัน (เช่นหยุด scheduler นานกว่านั้น)
 - ไม่มี refresh API ใน Webull TH จึงออกใหม่ได้ทางเดียวคือขั้นตอนที่ต้องยืนยันตัวตนในแอป
 - เตือนเมื่อเหลือ ≤ 7 วัน และ runtime หยุดส่ง order ใหม่เมื่อเหลือ ≤ 3 วัน (`token_health().ready`) และเมื่อเหลือ < 24 ชม.; การอ่านและ reconcile order ที่เปิดอยู่ยังทำได้จนกว่า token จะหมดอายุ ([audit 7 ตุลาคม](AUDIT_20261007_TH.md))
@@ -273,6 +274,7 @@ incident ของ health-policy ปิดเองหลัง 30 นาที�
 
 **เกณฑ์ canary เพิ่ม (S4)**: order tick ที่ตัดสินใจ+Place ใน tick เดียวเรียก broker ≈ 12 ครั้ง (instrument 1, positions 3, snapshot 3, open_orders 2, preview, place, order_detail) ใช้ 15–25 วินาทีบน UAT และ 3 จาก 7 order ต้องใช้ 2 tick
 (เลื่อนที่ `require_budget` ก่อน fence — fail-closed ไม่เสียเงิน แต่ Preview ซ้ำ). ก่อนขยาย caps บน PROD ให้วัดสัดส่วน order ที่ต้องใช้ 2 tick และ p95 ของ order tick จาก `lego_operation` / `lego_tick_completed`; ถ้าแย่กว่า UAT ให้หยุดและตัดสินใจเรื่องลดการอ่านซ้ำก่อน (ไม่แก้ในรอบนี้ — เป็น money path)
+ตั้งแต่ [audit 31 ตุลาคม](AUDIT_20261031_TH.md) การอ่าน positions ถูกเว้นจังหวะ (`webull_io._pace`: สามครั้งติดกันห่าง ≥ 4 s) — PROD ตอบ 429 เมื่อครั้งที่สามเริ่มก่อน ~3.5 s; order tick รอ `max(0, 4 − t)` s (`lego_operation` `pace_positions`; replay 30 ต.ค. สูงสุด 1.033 s) แทน 429 + back-off 2 s, จำนวนการอ่านเท่าเดิม
 
 ## 15. order ที่ถูกเลื่อนก่อน Place และ tick ที่เลื่อนที่ decision stage (จาก audit 21 ต.ค.)
 

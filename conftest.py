@@ -138,6 +138,18 @@ def _flight_recorder_isolated():
 
 
 @pytest.fixture(autouse=True)
+def _webull_pace_isolated():
+    """The positions pace is module state too: one test's reads must not delay the next."""
+    def clear():
+        webull_io = sys.modules.get("webull_io")  # never import it just to clear it
+        if webull_io is not None:
+            webull_io._PACE_DUE.clear()
+    clear()
+    yield
+    clear()
+
+
+@pytest.fixture(autouse=True)
 def _runtime_identity_test_default(monkeypatch):
     """HTTP pipeline tests use an opaque, non-production account identity."""
     # A developer's configured receiver must never receive test notifications.

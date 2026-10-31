@@ -1,0 +1,233 @@
+{
+ "schema": "lego_audit_input_hashes_v1",
+ "generated_at": "2026-10-31T04:01:14+00:00",
+ "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates are the numbers quoted in docs/AUDIT_20261031_TH.md and are reproducible with: python -m tools.trace_audit --json --logs downloaded-logs-20261031-100549.json --rtdb lego-firebase-paper-export.json --yaml YAML.txt --repo <clean checkout of ed793b3>. Read start times are log time minus duration_ms of each lego_operation event. Per-tick ids are left out.",
+ "inputs": [
+  {
+   "name": "downloaded-logs-20261031-100549.json",
+   "role": "Cloud Run export of lego-tick-prod (stdout, requests, stderr), revision 00003-dob",
+   "bytes": 2521034,
+   "sha256": "0ff3095125ffec97f83f0432c4f6b18fd7e189d96a39ce3b04c7587c2612161e"
+  },
+  {
+   "name": "lego-firebase-paper-export.json",
+   "role": "Realtime Database export of lego-firebase-paper (the PROD paper chain)",
+   "bytes": 793087,
+   "sha256": "8db13e4896a5748dc500b3bd448ef5f753f3ba863f8f3a0a139d3585434d2d1d"
+  },
+  {
+   "name": "YAML.txt",
+   "role": "Cloud Run revision lego-tick-prod-00003-dob (env, secrets by reference)",
+   "bytes": 13628,
+   "sha256": "51f7566ca8794cef97981be4eda195406a1fcd21c9ddb14fbebc3a1ee51e264d"
+  },
+  {
+   "name": "webull-llms.txt",
+   "role": "Webull TH OpenAPI documentation index (same as earlier audits)",
+   "bytes": 9289,
+   "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+  }
+ ],
+ "aggregates": {
+  "deployment": {
+   "revision": "lego-tick-prod-00003-dob",
+   "git_commit": "ed793b3",
+   "environment": "PROD",
+   "mode": "paper",
+   "active": true,
+   "symbol": "UBER",
+   "fix_c": 3000,
+   "diff": 5,
+   "allow_fractional": true,
+   "caps": {
+    "quantity": 60,
+    "notional_usd": 3750,
+    "session_orders": 2,
+    "window_end": "2026-11-05T21:00:00Z"
+   },
+   "session_key_mode": "market_day",
+   "stale_order": {
+    "action": "hold",
+    "seconds": 300,
+    "grace_seconds": 120,
+    "max_cancel_mutations": 1
+   },
+   "database": "lego-firebase-paper",
+   "alert_webhook_configured": false
+  },
+  "log_entries": 1271,
+  "log_by_stream": {
+   "stdout": 830,
+   "requests": 440,
+   "stderr": 1
+  },
+  "log_range_utc": [
+   "2026-10-30T13:25:04Z",
+   "2026-10-30T20:44:05Z"
+  ],
+  "instances": 1,
+  "ticks": 440,
+  "requests": 440,
+  "http_status": {
+   "200": 440
+  },
+  "tick_severity": {
+   "INFO": 440
+  },
+  "business_status": {
+   "SLOT_CONSUMED": 364,
+   "MARKET_CLOSED": 50,
+   "ROW_COMMITTED": 26
+  },
+  "committed_rows": {
+   "READY_BUY": 11,
+   "READY_SELL": 7,
+   "PASS_THRESHOLD": 8
+  },
+  "tick_duration_ms": {
+   "p50": 809.4,
+   "p95": 2328.6,
+   "max": 9705.4
+  },
+  "order_tick_duration_ms": {
+   "n": 18,
+   "min": 3999.4,
+   "max": 9705.4
+  },
+  "request_latency_s": {
+   "p50": 0.82,
+   "p95": 2.38,
+   "max": 9.78
+  },
+  "lego_operation": {
+   "total": 250,
+   "ok": 246,
+   "error": 4,
+   "by_operation": {
+    "positions": 65,
+    "snapshot": 61,
+    "open_orders": 35,
+    "sdk_request": 30,
+    "instrument": 26,
+    "preview": 17,
+    "balance": 10,
+    "accounts": 6
+   }
+  },
+  "too_many_requests": {
+   "count": 4,
+   "route": "/trading/assets/positions/list",
+   "http_status": 429,
+   "at_utc": [
+    "2026-10-30T14:00:09Z",
+    "2026-10-30T16:00:09Z",
+    "2026-10-30T17:00:09Z",
+    "2026-10-30T18:45:07Z"
+   ],
+   "read_of_tick": "third of three",
+   "served_on_retry": 4,
+   "retry_start_after_second_read_s": [
+    3.365,
+    3.307,
+    3.683,
+    3.256
+   ],
+   "retry_start_after_refusal_s": [
+    2.147,
+    2.157,
+    2.173,
+    2.162
+   ]
+  },
+  "third_positions_read_start_s": {
+   "refused": {
+    "14:00": 3.188,
+    "16:00": 3.478,
+    "17:00": 3.513,
+    "18:45": 2.967
+   },
+   "served": {
+    "13:30": 3.641,
+    "13:45": 4.165,
+    "14:15": 3.949,
+    "14:30": 5.582,
+    "14:45": 3.589,
+    "15:15": 3.743,
+    "15:30": 3.682,
+    "15:45": 5.319,
+    "16:15": 3.702,
+    "17:45": 3.499,
+    "18:00": 4.672,
+    "19:00": 3.576,
+    "19:45": 3.586
+   }
+  },
+  "intents": {
+   "total": 18,
+   "UNSENT_ABORTED_with_paper_fill": 16,
+   "SUPPRESSED_STATE_CHANGED": 2,
+   "suppressed": [
+    {
+     "slot": 21,
+     "side": "SELL",
+     "decision_price": 65.02,
+     "dispatch_price": 65.01,
+     "phase": "post_preview",
+     "reason": "side_changed_or_pass"
+    },
+    {
+     "slot": 24,
+     "side": "BUY",
+     "decision_price": 65.035,
+     "dispatch_price": 65.04,
+     "phase": "pre_preview",
+     "reason": "side_changed_or_pass"
+    }
+   ]
+  },
+  "preview_fee_pct": {
+   "n": 17,
+   "min": 0.0907,
+   "max": 0.3846
+  },
+  "expiry_reported_by_webull": {
+   "before": "2026-11-13T15:12:09Z",
+   "after": "2026-11-14T15:15:04Z",
+   "changed_between_client_builds_utc": [
+    "2026-10-30T14:45:06Z",
+    "2026-10-30T15:45:07Z"
+   ],
+   "instance_restarted": false
+  },
+  "rtdb": {
+   "chain_version": 26,
+   "dna_steps": [
+    988,
+    1013
+   ],
+   "order_audit": 18,
+   "transitions": 18,
+   "heartbeat": {
+    "at": "2026-10-31T02:58:05Z",
+    "boot_at": "2026-10-30T08:28:27Z",
+    "ticks": 1111,
+    "write_errors": 0,
+    "internal_errors": 0
+   }
+  },
+  "trace_audit": {
+   "P0": 0,
+   "P1": 3,
+   "P2": 2,
+   "INFO": 1,
+   "codes": [
+    "ALERTING_NOT_CONFIGURED",
+    "RELEASE_WINDOW",
+    "CANDIDATE_MISMATCH",
+    "DISPATCH_SUPPRESSED",
+    "WEBULL_SDK_ERRORS",
+    "LOG_EXPORT_SHORT"
+   ]
+  }
+ }
+}

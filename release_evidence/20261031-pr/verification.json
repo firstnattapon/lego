@@ -1,0 +1,98 @@
+{
+ "schema": "lego_audit_verification_v1",
+ "generated_at": "2026-10-31T04:01:14+00:00",
+ "base_commit": "ed793b3924334c1d4425a6ad1a9aa1b25daecbd6",
+ "python": "Python 3.12.3 (the version CI runs), dependencies exactly as pinned in requirements-dev.txt",
+ "local_status": "PASS",
+ "failed_checks": [],
+ "real_money_ready": false,
+ "release_state": "NO_GO",
+ "mode": "paper, unchanged (owner decision 2026-10-31: keep testing PROD paper as before)",
+ "candidate": {
+  "hash_of_this_tree": "25670bbcb3b6af61e7a5df9a8bad21c003c41833dc84a50e33870deb6ff66b5a",
+  "file_count": 219,
+  "scope": "backend-only",
+  "computed_with": "tools/candidate_manifest.py build_manifest() on the working tree that was committed (release_evidence/ is excluded from the hash)",
+  "deployed_before_this_change": "272fdb4374e7a12e9da8e4bf433aa3a0e81154327773106b14062c9dd4fa10eb",
+  "clean_base_backend_only_prefix": "6528b8ae52"
+ },
+ "note": "One runtime change: webull_io paces GET /trading/assets/positions/list (GCRA, one start per 4 s after a burst of 2) at BoundedApiClient.get_response, the boundary every SDK request crosses. No read is removed and the decision, ledger, paper, fence and gate code is untouched. The candidate hash changes, so the paper redeploy before 2026-11-05T21:00:00Z is a new release, as always. Nothing here touched a broker, a Firebase project or a deployed revision.",
+ "code_change": {
+  "files": {
+   "webull_io.py": "+_PACED_ROUTES, _PACE_DUE, _pace(); get_response reads the action first and paces it; 429 comment points to the pace",
+   "conftest.py": "+autouse fixture that clears webull_io._PACE_DUE around every test (module state, like the flight recorder)"
+  },
+  "new_files": [
+   "test_audit_20261031.py",
+   "docs/AUDIT_20261031_TH.md",
+   "release_evidence/20261031-pr/"
+  ],
+  "docs_changed": [
+   "RELEASE_STATUS_TH.md",
+   "docs/PROD_LIVE_RUNBOOK_TH.md"
+  ],
+  "existing_tests_changed": 0
+ },
+ "full_suite": {
+  "command": "pytest -q",
+  "junit_sha256": "f0bb2ac951e70937f35e818fd4f2e6e6d04eb83f8de9278c7cbe842f739f4c55",
+  "counts": {
+   "tests": 2312,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2303
+  },
+  "baseline_before_change": {
+   "tests": 2300,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2291
+  },
+  "duration_s": {
+   "baseline": 63.24,
+   "after": 59.24
+  },
+  "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +12 tests (test_audit_20261031.py); no existing test was modified; no test slowed (pytest --durations=15 lists only tests that were slow before)."
+ },
+ "mutation": {
+  "mutants": 4,
+  "killed": 4,
+  "survivors": [],
+  "by_file": {
+   "webull_io.py": 4
+  },
+  "note": "each mutant applied to webull_io.py and test_audit_20261031.py run, then the file restored byte for byte: no _pace call in get_response (8 failed), interval 3.4 s (7), burst 3 (8), budget check before the wait removed (1)"
+ },
+ "checks": [
+  {
+   "id": "py_compile",
+   "command": "python -m py_compile *.py tools/*.py",
+   "exit_code": 0
+  },
+  {
+   "id": "pyflakes_changed",
+   "command": "python -m pyflakes test_audit_20261031.py webull_io.py conftest.py",
+   "exit_code": 0
+  },
+  {
+   "id": "new_tests",
+   "command": "pytest -q test_audit_20261031.py",
+   "tests": {
+    "test_audit_20261031.py": 12
+   },
+   "result": "12 passed"
+  },
+  {
+   "id": "gitleaks_keywords",
+   "command": "grep the added lines for access|auth|api|credential|key|secret|token followed by an assigned value",
+   "result": "no match"
+  },
+  {
+   "id": "line_endings",
+   "command": "grep -l CR in every changed file",
+   "result": "LF only"
+  }
+ ]
+}
