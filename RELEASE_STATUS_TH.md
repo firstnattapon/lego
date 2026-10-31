@@ -1,5 +1,13 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 31 ตุลาคม: [audit PROD paper session แรก — `429 TOO_MANY_REQUESTS` ที่ `positions/list` ครั้งที่สามของ order tick; เว้นจังหวะการอ่านแทน](docs/AUDIT_20261031_TH.md) — revision `lego-tick-prod-00003-dob` (main@ed793b3, PROD `LEGO_MODE=paper`, UBER, FIX_C 3000, DIFF 5),
+log 30 ต.ค. 13:25Z → 20:44Z: 440 tick ↔ 440 request (HTTP 200 ทั้งหมด), 26 slot ครบ, 18 intent → paper fill 16 + `SUPPRESSED_STATE_CHANGED` 2 (ราคาข้าม DIFF — ถูกต้อง), `tools.trace_audit` 0 P0.
+**แก้ใน source**: Webull ตอบ 429 ที่การอ่าน positions ครั้งที่สาม 4 ใน 17 order tick (เริ่ม 2.97–3.51 s หลังครั้งแรก; ≥ 3.58 s ผ่านทุกครั้ง) ⇒ `webull_io._pace` ที่ `BoundedApiClient` จุดเดียว:
+สามครั้งติดกันห่าง ≥ 4 s, ≤ 9 ต่อ 30 s (เอกสาร 10/30s); ไม่ลดการอ่าน ไม่แตะสูตร/ledger/paper/fence/gate. token: Webull เลื่อนวันหมดอายุเองตามการใช้ (ตอบข้อที่เปิดค้างจาก 30 ต.ค.).
+เทสต์ 2,303 passed / 9 skipped (+12, ไม่แก้เทสต์เดิม), mutation จับ 4/4. ผล local และ evidence อยู่ใน `release_evidence/20261031-pr/`.
+สถานะ: **PROD paper ทดสอบต่อ; NO-GO เงินจริง** — หลัง merge deploy paper ใหม่ด้วย `LEGO_MODE_OVERRIDE=paper LEGO_FIX_C_OVERRIDE=3000 LEGO_DIFF_OVERRIDE=5` **ก่อน 2026-11-05T21:00Z**
+(ต้องระบุ DIFF: ค่าเริ่มต้นของ script คือ 25 = chain paper ใหม่จาก 0 หุ้น); เงินจริงยังต้อง alert ถึงคนจริง (G4), Place/Order Detail/Cancel บน PROD (canary เท่านั้น) และการตัดสินใจของเจ้าของหลังจบ paper.
+
 ล่าสุด 29 ตุลาคม: [audit UAT 3 session — broker ทำทุก order เป็น `FAILED` ไม่มีเหตุผลตั้งแต่ 27 ต.ค. 13:45Z, circuit หยุดการเทรดตามดีไซน์, ไม่มีอะไรให้แก้ในโค้ด](docs/AUDIT_20261029_TH.md) — revision `00056` (main@de59904 หลัง PR #37, UBER),
 log 25 ต.ค. 08:44Z → 29 ต.ค. 08:50Z: 4,650 tick ↔ 4,650 request, แถว 884–961 ต่อเนื่อง (78 slot ครบ), `tools.trace_audit` 0 P0 · แถว 130/130 และ fill 18/18 0 mismatch, holdings 151.3228 และ cash ของ broker ตรงกับ fill ของ LEGO ทุกเซ็นต์, candidate `852c11ec…` ตรงกับ checkout สะอาด.
 **26 ต.ค. เทรดได้** (Place 7 / FILLED 5); **27–28 ต.ค. order 9/9 `FAILED`** (Place 200, Order Detail ไม่มีเหตุผล) ⇒ halt 14:32Z, probe อัตโนมัติ 6 ครั้งตามตาราง UAT ล้มทุกครั้ง, ledger ไม่ขยับ.

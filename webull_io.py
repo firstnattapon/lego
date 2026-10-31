@@ -37,7 +37,8 @@ TOKEN_FILE = "token.txt"
 # adapter makes sits under a small per-endpoint Webull limit (Trading API
 # overview: account 10/30s, instruments 60/60s, orders 15/s, order query 40/2s;
 # market data 300/60s). Treating a throttled read as a hard failure turned a
-# two-second wait into a missed slot.
+# two-second wait into a missed slot. positions/list is also paced before it is
+# sent (_pace), because three reads in one order tick drew the 429 on PROD.
 _TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
 _TRANSIENT_CODES = {
     "GATEWAY_TIMEOUT", "TIMEOUT", "SERVICE_UNAVAILABLE",
@@ -987,6 +988,36 @@ _OPERATION_BY_ROUTE = {
     "/trading/orders/open-orders/list": "open_orders",
     "/trading/instruments/stocks/profiles/list": "instrument",
 }
+# An order tick reads positions three times (decision, before and after Preview).
+# PROD answered 429 TOO_MANY_REQUESTS to the third read when it started 2.97-3.51 s
+# after the first (2026-10-30, 4 of 17 such ticks); every third read that started
+# 3.58 s or later was served (docs/AUDIT_20261031_TH.md). Webull documents 10/30s
+# and evidently enforces it over a few seconds. Starting the route at most once
+# per 4 s after a burst of 2 keeps every read the gates rely on, inside both
+# limits, for the price of a wait of about a second.
+_PACED_ROUTES = {"/trading/assets/positions/list": (4.0, 2)}  # seconds per request, burst
+_PACE_DUE: dict[str, float] = {}
+
+
+def _pace(action: str) -> None:
+    """Hold a paced route until it may start (GCRA on the monotonic clock).
+
+    Any three consecutive starts span at least 4 s and no 30 s holds more than 9
+    of them. The wait is refused like a retry back-off when the tick cannot
+    afford it, before anything is sent.
+    """
+    rule = _PACED_ROUTES.get(action)
+    if rule is None:
+        return
+    interval, burst = rule
+    now = time.monotonic()
+    due = max(_PACE_DUE.get(action, now), now)
+    wait = due - (burst - 1) * interval - now
+    if wait > 0:
+        tick_runtime.require_budget(wait + 2.0)
+        with tick_runtime.phase("pace_" + _OPERATION_BY_ROUTE.get(action, "sdk_request")):
+            time.sleep(wait)
+    _PACE_DUE[action] = due + interval
 
 
 def _observe_exchange(operation: str, request, started: float, *, response=None, exc=None) -> None:
@@ -1030,6 +1061,9 @@ def _bounded_api_class(base):
     """Use SDK request timeout setters; keep signing and retry policy untouched."""
     class BoundedApiClient(base):
         def get_response(self, request):
+            action = request.get_action_name()
+            # First, so the budget check and the timeouts below see what the wait left.
+            _pace(action)
             tick_runtime.require_budget()
             left = tick_runtime.remaining()
             if left is not None:
@@ -1038,7 +1072,6 @@ def _bounded_api_class(base):
                 request.set_read_timeout(min(10.0, usable / 2))
             if tick_runtime.correlation_id():
                 auth_circuit.guard(auth_circuit_key())
-            action = request.get_action_name()
             operation = _OPERATION_BY_ROUTE.get(action, "sdk_request")
             started = time.monotonic()
             try:
