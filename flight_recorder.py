@@ -431,6 +431,12 @@ DECISION_FORMULA = (
     "qty*P<1 -> PASS_MIN_ORDER; qty<=0 -> PASS; R=FIX_C*ln(P/P0). The decision row books no dA "
     "(acted=False): dA=0, A=A_prev, E=frozen. At fill: dA=FIX_C*(P_fill/P_acted-1), "
     "A=A_prev+dA, E=A-R.")
+# The same decision with LEGO_LEAPS > 0; recorded only then, so a trace without
+# LEAPS keeps the formula it always had.
+DECISION_FORMULA_LEAPS = (
+    "LEAPS: holdings=REAL shares, V=(holdings+LEAPS)*P; SELL with |gap|/P or qty "
+    ">= holdings -> PASS_SELL_EXCEEDS_REAL (not cut), else cap at REAL. "
+    + DECISION_FORMULA)
 
 
 @_safe
@@ -447,6 +453,11 @@ def decision_equation(cfg, snapshot, anchor, row, step) -> None:
         "dp": cfg.decimal_precision, "inc": cfg.quantity_increment,
         "strategy": cfg.strategy_id, "genesis": anchor is None,
     }
+    leaps = getattr(cfg, "leaps_shares", 0.0)
+    if leaps:
+        # holdings above stays the real reading; tools/trace_audit adds these back.
+        inputs["leaps_shares"] = leaps
+        inputs["prev_leaps_shares"] = getattr(anchor, "prev_leaps_shares", None)
     outputs = {
         "status": row.get("สถานะ"), "action": row.get("คำสั่ง"), "side": row.get("ฝั่ง"),
         "reason": row.get("เหตุผล"), "qty": row.get("จำนวนสั่ง (หุ้น)"),
@@ -456,7 +467,9 @@ def decision_equation(cfg, snapshot, anchor, row, step) -> None:
         "acted": meta.get("acted"), "p0_next": meta.get("p0_next"),
         "acted_price_next": meta.get("acted_price_next"),
     }
-    equation("D08", inputs, outputs, DECISION_FORMULA)
+    if leaps:
+        outputs["holdings_effective"] = row.get("จำนวนถือครอง (หุ้น)")
+    equation("D08", inputs, outputs, DECISION_FORMULA_LEAPS if leaps else DECISION_FORMULA)
 
 
 @_safe
@@ -495,6 +508,10 @@ def fill_equation(cfg, intent, summary, finalized) -> None:
     outputs = {key: finalized.get(key) for key in (
         "applied", "seq", "delta_actual", "actual_cumulative", "excess", "reference",
         "holdings_after", "funding_reference_offset", "initial_funding")}
+    if finalized.get("real_holdings_after") is not None:
+        # LEAPS: holdings_after is real + LEAPS; the walk is on real shares.
+        outputs["real_holdings_after"] = finalized.get("real_holdings_after")
+        outputs["leaps_shares"] = finalized.get("leaps_shares")
     outputs["status"] = "applied" if finalized.get("applied") else "already_applied"
     equation("W13", inputs, outputs, FILL_FORMULA)
 

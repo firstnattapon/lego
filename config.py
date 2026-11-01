@@ -1,9 +1,13 @@
 """Validated v2 configuration for one LEGO deployment.
 
-The six :class:`OperatorSettings` fields are the complete strategy surface.
-Infrastructure identity, credentials, and release authorization deliberately
-live in :class:`DeploymentProfile`; they are deployment controls, not trading
-knobs and cannot be supplied by an HTTP request.
+The six :class:`OperatorSettings` fields are the complete strategy surface,
+plus one optional seventh: ``leaps_shares`` (``LEGO_LEAPS``), LEAPS held as a
+stock replacement in share-equivalents (1 contract = 100). Unset or 0 it is
+absent from the strategy identity, so such a deployment is bit for bit the
+six-field one. Infrastructure identity, credentials, and release
+authorization deliberately live in :class:`DeploymentProfile`; they are
+deployment controls, not trading knobs and cannot be supplied by an HTTP
+request.
 """
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Mapping
 
@@ -54,6 +59,33 @@ def _finite_decimal(value: object, *, name: str, positive: bool) -> float:
         op = "> 0" if positive else ">= 0"
         raise ConfigurationError(f"{name} ต้อง finite และ {op}")
     return number
+
+
+def _optional_shares(value: object, *, name: str) -> float:
+    """An optional share count: unset or blank is 0, otherwise a finite decimal >= 0.
+
+    LEGO_LEAPS is optional by design: a deployment that never sets it, or sets it
+    to an empty string, must behave exactly as before. Anything else has to be a
+    number the operator meant; a typo, NaN, infinity or a negative count is
+    refused instead of being read as zero. Parsed as Decimal so the value the
+    operator wrote is the value that is summed with the real shares.
+    """
+    if value is None:
+        return 0.0
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    try:
+        number = Decimal(text)
+    except InvalidOperation as exc:
+        raise ConfigurationError(
+            f"{name} ต้องเป็นตัวเลข (หุ้นจำลอง, 1 สัญญา = 100)") from exc
+    if not number.is_finite() or number < 0:
+        raise ConfigurationError(f"{name} ต้อง finite และ >= 0")
+    result = float(number)
+    if not math.isfinite(result):          # e.g. 1e400: finite as Decimal, not as float
+        raise ConfigurationError(f"{name} ต้อง finite และ >= 0")
+    return result + 0.0                    # -0 is 0
 
 
 @dataclass(frozen=True)
@@ -133,6 +165,10 @@ class OperatorSettings:
     dna_bundle: DNABundle
     mode: str = "observe"
     active: bool = False
+    # LEAPS as stock replacement (LEGO_LEAPS): share-equivalents added to the
+    # real broker shares before every decision. Never sold: a SELL is limited to
+    # the real shares (lego_one_row.build_decision). 0 = the six-field contract.
+    leaps_shares: float = 0.0
 
     def __post_init__(self) -> None:
         symbol = self.symbol.strip().upper()
@@ -141,6 +177,10 @@ class OperatorSettings:
         object.__setattr__(self, "symbol", symbol)
         _finite_decimal(self.principal_usd, name="principal_usd", positive=True)
         _finite_decimal(self.diff_usd, name="diff_usd", positive=False)
+        if isinstance(self.leaps_shares, bool):
+            raise ConfigurationError("leaps_shares ต้องเป็นตัวเลข")
+        leaps = _finite_decimal(self.leaps_shares, name="leaps_shares", positive=False)
+        object.__setattr__(self, "leaps_shares", leaps + 0.0)
         mode = self.mode.strip().lower()
         if mode not in MODES:
             raise ConfigurationError("mode ต้องเป็น observe, preview, paper หรือ trade")
@@ -167,7 +207,7 @@ class OperatorSettings:
         return PAPER_STRATEGY_ID if self.paper else STRATEGY_ID
 
     def canonical(self) -> dict:
-        return {
+        canonical = {
             "symbol": self.symbol,
             "principal_usd": format(self.principal_usd, ".17g"),
             "diff_usd": format(self.diff_usd, ".17g"),
@@ -175,6 +215,11 @@ class OperatorSettings:
             "mode": self.mode,
             "active": self.active,
         }
+        # Only when set: LEAPS change what is traded, so they are part of what a
+        # release authorizes, and without them the hash is the six-field one.
+        if self.leaps_shares:
+            canonical["leaps_shares"] = format(self.leaps_shares, ".17g")
+        return canonical
 
     @property
     def config_hash(self) -> str:
@@ -328,6 +373,7 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         dna_bundle=_load_bundle(env),
         mode=str(mode),
         active=active,
+        leaps_shares=_optional_shares(env.get("LEGO_LEAPS"), name="LEGO_LEAPS"),
     )
     deployment = DeploymentProfile(
         environment=env.get("WEBULL_ENV", "UAT"),

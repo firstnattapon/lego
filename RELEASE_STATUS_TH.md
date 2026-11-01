@@ -1,5 +1,11 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 1 พฤศจิกายน: [LEAPS แทนหุ้น — `LEGO_LEAPS`](docs/LEAPS_STOCK_REPLACEMENT_TH.md) (หุ้นจำลอง, 1 สัญญา = 100; ค่าเริ่มต้น 0 = เหมือนเดิมทุกบิต).
+ตำแหน่งที่ rebalance = หุ้นจริง + LEAPS (Decimal) ก่อนคำนวณทุกอย่าง; BUY ซื้อหุ้นจริง; SELL ได้จากหุ้นจริงเท่านั้น — ต้องขาย ≥ หุ้นจริง → `PASS_SELL_EXCEEDS_REAL` ไม่ตัดเหลือ.
+guard/`prev_holdings`/drift/paper/`run_id` อยู่บนหุ้นจริง; fill `holdings_after` = หุ้นจริง + LEAPS ตรง ledger; เปลี่ยน LEAPS กลาง chain = chain เดิม + event (`leaps_shares_changed_from`); FIX_C คงเดิม (chain ใหม่).
+เทสต์ 2,350 passed / 9 skipped (+47, เพิ่มชื่อ `LEGO_LEAPS` ใน `SCRIPT_BINDING_NAMES` ให้ตรง script, ไม่ลด/ไม่ skip), characterization baseline ผ่านไม่แก้, mutation จับ 14/14.
+สถานะ: **code-ready (paper ก่อน); NO-GO เงินจริงเหมือนเดิม** — release ที่ LEAPS > 0 ต้อง plan binding ใหม่ (script ทำให้).
+
 ล่าสุด 31 ตุลาคม: [audit PROD paper session แรก — `429 TOO_MANY_REQUESTS` ที่ `positions/list` ครั้งที่สามของ order tick; เว้นจังหวะการอ่านแทน](docs/AUDIT_20261031_TH.md) — revision `lego-tick-prod-00003-dob` (main@ed793b3, PROD `LEGO_MODE=paper`, UBER, FIX_C 3000, DIFF 5),
 log 30 ต.ค. 13:25Z → 20:44Z: 440 tick ↔ 440 request (HTTP 200 ทั้งหมด), 26 slot ครบ, 18 intent → paper fill 16 + `SUPPRESSED_STATE_CHANGED` 2 (ราคาข้าม DIFF — ถูกต้อง), `tools.trace_audit` 0 P0.
 **แก้ใน source**: Webull ตอบ 429 ที่การอ่าน positions ครั้งที่สาม 4 ใน 17 order tick (เริ่ม 2.97–3.51 s หลังครั้งแรก; ≥ 3.58 s ผ่านทุกครั้ง) ⇒ `webull_io._pace` ที่ `BoundedApiClient` จุดเดียว:

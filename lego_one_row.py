@@ -17,6 +17,15 @@ worker's finalization reduces to once a fill is confirmed, and it stays here so
 the two paths cannot drift apart. DNA progression is supplied by the market
 clock in production; legacy anchor+1 remains available for shadow mode and
 backward-compatible tests.
+
+LEAPS as stock replacement (``Config.leaps_shares``, env ``LEGO_LEAPS``): the
+position the strategy rebalances is the real broker shares plus the LEAPS
+share-equivalents (1 contract = 100). They are added once, first, inside
+`build_decision`, so the row and every dispatch-time re-check value the same
+position, while a SELL stays limited to the real shares (LEAPS cannot be sold
+as shares). Everything that guards the account — the vanished-position check,
+the chain's prev_holdings, the paper book — keeps reading real shares only.
+With no LEAPS every value here is the very one it always was.
 """
 from __future__ import annotations
 
@@ -30,6 +39,9 @@ SNAPSHOT_READY = "SNAPSHOT_READY"
 PASS_DNA_ZERO = "PASS_DNA_ZERO"
 PASS_THRESHOLD = "PASS_THRESHOLD"
 PASS_MIN_ORDER = "PASS_MIN_ORDER"
+# LEAPS only: the rebalance would have to sell at least every real share. LEAPS
+# cannot be sold as shares, and the order is never cut down to what is held.
+PASS_SELL_EXCEEDS_REAL = "PASS_SELL_EXCEEDS_REAL"
 READY_BUY = "READY_BUY"
 READY_SELL = "READY_SELL"
 DECISION_STAGE = 8
@@ -71,10 +83,16 @@ class Anchor:
     p0: float
     prev_price: float
     prev_actual: float
+    # Real broker shares, never LEAPS: check_holdings_continuity compares it with
+    # a broker reading, and the paper book is this number.
     prev_holdings: float | None = None
     # Persisted execution-terminal E. None denotes a legacy state that did not
     # store the frozen basis and therefore needs the old reconstruction path.
     prev_excess: float | None = None
+    # LEAPS share-equivalents the chain last decided with. None: never used.
+    # A different value now is a LEAPS rollover, recorded on the row it first
+    # applies to; the ledger (P0, A, E) carries on, it is never rebased.
+    prev_leaps_shares: float | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +104,9 @@ class Config:
     strategy_id: str = "shannon_demon_lego"
     decimal_precision: int = 5
     quantity_increment: float = 1.0
+    # LEGO_LEAPS share-equivalents. Deliberately not part of lego_state.config_hash:
+    # changing it continues the same chain instead of starting a new one.
+    leaps_shares: float = 0.0
 
     def __post_init__(self):
         if not self.symbol or not str(self.symbol).strip():
@@ -98,6 +119,51 @@ class Config:
             raise ValueError("decimal_precision ต้อง 0..5")
         if not (math.isfinite(self.quantity_increment) and self.quantity_increment > 0):
             raise ValueError("quantity_increment ต้อง finite และ > 0")
+        if (isinstance(self.leaps_shares, (bool, str))
+                or not (math.isfinite(self.leaps_shares) and self.leaps_shares >= 0)):
+            raise ValueError("leaps_shares ต้อง finite และ >= 0")
+        object.__setattr__(self, "leaps_shares", float(self.leaps_shares) + 0.0)
+
+
+def effective_holdings(real_holdings: float, leaps_shares: float = 0.0) -> float:
+    """The position the strategy rebalances: real shares plus LEAPS share-equivalents.
+
+    Without LEAPS this returns the real reading itself, the very same float, so
+    a deployment that never sets LEGO_LEAPS computes bit for bit what it always
+    did. With LEAPS the sum is taken in Decimal on each float's shortest repr:
+    151.3228 + 100 is 251.3228, not a binary neighbour of it.
+    """
+    if not leaps_shares:
+        return real_holdings
+    return float(Decimal(str(real_holdings)) + Decimal(str(leaps_shares)))
+
+
+def _shares_text(value: Decimal) -> str:
+    """A share count for a human: at most 6 places, no trailing zeros."""
+    text = format(value.quantize(Decimal("0.000001"), rounding=ROUND_DOWN), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _sell_exceeds_real(gap: float, price: float, real_holdings: float, qty: float,
+                       leaps_shares: float) -> str | None:
+    """The PASS reason when a LEAPS SELL could only be met by every real share or more.
+
+    LEAPS are not shares and cannot be sold as shares, so the sale has to come
+    out of the real position. When the rebalance needs at least all of it — the
+    exact quantity |gap| / P, or the quantity after rounding — the slot passes
+    instead of selling what is there: a partial fill of the target is not the
+    target, and selling the last real share would leave a zero position that
+    check_holdings_continuity (by design) reads as a broker that lost the symbol.
+    """
+    need = Decimal(str(abs(gap))) / Decimal(str(price))
+    held = Decimal(str(real_holdings))
+    rounded = Decimal(str(qty))
+    if need < held and rounded < held:
+        return None
+    return (f"{PASS_SELL_EXCEEDS_REAL}: ต้องขาย {_shares_text(max(need, rounded))} หุ้น "
+            f"≥ หุ้นจริง {_shares_text(held)} หุ้น — LEAPS "
+            f"{_shares_text(Decimal(str(leaps_shares)))} หุ้นจำลองขายเป็นหุ้นไม่ได้ "
+            "จึงไม่ส่ง order (ไม่ตัดเหลือ)")
 
 
 def position_vanished(prev_holdings: float | None, holdings: float) -> bool:
@@ -128,6 +194,12 @@ def check_holdings_continuity(anchor: Anchor | None, holdings: float) -> None:
     leaves fix_c/price > 0 shares behind. Holdings reaching exactly zero while
     the chain remembers a position is therefore not a market event, and only
     that case is refused — a partial drop is ordinary and stays silent.
+
+    Both numbers are REAL shares, with LEAPS or without. Adding LEAPS here would
+    disarm the check exactly when it matters: the effective position never reads
+    0 while LEAPS are held, so a response that lost the symbol would pass as a
+    partial drop. With LEAPS a SELL that would take the real position to 0
+    becomes PASS_SELL_EXCEEDS_REAL instead, so the rule above still holds.
     """
     if anchor is None:
         return                       # genesis: no reference to contradict
@@ -180,13 +252,24 @@ class Decision:
 
 
 def build_decision(cfg: Config, price: float, holdings: float, signal: int) -> Decision:
+    """One slot's decision from the quote and the broker's REAL shares.
+
+    ``holdings`` is what the broker says the account holds (option rows are not
+    shares, see webull_io._extract_qty). LEAPS share-equivalents are added here,
+    before anything is computed, so the decision row and every dispatch-time
+    re-check (execution_service._dispatch_quote_safety) value the same position:
+    value and gap use real + LEAPS. A SELL can only come out of the real shares:
+    its ceiling is the real holdings, and a SELL that needs at least all of them
+    is PASS_SELL_EXCEEDS_REAL rather than a truncated order.
+    """
     if not (math.isfinite(price) and price > 0):
         raise ValueError("price (Pₙ) ต้อง finite และ > 0")
     if not (math.isfinite(holdings) and holdings >= 0):
         raise ValueError("holdings ต้อง finite และ >= 0")
     if signal not in (0, 1):
         raise ValueError("signal ต้อง ∈ {0,1}")
-    value = holdings * price
+    position = effective_holdings(holdings, cfg.leaps_shares)
+    value = position * price
     gap = value - cfg.fix_c
     if signal == 0:
         return Decision(PASS_DNA_ZERO, "PASS", "", PASS_DNA_ZERO, 0.0, value, gap)
@@ -199,9 +282,17 @@ def build_decision(cfg: Config, price: float, holdings: float, signal: int) -> D
     else:
         qty = round(abs(gap) / price, cfg.decimal_precision)
     if gap > cfg.diff:
+        if cfg.leaps_shares:
+            # With LEAPS the exact rebalance can exceed the real shares (LEAPS ×
+            # price alone may be above FIX_C), and LEAPS cannot be sold as shares.
+            exceeded = _sell_exceeds_real(gap, price, holdings, qty, cfg.leaps_shares)
+            if exceeded is not None:
+                return Decision(PASS_SELL_EXCEEDS_REAL, "PASS", "", exceeded, 0.0,
+                                value, gap)
         # The exact rebalance is below holdings because FIX_C > 0, but rounding
         # can push a tiny fractional SELL above holdings. Cap at holdings rounded
         # down to the same broker precision; never round this ceiling upward.
+        # `holdings` is the real position: with LEAPS too, the ceiling is real.
         quantum = Decimal(1).scaleb(-cfg.decimal_precision)
         sell_ceiling = float(Decimal(str(holdings)).quantize(
             quantum, rounding=ROUND_DOWN))
@@ -268,13 +359,48 @@ class ExecutionFill:
     """
     filled_price: float
     filled_quantity: float
+    # The ledger's position after the fill, the unit of column 7: real shares
+    # plus the row's LEAPS share-equivalents (just the real shares without LEAPS).
     holdings_after: float
+    # LEAPS only: the broker's real reading behind holdings_after, and the LEAPS
+    # added to it. None means no LEAPS, and holdings_after is the real reading.
+    real_holdings_after: float | None = None
+    leaps_shares: float = 0.0
 
     @property
     def acted(self) -> bool:
         """Shares moved. No status, and no READY_*, can substitute for this."""
         return (math.isfinite(self.filled_quantity) and self.filled_quantity > 0
                 and math.isfinite(self.filled_price) and self.filled_price > 0)
+
+    @property
+    def broker_holdings_after(self) -> float:
+        """Real shares after the fill: what the chain's prev_holdings must hold."""
+        return (self.holdings_after if self.real_holdings_after is None
+                else self.real_holdings_after)
+
+    @classmethod
+    def from_broker(cls, filled_price: float, filled_quantity: float,
+                    real_holdings_after: float,
+                    leaps_shares: float = 0.0) -> "ExecutionFill":
+        """A fill from the broker's real post-fill reading and the row's LEAPS.
+
+        Without LEAPS this is exactly ExecutionFill(price, quantity, real), the
+        object every fill has always been. With LEAPS holdings_after becomes
+        real + LEAPS so it matches the ledger, and the real reading is kept.
+        """
+        if not leaps_shares:
+            return cls(filled_price=filled_price, filled_quantity=filled_quantity,
+                       holdings_after=real_holdings_after)
+        if isinstance(leaps_shares, bool) or not (
+                math.isfinite(leaps_shares) and leaps_shares > 0):
+            raise ValueError("leaps_shares ต้อง finite และ >= 0")
+        if not (math.isfinite(real_holdings_after) and real_holdings_after >= 0):
+            raise ValueError("holdings หลัง fill ต้อง finite และ >= 0")
+        return cls(filled_price=filled_price, filled_quantity=filled_quantity,
+                   holdings_after=effective_holdings(real_holdings_after, leaps_shares),
+                   real_holdings_after=float(real_holdings_after),
+                   leaps_shares=float(leaps_shares))
 
 
 @dataclass(frozen=True)
@@ -334,8 +460,14 @@ def compute_row(cfg: Config, snapshot: dict, anchor: Anchor | None,
     step = dna_step_for(anchor, dna_step)
     signal = dna_signal_for(cfg.dna_code, step)
     price = float(snapshot["price"])
-    holdings = float(snapshot.get("holdings", 0.0) or 0.0)
-    dec = build_decision(cfg, price, holdings, signal)
+    # snapshot -> holdings. The snapshot carries the broker's real shares (the
+    # paper position in paper mode) and keeps carrying them: run_id, the intent's
+    # decision_holdings and every guard read that number. Column 7 is the
+    # position the decision used, real + LEAPS; build_decision adds the LEAPS
+    # itself from the real reading.
+    real_holdings = float(snapshot.get("holdings", 0.0) or 0.0)
+    holdings = effective_holdings(real_holdings, cfg.leaps_shares)
+    dec = build_decision(cfg, price, real_holdings, signal)
     # acted=False on every row, including READY_BUY/READY_SELL. A decision is
     # not an execution: the order may be suppressed, expire unsent, be rejected,
     # or fill at another price entirely, and each of those would leave a booked
@@ -385,6 +517,19 @@ def compute_row(cfg: Config, snapshot: dict, anchor: Anchor | None,
             "excess_next": rec.E,
             "e_mark": rec.A - rec.R,
         })
+    # LEAPS: the split behind column 7, only on a chain that uses (or just
+    # stopped using) LEAPS, so a chain without them keeps its exact _meta.
+    prior_leaps = None if anchor is None else anchor.prev_leaps_shares
+    if cfg.leaps_shares or prior_leaps:
+        row["_meta"].update({
+            "real_holdings": real_holdings,
+            "leaps_shares": cfg.leaps_shares,
+            "effective_holdings": holdings,
+        })
+    if anchor is not None and float(prior_leaps or 0.0) != cfg.leaps_shares:
+        # A LEAPS rollover: the new base applies from this row on. Recorded,
+        # never silent; P0, Aₙ and Eₙ carry on unchanged (no rebase).
+        row["_meta"]["leaps_shares_changed_from"] = float(prior_leaps or 0.0)
     return row
 
 

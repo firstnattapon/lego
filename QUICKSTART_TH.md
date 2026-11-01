@@ -15,6 +15,7 @@ python -m pytest -q
 $env:LEGO_SYMBOL='AAPL'
 $env:LEGO_FIX_C='1500'
 $env:LEGO_DIFF='25'
+$env:LEGO_LEAPS='0'   # ไม่บังคับ: LEAPS แทนหุ้น (หุ้นจำลอง, 1 สัญญา = 100); 0 = ไม่มี
 $env:LEGO_DNA_BUNDLE='strategy.example.json'
 $env:LEGO_MODE='observe'
 $env:LEGO_ACTIVE='false'
