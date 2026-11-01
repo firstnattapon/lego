@@ -80,7 +80,7 @@ def build(service, *, git_commit, candidate, revision=None):
     risk = {key: value for key, value in env.items() if key.startswith((
         "LEGO_MAX_", "LEGO_STALE_", "LEGO_CANCEL_")) or key in {
             "LEGO_TRADING_WINDOW_END", "LEGO_SESSION_KEY_MODE", "LEGO_ALLOW_FRACTIONAL",
-            "LEGO_FIX_C", "LEGO_DIFF", "LEGO_DNA_BUNDLE"}}
+            "LEGO_FIX_C", "LEGO_DIFF", "LEGO_DNA_BUNDLE", "LEGO_LEAPS"}}
     receipt = {"schema": "lego_deployment_receipt_v1", "git_commit": git_commit,
                "candidate_hash": candidate, "container_image": image,
                "deployment_revision": ready, "environment": env["WEBULL_ENV"],

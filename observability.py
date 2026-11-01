@@ -174,9 +174,13 @@ def emit_tick(body: dict, code: int, *, request=None, now: datetime | None = Non
         "pipeline_status": body.get("pipeline_status"), "business_status": health,
         "duration_ms": body.get("duration_ms"), "environment": body.get("environment"),
         "mode": body.get("mode"), "active": body.get("active"),
-        "decision": {key: decision.get(key) for key in
-                     ("run_id", "market_slot_id", "step", "status", "pipeline_status", "committed",
-                      "dna_steps_remaining")},
+        "decision": {**{key: decision.get(key) for key in
+                        ("run_id", "market_slot_id", "step", "status", "pipeline_status", "committed",
+                         "dna_steps_remaining")},
+                     # LEGO_LEAPS only: absent without LEAPS, so those events keep their shape.
+                     **{key: decision[key] for key in
+                        ("leaps_shares", "real_holdings", "effective_holdings",
+                         "leaps_shares_changed_from") if key in decision}},
         "operational_health": body.get("operational_health") or {},
         "open_order_blockers": [{key: phase.get(key) for key in
                                   ("open_order_count", "open_order_observed_at", "open_order_fingerprints")}

@@ -76,7 +76,7 @@ SCRIPT_BINDING_NAMES = (
     "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS", "LEGO_TRADING_WINDOW_END",
     "LEGO_FIX_C", "LEGO_DIFF", "LEGO_DNA_BUNDLE", "LEGO_MODE", "LEGO_ACTIVE",
     "LEGO_ALLOW_FRACTIONAL", "LEGO_STALE_ORDER_ACTION", "LEGO_STALE_ORDER_SECONDS",
-    "LEGO_CANCEL_CONFIRM_GRACE_SECONDS", "LEGO_SESSION_KEY_MODE")
+    "LEGO_CANCEL_CONFIRM_GRACE_SECONDS", "LEGO_SESSION_KEY_MODE", "LEGO_LEAPS")
 
 
 def test_the_binding_equals_what_the_deploy_script_will_compute():
@@ -86,6 +86,7 @@ def test_the_binding_equals_what_the_deploy_script_will_compute():
     deploy = result["deploy_env"]
     env = {reverse[key]: value for key, value in deploy.items() if key in reverse}
     env["LEGO_CANDIDATE_HASH"] = deploy["EXPECTED_CANDIDATE_HASH"]
+    env.setdefault("LEGO_LEAPS", "0")     # the deploy script resolves an unset LEAPS to 0
     script_env = {name: env[name] for name in SCRIPT_BINDING_NAMES}
     script_env["WEBULL_ACCOUNT_ID"] = ACCOUNT
     assert release_binding_for(script_env) == result["release"]["LEGO_RELEASE_AUTHORIZATION"]

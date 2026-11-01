@@ -365,6 +365,7 @@ def _run_tick(request):
             diff=runtime.operator.diff_usd,
             dna_code=runtime.operator.dna_bundle.dna_code,
             strategy_id=runtime.operator.strategy_id,
+            leaps_shares=runtime.operator.leaps_shares,
         )
         runtime_identity = runtime_identity_fingerprint()
     except (ConfigurationError, KeyError, ValueError) as exc:

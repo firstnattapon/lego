@@ -480,8 +480,14 @@ def _positive_fill_blockers(*, cfg: Config, chain_key: str, run_id: str,
             if not _same_number(row.get("post_execution_holdings"),
                                 final_holdings, _QTY_TOLERANCE):
                 blockers.append("row_post_execution_holdings_mismatch")
-            if not _same_number(state.get("prev_holdings"), final_holdings,
-                                _QTY_TOLERANCE):
+            # The chain state keeps REAL shares. With LEGO_LEAPS the record's
+            # holdings_after is real + LEAPS (it matches the row's column 7) and
+            # real_holdings_after is the broker reading the state must equal.
+            final_real = final.get("real_holdings_after")
+            state_expected = (final_holdings if final_real is None
+                              else _float(final_real))
+            if state_expected is None or not _same_number(
+                    state.get("prev_holdings"), state_expected, _QTY_TOLERANCE):
                 blockers.append("state_prev_holdings_mismatch")
         for row_key, final_key in (
                 (DELTA_COLUMN, "delta_actual"),

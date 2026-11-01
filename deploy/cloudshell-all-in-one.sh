@@ -41,6 +41,11 @@ set -Eeuo pipefail
 # The one-off funding release of a flat account (caps up to 125% of the principal) is
 # judged as such only when asked for: LEGO_FUNDING_MODE_OVERRIDE=initial-funding
 # (default prefunded: caps above 25% of the principal are refused in PROD).
+#
+# LEAPS as stock replacement: LEGO_LEAPS_OVERRIDE=<share-equivalents> (1 contract = 100)
+# counts LEAPS held in the account as shares when rebalancing; SELL stays limited to the
+# real shares. Not given = keep the value the deployed function has (0 if none); give 0
+# to stop. It is part of the release binding when > 0, so plan the release with it.
 
 readonly PROJECT_ID="lego-firebase"
 readonly REGION="asia-southeast1"
@@ -66,6 +71,7 @@ readonly LEGO_SYMBOL_OVERRIDE="${LEGO_SYMBOL_OVERRIDE:-AAPL}"
 readonly LEGO_FIX_C_OVERRIDE="${LEGO_FIX_C_OVERRIDE:-3000}"
 readonly LEGO_ALLOW_FRACTIONAL_OVERRIDE="${LEGO_ALLOW_FRACTIONAL_OVERRIDE:-}"
 readonly LEGO_DIFF_OVERRIDE="${LEGO_DIFF_OVERRIDE:-25}"
+readonly LEGO_LEAPS_OVERRIDE="${LEGO_LEAPS_OVERRIDE:-}"
 readonly LEGO_DNA_BUNDLE_OVERRIDE="${LEGO_DNA_BUNDLE_OVERRIDE:-strategy.example.json}"
 readonly LEGO_SCHEDULE_OVERRIDE="${LEGO_SCHEDULE_OVERRIDE:-}"
 readonly MAX_ORDER_QUANTITY="${LEGO_MAX_ORDER_QUANTITY_OVERRIDE:-}"
@@ -599,6 +605,7 @@ SYMBOL="$(resolve_value "${LEGO_SYMBOL_OVERRIDE}" "$(read_existing_env LEGO_SYMB
 FIX_C="$(resolve_value "${LEGO_FIX_C_OVERRIDE}" "$(read_existing_env LEGO_FIX_C)" "3000")"
 ALLOW_FRACTIONAL="$(resolve_value "${LEGO_ALLOW_FRACTIONAL_OVERRIDE}" "$(read_existing_env LEGO_ALLOW_FRACTIONAL)" "true")"
 DIFF="$(resolve_value "${LEGO_DIFF_OVERRIDE}" "$(read_existing_env LEGO_DIFF)" "25")"
+LEAPS="$(resolve_value "${LEGO_LEAPS_OVERRIDE}" "$(read_existing_env LEGO_LEAPS)" "0")"
 DNA_BUNDLE="$(resolve_value "${LEGO_DNA_BUNDLE_OVERRIDE}" "$(read_existing_env LEGO_DNA_BUNDLE)" "strategy.example.json")"
 
 EXISTING_SCHEDULE="$(
@@ -622,10 +629,24 @@ for name, raw in (("LEGO_FIX_C", sys.argv[1]), ("LEGO_DIFF", sys.argv[2])):
         raise SystemExit(f"ERROR: {name} must be finite and > 0")
 PY
 
+# LEAPS share-equivalents may be 0 (none); config.py applies the same rule at runtime.
+python3 - "${LEAPS}" <<'PY'
+from decimal import Decimal, InvalidOperation
+import sys
+
+try:
+    value = Decimal(sys.argv[1])
+except InvalidOperation:
+    raise SystemExit("ERROR: LEGO_LEAPS must be numeric (share-equivalents, 1 contract = 100)")
+if not value.is_finite() or value < 0:
+    raise SystemExit("ERROR: LEGO_LEAPS must be finite and >= 0")
+PY
+
 reject_comma "LEGO_SYMBOL" "${SYMBOL}"
 reject_comma "LEGO_FIX_C" "${FIX_C}"
 require_boolean "LEGO_ALLOW_FRACTIONAL" "${ALLOW_FRACTIONAL}"
 reject_comma "LEGO_DIFF" "${DIFF}"
+reject_comma "LEGO_LEAPS" "${LEAPS}"
 reject_comma "LEGO_DNA_BUNDLE" "${DNA_BUNDLE}"
 [[ -f "${DNA_BUNDLE}" ]] || fail "ไม่พบ DNA bundle '${DNA_BUNDLE}'"
 
@@ -685,11 +706,11 @@ names = ("WEBULL_ENV", "LEGO_CANDIDATE_HASH", "LEGO_SYMBOL", "LEGO_MAX_ORDER_QUA
          "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS", "LEGO_TRADING_WINDOW_END",
          "LEGO_FIX_C", "LEGO_DIFF", "LEGO_DNA_BUNDLE", "LEGO_MODE", "LEGO_ACTIVE",
          "LEGO_ALLOW_FRACTIONAL", "LEGO_STALE_ORDER_ACTION", "LEGO_STALE_ORDER_SECONDS",
-         "LEGO_CANCEL_CONFIRM_GRACE_SECONDS", "LEGO_SESSION_KEY_MODE")
+         "LEGO_CANCEL_CONFIRM_GRACE_SECONDS", "LEGO_SESSION_KEY_MODE", "LEGO_LEAPS")
 env = dict(zip(names, sys.argv[1:], strict=True))
 env["WEBULL_ACCOUNT_ID"] = sys.stdin.read().strip()
 print(release_binding_for(env))
-' "${ENVIRONMENT}" "${CANDIDATE_HASH}" "${SYMBOL}" "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}" "${FIX_C}" "${DIFF}" "${DNA_BUNDLE}" "${MODE}" "${ACTIVE}" "${ALLOW_FRACTIONAL}" "${STALE_ACTION}" "${STALE_SECONDS}" "${CANCEL_GRACE}" "${SESSION_MODE}"
+' "${ENVIRONMENT}" "${CANDIDATE_HASH}" "${SYMBOL}" "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}" "${FIX_C}" "${DIFF}" "${DNA_BUNDLE}" "${MODE}" "${ACTIVE}" "${ALLOW_FRACTIONAL}" "${STALE_ACTION}" "${STALE_SECONDS}" "${CANCEL_GRACE}" "${SESSION_MODE}" "${LEAPS}"
 )"
 require_sha256 "computed release binding" "${EXPECTED_RELEASE_BINDING}"
 
@@ -714,7 +735,8 @@ if [[ "${ORDER_PATH}" == true ]]; then
             --project="${PROJECT_ID}" | \
         env -i PATH="${PATH}" HOME="${HOME:-/tmp}" \
             WEBULL_ENV="${ENVIRONMENT}" LEGO_SYMBOL="${SYMBOL}" LEGO_FIX_C="${FIX_C}" \
-            LEGO_DIFF="${DIFF}" LEGO_DNA_BUNDLE="${DNA_BUNDLE}" LEGO_MODE="${MODE}" \
+            LEGO_DIFF="${DIFF}" LEGO_LEAPS="${LEAPS}" \
+            LEGO_DNA_BUNDLE="${DNA_BUNDLE}" LEGO_MODE="${MODE}" \
             LEGO_ACTIVE="${ACTIVE}" LEGO_ALLOW_FRACTIONAL="${ALLOW_FRACTIONAL}" \
             LEGO_MAX_ORDER_QUANTITY="${MAX_ORDER_QUANTITY}" \
             LEGO_MAX_ORDER_NOTIONAL_USD="${MAX_ORDER_NOTIONAL}" \
@@ -807,6 +829,7 @@ echo "Symbol         : ${SYMBOL}"
 echo "Principal      : ${FIX_C}"
 echo "Fractional     : ${ALLOW_FRACTIONAL}"
 echo "Diff           : ${DIFF}"
+echo "LEAPS (shares) : ${LEAPS} (share-equivalents; SELL limited to real shares)"
 echo "DNA bundle     : ${DNA_BUNDLE}"
 echo "DNA report     : ${DNA_REPORT}"
 echo "Schedule       : ${SCHEDULE} UTC"
@@ -850,6 +873,7 @@ step "8/10 DEPLOY DATABASE RULES + CLOUD FUNCTION GEN2"
 ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=${SYMBOL},LEGO_FIX_C=${FIX_C},LEGO_ALLOW_FRACTIONAL=${ALLOW_FRACTIONAL},LEGO_DIFF=${DIFF},LEGO_DNA_BUNDLE=${DNA_BUNDLE},LEGO_MODE=${MODE},LEGO_ACTIVE=${ACTIVE},LEGO_CANDIDATE_HASH=${CANDIDATE_HASH},LEGO_RELEASE_AUTHORIZATION=${RELEASE_AUTHORIZATION_OVERRIDE},WEBULL_TOKEN_DIR=/tmp/webull_token,LEGO_DNA_CLOCK_MODE=market"
 ENV_VARS+=",LEGO_TRACE_PROJECT_ID=${PROJECT_ID},LEGO_MAX_ORDER_QUANTITY=${MAX_ORDER_QUANTITY},LEGO_MAX_ORDER_NOTIONAL_USD=${MAX_ORDER_NOTIONAL},LEGO_MAX_SESSION_ORDERS=${MAX_SESSION_ORDERS},LEGO_TRADING_WINDOW_END=${TRADING_WINDOW_END}"
 ENV_VARS+=",LEGO_GIT_COMMIT=${GIT_COMMIT}"
+ENV_VARS+=",LEGO_LEAPS=${LEAPS}"
 
 ENV_VARS+=",LEGO_STALE_ORDER_ACTION=${STALE_ACTION},LEGO_STALE_ORDER_SECONDS=${STALE_SECONDS},LEGO_CANCEL_CONFIRM_GRACE_SECONDS=${CANCEL_GRACE},LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER=1,LEGO_SESSION_KEY_MODE=${SESSION_MODE}"
 if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
@@ -1100,6 +1124,7 @@ echo "Scheduler SA : ${SCHEDULER_SA}"
 echo "Build SA     : ${BUILD_SA}"
 echo "LEGO_SYMBOL  : ${SYMBOL}"
 echo "LEGO_FIX_C   : ${FIX_C}"
+echo "LEGO_LEAPS   : ${LEAPS}"
 echo "LEGO_ALLOW_FRACTIONAL: ${ALLOW_FRACTIONAL}"
 echo "LEGO_MODE    : ${MODE}"
 echo "LEGO_ACTIVE  : ${ACTIVE}"

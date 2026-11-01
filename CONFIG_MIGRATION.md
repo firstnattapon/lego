@@ -6,6 +6,11 @@ The only strategy controls in v2 are `symbol`, `principal_usd`, `diff_usd`,
 The first three are required. Defaults are `mode=observe`, `active=false`, and an
 explicit finite bypass bundle for a fresh chain.
 
+One optional seventh control: `LEGO_LEAPS` (`leaps_shares`), LEAPS held as a stock
+replacement in share-equivalents (1 contract = 100). Unset, blank or `0` it is absent
+from `canonical()`, so the config hash, strategy binding and release authorization are
+exactly the six-field ones. See [docs/LEAPS_STOCK_REPLACEMENT_TH.md](docs/LEAPS_STOCK_REPLACEMENT_TH.md).
+
 ## Mapping
 
 | Legacy/current name | Class | v2 disposition |
@@ -13,6 +18,7 @@ explicit finite bypass bundle for a fresh chain.
 | `LEGO_SYMBOL` | operator | KEEP as `symbol` |
 | `LEGO_FIX_C` | operator | KEEP as `principal_usd` |
 | `LEGO_DIFF` | operator | KEEP as `diff_usd` |
+| `LEGO_LEAPS` | operator (optional) | NEW as `leaps_shares`: finite decimal >= 0, unset/blank = 0. Added to the real broker shares before the decision; a SELL stays limited to the real shares (`PASS_SELL_EXCEEDS_REAL` otherwise). Part of the release binding only when > 0; never part of the chain key |
 | `LEGO_DNA_CODE` | operator | MIGRATE into bundle; only explicit `bypass:N` may bridge automatically |
 | `LEGO_SLOT_SECONDS`, `LEGO_DNA_ORIGIN_UTC`, `LEGO_DNA_CLOCK_MODE` | strategy metadata | MIGRATE into one fingerprinted DNA bundle; deploy mirrors interval/origin for the retained clock |
 | `AUTO_SUBMIT` | legacy operator | REMOVE; ignored by typed v2 config and retained only by the legacy façade |
@@ -55,6 +61,10 @@ explicit finite bypass bundle for a fresh chain.
   or symbol.
 - Changing P0, DNA fingerprint, operator config hash, account, or environment
   starts a deliberate new v2 chain; it does not splice histories.
+- Changing `LEGO_LEAPS` is the exception: the chain key has no LEAPS in it, so the same
+  chain continues (P0, Aₙ, Eₙ carry on). The first row on the new value records
+  `leaps_shares_changed_from` and a `leaps_shares_changed` warning; an unsent intent
+  decided on the old value is suppressed. It still needs a re-planned release when > 0.
 
 ## RTDB query-key migration
 

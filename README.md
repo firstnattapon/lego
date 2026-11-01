@@ -101,7 +101,9 @@ reconcile order ที่เริ่มส่งแล้ว
 ## Contract หลัก
 
 - 6 operator settings: `symbol`, `principal_usd`, `diff_usd`, `dna_bundle`,
-  `mode`, `active`; ค่าเริ่มต้น `observe` + `false`.
+  `mode`, `active`; ค่าเริ่มต้น `observe` + `false`. ตัวเลือกที่ 7 (ไม่บังคับ):
+  `LEGO_LEAPS` = LEAPS แทนหุ้นเป็นหุ้นจำลอง (1 สัญญา = 100) ค่าเริ่มต้น 0 = เหมือนเดิมทุกบิต
+  ([docs/LEAPS_STOCK_REPLACEMENT_TH.md](docs/LEAPS_STOCK_REPLACEMENT_TH.md)).
 - environment/account/endpoint/database/credential/release authorization ผูกกับ
   deployment และ request เปลี่ยนไม่ได้.
 - UAT host `th-api.uat.webullbroker.com`; PROD host `api.webull.co.th`; ไม่มี fallback.

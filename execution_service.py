@@ -709,10 +709,13 @@ def _finalize_model_ledger(trade_client, cfg, intent: dict, summary: dict) -> di
         raise FillNotConfirmed(
             f"broker แจ้ง filled {quantity} แต่ holdings หลังส่งยังเป็น {holdings_after} "
             f"(ตอนตัดสินใจ {before}) — จำนวนถือครองไม่ตรงกับ fill ของ order นี้")
+    # Every check above is on REAL shares: decision_holdings and fetch_holdings
+    # are both broker readings. The ledger's holdings_after adds the LEAPS this
+    # row decided with (cfg is the intent's own strategy_config), so it matches
+    # column 7; with no LEAPS it is the very ExecutionFill it always was.
     return finalize_execution_fill(
         cfg, str(intent["run_id"]),
-        ExecutionFill(filled_price=price, filled_quantity=quantity,
-                      holdings_after=holdings_after),
+        ExecutionFill.from_broker(price, quantity, holdings_after, cfg.leaps_shares),
         runtime_identity=intent.get("runtime_identity_fingerprint"))
 
 
@@ -900,6 +903,8 @@ def _finish_with_realized(trade_client, cfg, intent: dict, summary: dict) -> dic
             "excess": finalized["excess"],
             "post_execution_holdings": finalized["holdings_after"],
         }
+        if finalized.get("real_holdings_after") is not None:
+            summary["post_execution_real_holdings"] = finalized["real_holdings_after"]
     elif (filled is not None and broker_terminal
           and intent.get("cashflow_finalized")):
         # A terminal fill can re-enter only to collect a late broker fee. Do
@@ -1064,6 +1069,9 @@ def _paper_done(chain_key_: str, run_id: str, booked: dict, preview_result: dict
         "fee_estimate": (preview_result or {}).get("estimated_transaction_fee"),
         "price_source": "last_trade_after_preview",
     }
+    if booked.get("real_holdings_after") is not None:
+        paper_fill.update({"real_holdings_after": booked["real_holdings_after"],
+                           "leaps_shares": booked.get("leaps_shares")})
     return _stop(chain_key_, run_id, "UNSENT_ABORTED", {
         "terminal_reason": "paper: every check before Place passed; filled on paper, "
                            "Place is never called",
@@ -1091,10 +1099,12 @@ def _paper_fill(cfg, intent: dict, final_fresh: dict, preview_result: dict | Non
         after = before + quantity if str(intent["side"]).upper() == "BUY" else before - quantity
         if not (quantity.is_finite() and after.is_finite()) or quantity <= 0 or after < 0:
             raise ValueError("paper fill quantity/holdings อยู่นอกช่วง")
+        # decision_holdings is the paper position (real paper shares); LEAPS are
+        # added for the ledger only, never booked into the paper book.
         booked = finalize_execution_fill(
             cfg, run_id,
-            ExecutionFill(filled_price=float(final_fresh["price"]),
-                          filled_quantity=float(quantity), holdings_after=float(after)),
+            ExecutionFill.from_broker(float(final_fresh["price"]), float(quantity),
+                                      float(after), cfg.leaps_shares),
             runtime_identity=intent.get("runtime_identity_fingerprint"))
     except (ExecutionFinalizeError, InvalidOperation, KeyError, TypeError, ValueError) as exc:
         return _persist_error(ck, run_id, "NOT_PLACED", exc, {
@@ -1644,6 +1654,18 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
         return _stop(ck, run_id, "SUPPRESSED_STATE_CHANGED",
                       {"holdings_drift": drift, "dispatch_holdings": fresh["holdings"]},
                       claim=intent, holdings_drift=drift)
+    running_leaps = getattr(getattr(runtime, "operator", None), "leaps_shares", None)
+    if (isinstance(running_leaps, (int, float)) and not isinstance(running_leaps, bool)
+            and float(running_leaps) != cfg.leaps_shares):
+        # LEGO_LEAPS changed between this decision and its dispatch (a deploy in
+        # between). The order was sized on a position that no longer exists; the
+        # new base decides from the next row. Never sent, so nothing moved.
+        return _stop(ck, run_id, "SUPPRESSED_STATE_CHANGED", {
+            "terminal_reason": "LEGO_LEAPS changed since decision",
+            "dispatch_check_phase": "pre_preview",
+            "decision_leaps_shares": cfg.leaps_shares,
+            "dispatch_leaps_shares": float(running_leaps)},
+            claim=intent)
 
     try:
         quote_safety = _dispatch_quote_safety(

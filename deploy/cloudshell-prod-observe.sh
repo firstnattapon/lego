@@ -5,6 +5,11 @@
 #   bash deploy/cloudshell-prod-observe.sh
 #   LEGO_MODE_OVERRIDE=preview bash deploy/cloudshell-prod-observe.sh
 #   LEGO_MODE_OVERRIDE=paper bash deploy/cloudshell-prod-observe.sh
+#   LEGO_MODE_OVERRIDE=paper LEGO_LEAPS_OVERRIDE=100 bash deploy/cloudshell-prod-observe.sh
+#
+# LEGO_LEAPS_OVERRIDE: LEAPS held as a stock replacement, in share-equivalents (1 contract =
+# 100), counted with the shares when rebalancing; a SELL stays limited to the real shares.
+# Default here is 0 and it is always set explicitly: an earlier deploy's value never carries over.
 #
 # preview runs the whole order path of a real release, the Preview of each real order
 # included, and never calls Place. It also asks for the last price (share cap), whether
@@ -64,6 +69,10 @@ if [[ -z "${FIX_C}" ]]; then
 fi
 [[ "${FIX_C}" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v v="${FIX_C}" 'BEGIN { exit !(v > 0) }' || \
     fail "LEGO_FIX_C must be a number > 0"
+# LEAPS share-equivalents (0 = none). Explicit on every run, like DIFF below.
+LEAPS="${LEGO_LEAPS_OVERRIDE:-0}"
+[[ "${LEAPS}" =~ ^[0-9]+([.][0-9]+)?$ ]] || \
+    fail "LEGO_LEAPS_OVERRIDE must be a number >= 0 (share-equivalents, 1 contract = 100)"
 [[ "${DB_INSTANCE}" =~ ^[a-z0-9-]+$ ]] || fail "LEGO_PROD_DB_INSTANCE must be a Realtime Database instance name"
 [[ "${DB_INSTANCE}" != *-default-rtdb ]] || \
     fail "${DB_INSTANCE} is a default instance, the database UAT uses; name another with LEGO_PROD_DB_INSTANCE"
@@ -318,7 +327,7 @@ step "3/4 Deploy lego-tick-prod: PROD, ${MODE}"
 export WEBULL_ENV_OVERRIDE=PROD LEGO_MODE_OVERRIDE=observe LEGO_ACTIVE_OVERRIDE=false
 export DATABASE_URL_OVERRIDE="${DATABASE_URL}"
 export WEBULL_TOKEN_SECRET_OVERRIDE="projects/${PROJECT_ID}/secrets/${TOKEN_SECRET}"
-export LEGO_FIX_C_OVERRIDE="${FIX_C}"
+export LEGO_FIX_C_OVERRIDE="${FIX_C}" LEGO_LEAPS_OVERRIDE="${LEAPS}"
 export LEGO_SYMBOL_OVERRIDE="${SYMBOL}" LEGO_DIFF_OVERRIDE="${LEGO_DIFF_OVERRIDE:-25}"
 # bypass:6500 = no DNA gate until 2027-09-07, the bundle UAT runs; the script's own default
 # (strategy.example.json) ended 2026-10-05 and would only ever answer PASS_DNA_EXHAUSTED.
@@ -344,6 +353,7 @@ if [[ "${MODE}" == preview || "${MODE}" == paper ]]; then
             --project="${PROJECT_ID}" | \
         env -i PATH="${PATH}" HOME="${HOME}" WEBULL_ENV=PROD LEGO_MODE="${MODE}" LEGO_ACTIVE=true \
             LEGO_SYMBOL="${LEGO_SYMBOL_OVERRIDE}" LEGO_FIX_C="${FIX_C}" LEGO_DIFF="${LEGO_DIFF_OVERRIDE}" \
+            LEGO_LEAPS="${LEAPS}" \
             LEGO_DNA_BUNDLE="${LEGO_DNA_BUNDLE_OVERRIDE}" \
             LEGO_ALLOW_FRACTIONAL="${LEGO_ALLOW_FRACTIONAL_OVERRIDE}" \
             LEGO_STALE_ORDER_ACTION=hold LEGO_STALE_ORDER_SECONDS=300 \

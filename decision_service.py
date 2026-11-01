@@ -126,7 +126,7 @@ def _outbox_intent(cfg, row: dict, snapshot: dict, slot, decision_time: datetime
     margin = (15 if typed_v2 else int(os.environ.get(
         "LEGO_ORDER_EXPIRY_MARGIN_SECONDS", "15")))
     expires_at = max(slot.slot_start_utc, slot.slot_end_utc - timedelta(seconds=margin))
-    return {
+    intent = {
         "status": "PENDING_DISPATCH",
         "row_status": row["สถานะ"], "side": row["_meta"]["side"],
         "quantity": row["_meta"]["quantity"], "symbol": cfg.symbol,
@@ -149,6 +149,12 @@ def _outbox_intent(cfg, row: dict, snapshot: dict, slot, decision_time: datetime
             "quantity_increment": cfg.quantity_increment,
         },
     }
+    if cfg.leaps_shares:
+        # The LEAPS base this decision used, so the worker re-checks it, sizes the
+        # fill's holdings_after and notices a LEGO_LEAPS change with the very same
+        # value. decision_holdings above stays the real shares.
+        intent["strategy_config"]["leaps_shares"] = cfg.leaps_shares
+    return intent
 
 
 def _paper_snapshot(cfg, snapshot: dict, anchor, state, runtime_identity: str) -> dict:
@@ -344,7 +350,11 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                     "LEGO_ALLOW_ZERO_HOLDINGS", "false").lower() != "true"):
             check_holdings_continuity(anchor, float(snapshot["holdings"]))
         fr.node("D07", "ok", prev_holdings=getattr(anchor, "prev_holdings", None),
-                **fr.pick(snapshot, "holdings"))
+                **fr.pick(snapshot, "holdings"),
+                **({"leaps_shares": cfg.leaps_shares,
+                    "prev_leaps_shares": getattr(anchor, "prev_leaps_shares", None)}
+                   if cfg.leaps_shares or getattr(anchor, "prev_leaps_shares", None)
+                   else {}))
         if slot:
             slot_id = slot.slot_id
         else:
@@ -475,6 +485,23 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             pending_intent=pending_intent, paper=paper)
         fr.node("D10", "committed" if result.get("committed") else "idempotent",
                 **fr.pick(result, "run_id", "version", "committed", "idempotent"), slot_id=slot_id)
+        if result.get("leaps_shares_changed_from") is not None:
+            # The LEAPS rollover event, said on the channel operators watch. The
+            # row and the state already carry it durably.
+            _record_warning(
+                "leaps_shares_changed",
+                f"LEGO_LEAPS เปลี่ยนจาก {result['leaps_shares_changed_from']} เป็น "
+                f"{cfg.leaps_shares} หุ้นจำลอง — ฐานใหม่มีผลตั้งแต่แถว v{result.get('version')}; "
+                "chain เดิม, P₀/Aₙ/Eₙ ต่อเนื่อง (ไม่ rebase)",
+                {"run_id": result.get("run_id"), "version": result.get("version"),
+                 "from": result["leaps_shares_changed_from"], "to": cfg.leaps_shares,
+                 "chain_key": chain_key(cfg)})
+        if result.get("funding_baseline_cancelled"):
+            _record_warning(
+                "leaps_funding_baseline_cancelled",
+                "LEAPS เข้ามาก่อน fill แรกของ chain ที่เริ่มจาก 0 หุ้น — ไม่นับเป็น initial "
+                "funding แล้ว fill ถัดไปเป็น fill ปกติ",
+                {**result["funding_baseline_cancelled"], "chain_key": chain_key(cfg)})
 
         if preflight is None:
             pass                                    # nothing to submit this slot
@@ -534,6 +561,14 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
         if result.get("instrument_capability_migrated_from"):
             out["instrument_capability_migrated_from"] = result[
                 "instrument_capability_migrated_from"]
+        if "real_holdings" in row["_meta"]:
+            out["leaps_shares"] = row["_meta"]["leaps_shares"]
+            out["real_holdings"] = row["_meta"]["real_holdings"]
+            out["effective_holdings"] = row["_meta"]["effective_holdings"]
+        if result.get("leaps_shares_changed_from") is not None:
+            out["leaps_shares_changed_from"] = result["leaps_shares_changed_from"]
+        if result.get("funding_baseline_cancelled"):
+            out["funding_baseline_cancelled"] = result["funding_baseline_cancelled"]
         if clock_error:
             out["clock_warning"] = clock_error
         if token_warning:

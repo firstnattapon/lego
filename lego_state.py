@@ -382,6 +382,7 @@ def read_anchor(cfg: Config, *, runtime_identity: str | None = None,
         return None
     verify_runtime_identity(state, runtime_identity)
     ph = state.get("prev_holdings")
+    pl = state.get("leaps_shares")
     target_semantics = cashflow_semantics_for(cfg)
     cashflow = execution_cashflow(state, target_semantics)
     return Anchor(
@@ -393,7 +394,20 @@ def read_anchor(cfg: Config, *, runtime_identity: str | None = None,
         prev_holdings=None if ph is None else float(ph),
         prev_excess=(cashflow["excess"]
                      if target_semantics == V2_CASHFLOW_SEMANTICS else None),
+        prev_leaps_shares=None if pl is None else float(pl),
     )
+
+
+def _decision_position(snapshot: dict, row: dict) -> float:
+    """The position the decision valued: column 7 on a LEAPS row, else the snapshot.
+
+    Without LEAPS this is the expression the genesis funding check always used.
+    With LEAPS the account is not flat while LEAPS are held, whatever the real
+    shares read, and lego_state's finalize check reads the same column 7.
+    """
+    if "real_holdings" in (row.get("_meta") or {}):
+        return float(row["จำนวนถือครอง (หุ้น)"])
+    return float(snapshot.get("holdings", 0.0))
 
 
 def _repair_pending_row(state: dict | None) -> None:
@@ -555,6 +569,14 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
     })
     if paper:
         doc["paper"] = True
+    if "real_holdings" in meta:
+        # LEAPS: the split behind column 7 (real + LEAPS), flat beside run_id so
+        # the dashboard can show it. Absent on a chain that never used LEAPS.
+        doc.update({"real_holdings": float(meta["real_holdings"]),
+                    "leaps_shares": float(meta["leaps_shares"])})
+    if "leaps_shares_changed_from" in meta:
+        # The LEAPS rollover event: this row is the first on the new base.
+        doc["leaps_shares_changed_from"] = float(meta["leaps_shares_changed_from"])
     if target_semantics == V2_CASHFLOW_SEMANTICS:
         observed = (state_before or {}).get(EXECUTION_STATE_KEY) or {}
         doc.update({
@@ -576,10 +598,12 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
     row_ref.set(doc)
 
     capability_migrated_from = None
+    funding_cancelled_by_leaps = None
 
     def txn(current):
-        nonlocal capability_migrated_from
+        nonlocal capability_migrated_from, funding_cancelled_by_leaps
         current = current or None
+        funding_cancelled_by_leaps = None   # a transaction may run more than once
         verify_runtime_identity(current, runtime_identity)
         capability_contract = {
             "quantity_increment": format(
@@ -641,13 +665,29 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
             # Only a genuinely new, flat v2 chain can opt into the funding
             # baseline. A zero A or DNA step is not evidence of no prior fill.
             # Existing chains retain their recorded ledger until reconciled.
+            # Flat means the position the decision valued: with LEAPS held the
+            # account is not flat, whatever its real shares read.
             if (current is None and target_semantics == V2_CASHFLOW_SEMANTICS
-                    and float(snapshot.get("holdings", 0.0)) == 0.0):
+                    and _decision_position(snapshot, row) == 0.0):
                 cashflow.update({
                     "model_baseline_policy": FUNDING_BASELINE_POLICY,
                     "funding_baseline_pending": True,
                     "funding_reference_offset": 0.0,
                 })
+        if (cashflow.get("funding_baseline_pending") is True
+                and "real_holdings" in meta
+                and _decision_position(snapshot, row) != 0.0):
+            # LEAPS arrived before a flat chain's first fill. The position is no
+            # longer flat, so that fill cannot be an initial funding (finalize
+            # requires column 7 == 0 and would refuse it). The baseline closes
+            # here as an ordinary, prefunded chain: recorded, never silent.
+            funding_cancelled_by_leaps = {
+                "by": "LEGO_LEAPS", "run_id": run_id,
+                "leaps_shares": float(meta["leaps_shares"]),
+                "effective_holdings": _decision_position(snapshot, row),
+            }
+            cashflow["funding_baseline_pending"] = False
+            cashflow["funding_baseline_cancelled"] = dict(funding_cancelled_by_leaps)
 
         next_state = {
             "version": expected_version,
@@ -659,6 +699,8 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
             # a READY_* row cannot move them.
             "prev_price": float(cashflow["last_action_price"]),
             "prev_actual": float(cashflow["actual_cumulative"]),
+            # Real shares (the paper position in paper mode), never real + LEAPS:
+            # check_holdings_continuity compares this with the next broker read.
             "prev_holdings": float(snapshot.get("holdings", 0.0) or 0.0),
             "last_run_id": run_id,
             "updated_at": snapshot["captured_at"],
@@ -686,6 +728,13 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
             })
         if runtime_identity is not None:
             next_state["runtime_identity_fingerprint"] = runtime_identity
+        prior_leaps = float((current or {}).get("leaps_shares") or 0.0)
+        if cfg.leaps_shares or prior_leaps:
+            # The LEAPS base this row decided with; read back as
+            # Anchor.prev_leaps_shares so the next change is seen and recorded.
+            # Written while LEAPS are in use and once more when they drop to 0,
+            # then gone again: a chain that never used LEAPS never has the key.
+            next_state["leaps_shares"] = float(cfg.leaps_shares)
         if paper:
             next_state["paper"] = True
             next_state["paper_broker_holdings"] = broker_holdings
@@ -758,6 +807,14 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
         # Said out loud for the same reason: the first commit after a lot-size
         # tightening is the only moment this is visible without reading RTDB.
         result["instrument_capability_migrated_from"] = capability_migrated_from
+    if "leaps_shares_changed_from" in meta:
+        result["leaps_shares_changed_from"] = float(meta["leaps_shares_changed_from"])
+    if funding_cancelled_by_leaps is not None:
+        result["funding_baseline_cancelled"] = dict(funding_cancelled_by_leaps)
+        try:   # best effort: the state and this result already carry the event
+            row_ref.update({"funding_baseline_cancelled_by_leaps": True})
+        except Exception:
+            result["funding_baseline_cancelled"]["row_mark_failed"] = True
     return result
 
 
@@ -856,6 +913,10 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
                         "funding_reference_offset"):
                 if key in row_doc:
                     outcome[key] = row_doc[key]
+            if row_doc.get("post_execution_real_holdings") is not None:
+                outcome["real_holdings_after"] = float(
+                    row_doc["post_execution_real_holdings"])
+                outcome["leaps_shares"] = float(row_doc.get("leaps_shares") or 0.0)
             return state
 
         policy = cashflow.get("model_baseline_policy")
@@ -899,6 +960,11 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
             "seq": seq,
             "at": _utc_stamp(),
         }
+        if fill.real_holdings_after is not None:
+            # LEAPS: holdings_after is real + LEAPS (the ledger's unit, column 7);
+            # the broker's real reading and the LEAPS behind it are kept beside it.
+            record.update({"real_holdings_after": float(fill.real_holdings_after),
+                           "leaps_shares": float(fill.leaps_shares)})
         if policy:
             record.update({"model_baseline_policy": policy,
                            "initial_funding": initial_funding,
@@ -927,7 +993,9 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
             state["prev_excess"] = result.E
             state["r_basis"] = model_reference
         # The post-execution reading, from the broker, replacing the decision's.
-        state["prev_holdings"] = float(fill.holdings_after)
+        # Real shares only, as at commit: with LEAPS holdings_after is real +
+        # LEAPS, and the vanished-position guard must keep comparing real shares.
+        state["prev_holdings"] = float(fill.broker_holdings_after)
         outcome.update({"applied": True, **record})
         return state
 
@@ -948,6 +1016,8 @@ def finalize_execution_fill(cfg: Config, run_id: str, fill: ExecutionFill, *,
         "post_execution_holdings": outcome["holdings_after"],
         "cashflow_finalized_at": outcome["at"],
     }
+    if outcome.get("real_holdings_after") is not None:
+        row_patch["post_execution_real_holdings"] = outcome["real_holdings_after"]
     if cashflow_semantics_for(cfg) == V2_CASHFLOW_SEMANTICS:
         row_patch.update({
             "R_basis": outcome["reference"],

@@ -41,7 +41,8 @@ COL = {
     "dA": "ΔAₙ ต่อสเต็ป (USD)", "A": "Aₙ สะสม (USD)", "E": "Eₙ ส่วนเกินสะสม (USD)",
 }
 DECISION_STATUSES = frozenset({"SNAPSHOT_READY", "PASS_DNA_ZERO", "PASS_THRESHOLD",
-                               "PASS_MIN_ORDER", "READY_BUY", "READY_SELL"})
+                               "PASS_MIN_ORDER", "READY_BUY", "READY_SELL",
+                               "PASS_SELL_EXCEEDS_REAL"})
 TERMINAL_INTENT = frozenset({
     "FILLED", "CANCELLED", "CANCELED", "REJECTED", "FAILED", "EXPIRED", "EXPIRED_UNSENT",
     "SUPPRESSED_ACTIVE_ORDER", "SUPPRESSED_STATE_CHANGED", "NOT_PLACED",
@@ -108,6 +109,17 @@ def close(a, b, rel=1e-9, absolute=1e-9):
     return abs(a - b) <= max(absolute, rel * max(abs(a), abs(b)))
 
 
+def _real_after(record):
+    """The broker's real post-fill shares of a finalized record.
+
+    With LEGO_LEAPS a record's holdings_after is real + LEAPS (the ledger's unit) and
+    real_holdings_after holds the reading; without LEAPS holdings_after is that reading.
+    """
+    record = record or {}
+    real = record.get("real_holdings_after")
+    return record.get("holdings_after") if real is None else real
+
+
 def short(value, n=8):
     text = "" if value is None else str(value)
     return text[:n]
@@ -146,11 +158,17 @@ def recompute_decision(i: dict) -> dict:
     """The decision of one slot from its recorded inputs (mirror of lego_one_row.build_decision).
 
     ``i``: P_n, holdings, FIX_C, DIFF, signal, and optionally P0 (None = genesis), dp, inc,
-    strategy. Returns V_n, gap, R_n, status, side, qty.
+    strategy, leaps_shares. Returns V_n, gap, R_n, status, side, qty.
+
+    ``holdings`` is the REAL share count. With ``leaps_shares`` the position valued is
+    real + LEAPS (summed in Decimal, as the engine does), and a SELL that needs every
+    real share or more is PASS_SELL_EXCEEDS_REAL instead of a truncated order.
     """
     price, holdings = float(i["P_n"]), float(i["holdings"])
     fix_c, diff = float(i["FIX_C"]), float(i["DIFF"])
-    value = holdings * price
+    leaps = float(i.get("leaps_shares") or 0.0)
+    position = float(_dec(holdings) + _dec(leaps)) if leaps else holdings
+    value = position * price
     gap = value - fix_c
     p0 = i.get("P0")
     reference = 0.0 if not p0 else fix_c * math.log(price / float(p0))
@@ -168,12 +186,17 @@ def recompute_decision(i: dict) -> dict:
             qty = float((raw / _dec(inc)).to_integral_value(rounding=ROUND_DOWN) * _dec(inc))
         else:
             qty = round(abs(gap) / price, dp)
-        if gap > diff:                                   # a SELL never exceeds what is held
+        exceeds_real = (leaps and gap > diff
+                        and (_dec(abs(gap)) / _dec(price) >= _dec(holdings)
+                             or _dec(qty) >= _dec(holdings)))
+        if gap > diff and not exceeds_real:              # a SELL never exceeds what is held
             ceiling = _dec(holdings).quantize(Decimal(1).scaleb(-dp), rounding=ROUND_DOWN)
             qty = min(qty, float(ceiling))
         if v2 and 0 < qty < 1.0 and _dec(qty) * _dec(price) < Decimal("1.0"):
             qty = 0.0
-        if qty <= 0:
+        if exceeds_real:                                 # LEAPS are not shares to sell
+            status, qty = "PASS_SELL_EXCEEDS_REAL", 0.0
+        elif qty <= 0:
             status, qty = ("PASS_MIN_ORDER" if v2 else "PASS_THRESHOLD"), 0.0
         else:
             status = "READY_SELL" if gap > diff else "READY_BUY"
@@ -252,6 +275,16 @@ def check_rows(rows, *, fix_c=None, diff=None, p0=None, limit=20) -> dict:
             _mismatch(result["mismatch"], limit, version=version, field="FIX_C", recorded=value - gap, expected=fix_c)
         base = {"P_n": price, "holdings": holdings, "FIX_C": fix_c, "DIFF": used,
                 "signal": row.get(c["signal"]), "P0": p0}
+        if row.get("real_holdings") is not None:
+            # LEAPS row: column 7 is real + LEAPS; the decision is recomputed from the
+            # real shares and the LEAPS, and the column must be exactly their sum.
+            real, leaps = num(row.get("real_holdings")), num(row.get("leaps_shares")) or 0.0
+            split = float(_dec(real) + _dec(leaps)) if real is not None else None
+            if split is None or not close(split, holdings, 1e-12, 1e-9):
+                _mismatch(result["mismatch"], limit, version=version, field="holdings_split",
+                          recorded=holdings, expected=split)
+            base.update({"holdings": real if real is not None else holdings,
+                         "leaps_shares": leaps})
         status = row.get(c["status"])
         quantity = num(row.get(c["qty"])) or 0.0
         expected = recompute_decision({**base, "strategy": "x_v2", "dp": 2, "inc": 0.01})
@@ -348,8 +381,10 @@ def check_fills(state, rows, intents, realized, *, fix_c, p0, limit=20) -> dict:
             entry["reference_gap"] = round(decision_reference - reference, 9)
         # position walk: the position moved by exactly what the fill says
         side = str((applied.get(run_id) or {}).get("side") or (intents.get(run_id) or {}).get("side") or "").upper()
-        after, quantity = num(w.get("holdings_after")), num(w.get("filled_quantity"))
-        before = num(previous.get("holdings_after")) if previous else num((intents.get(run_id) or {}).get("decision_holdings"))
+        # Walked on REAL shares: with LEAPS holdings_after is real + LEAPS and LEAPS may
+        # change between fills; real_holdings_after (when present) is the broker reading.
+        after, quantity = num(_real_after(w)), num(w.get("filled_quantity"))
+        before = num(_real_after(previous)) if previous else num((intents.get(run_id) or {}).get("decision_holdings"))
         sign = {"BUY": 1.0, "SELL": -1.0}.get(side)
         if None not in (after, quantity, before) and sign is not None:
             if not close(after - before, sign * quantity, 1e-9, 1e-6):
