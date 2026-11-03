@@ -1,5 +1,43 @@
 # สถานะ candidate continuous execution v4
 
+ล่าสุด 3 พฤศจิกายน: [เปิด PROD เงินจริง QBTS แบบ fail-closed — re-audit 12 จุดเสี่ยงและ gate G1–G10](docs/AUDIT_20261103_TH.md).
+ค่าที่เจ้าของกำหนด: `WEBULL_ENV=PROD LEGO_MODE=trade LEGO_ACTIVE=true LEGO_SYMBOL=QBTS LEGO_FIX_C=1500 LEGO_ALLOW_FRACTIONAL=true LEGO_DIFF=50 LEGO_LEAPS=100`.
+
+log PROD paper 30 ต.ค. 15:31Z → 2 พ.ย. 21:47Z:
+- 4,699 tick ↔ 4,699 request (HTTP 200 ทั้งหมด, `TICK_OK` ทุก tick)
+- revision 00003-dob / 00004-dob / 00005-tul
+- `tools.trace_audit` **0 P0**
+- 429 ×3 ของ 30 ต.ค. แก้แล้วใน PR #42 (2 พ.ย. 0 × 429)
+
+**แก้ใน source (ไม่แตะ core engine)**:
+- `release_horizon` finding `leaps_value`: BLOCK เมื่อราคา ≥ FIX_C/LEAPS = $15 (ไม่มีวันส่ง order), WARN ที่ $14.50–15
+- **CANDIDATE_MISMATCH แก้เด็ดขาด**: hash และ upload มาจาก `git archive HEAD` (`candidate_manifest --from-head`); 00003 / 00005 ไม่ตรงเพราะไฟล์ที่ git ignore ปน hash ได้
+- `tools/prod_live_preflight.py` อ่านบัญชีอย่างเดียว:
+  - buying power ≥ $1,515
+  - LEAPS ที่ถือจริงและวันหมดอายุ
+  - open order, `fractionable`, ชนิดแถว position
+  - order แรกเทียบ caps ⇒ ถือหุ้นจริง 25–52 หุ้นที่ $10.82
+- `deploy/cloudshell-prod-live.sh`: เปิดเงินจริงด้วยคำสั่งเดียว เฉพาะ prefunded canary
+  - ค่าเงินไม่มีค่าเริ่มต้น
+  - ต้องมี `LEGO_ALERTS_CONFIRMED=yes`
+  - ack สองขั้น
+  - kill switch และ rollback บรรทัดเดียว
+
+เทสต์:
+- **2,497 passed / 9 skipped** (+147, ไม่แก้และไม่ skip เทสต์เดิม); characterization baseline ผ่านโดยไม่แก้; mutation จับ **25/25**
+- fail-first: เทสต์ provenance ล้มกับ deploy script เดิมทั้ง 2 ข้อ
+- session **trade** บน PROD ครบวันด้วยค่าตรงตามที่ขอ (broker ปลอม): order 2 ตำแหน่ง, SELL < หุ้นจริง, LEAPS ไม่ถูกขาย, cap 10 order ทำงาน
+
+ผล local และ evidence อยู่ใน `release_evidence/20261103-pr/`.
+
+สถานะ: **code-ready สำหรับ canary เงินจริง; NO-GO จนกว่าเจ้าของจะทำ Go / No-Go ใน audit ครบ**:
+- alert ถึงคนจริง (G4)
+- Webull ยืนยันประเภทบัญชี / การ settle / fractional
+- ถือ LEAPS และหุ้นจริงตาม preflight, buying power ≥ $1,515
+- canary ใบแรกผ่านข้อหยุด
+
+ถ้ายังไม่เปิด ⇒ ต่อ paper ก่อน **2026-11-06T21:00Z**.
+
 ล่าสุด 1 พฤศจิกายน: [LEAPS แทนหุ้น — `LEGO_LEAPS`](docs/LEAPS_STOCK_REPLACEMENT_TH.md) (หุ้นจำลอง, 1 สัญญา = 100; ค่าเริ่มต้น 0 = เหมือนเดิมทุกบิต).
 ตำแหน่งที่ rebalance = หุ้นจริง + LEAPS (Decimal) ก่อนคำนวณทุกอย่าง; BUY ซื้อหุ้นจริง; SELL ได้จากหุ้นจริงเท่านั้น — ต้องขาย ≥ หุ้นจริง → `PASS_SELL_EXCEEDS_REAL` ไม่ตัดเหลือ.
 guard/`prev_holdings`/drift/paper/`run_id` อยู่บนหุ้นจริง; fill `holdings_after` = หุ้นจริง + LEAPS ตรง ledger; เปลี่ยน LEAPS กลาง chain = chain เดิม + event (`leaps_shares_changed_from`); FIX_C คงเดิม (chain ใหม่).

@@ -29,6 +29,14 @@
 
 ถ้า `LEAPS × ราคา ≥ FIX_C` จะ PASS ทุกแถวที่ต้องขาย เพราะ LEAPS อย่างเดียวก็เกินเป้าแล้ว — ตั้ง FIX_C ให้มากกว่ามูลค่า LEAPS เสมอ
 
+ช่วงราคาที่เทรดได้ (`release_horizon.leaps_price_band`, audit 3 พ.ย.):
+- BUY ได้เมื่อ P < (FIX_C − DIFF) / LEAPS
+- SELL ได้เมื่อ P < FIX_C / LEAPS ไม่ว่าถือหุ้นจริงเท่าไร (need = LEAPS + R − FIX_C/P < R ⇔ P < FIX_C/LEAPS)
+- ตั้งแต่ FIX_C / LEAPS ขึ้นไปไม่มี order เลย
+- ตัวอย่าง QBTS (FIX_C 1500, DIFF 50, LEAPS 100): BUY < 14.50, SELL < 15.00
+- `ops.py release-plan --reference-price P` ให้ finding `leaps_value`: BLOCK เมื่อ P ≥ FIX_C/LEAPS (ไม่มี ack), WARN เมื่อ P ≥ (FIX_C−DIFF)/LEAPS, ต่ำกว่านั้น INFO พร้อมเป้าหุ้นจริงและขนาด BUY แรกของบัญชีที่ไม่มีหุ้นจริง
+- ไม่ส่งราคา ⇒ WARN; runtime ไม่มีราคา ⇒ ack ที่ runtime ไม่เปลี่ยน; LEAPS=0 ⇒ ไม่มี finding นี้
+
 ## 2. ตาราง 17 คอลัมน์
 
 - คอลัมน์และลำดับเดิมตาม `COLUMN_ORDER` (ไม่เพิ่ม/ลบ/สลับ) round 2dp เฉพาะตอนแสดง
@@ -122,6 +130,15 @@
    ```
 
 dashboard (`streamlit_lego_prod`) บน Streamlit Community Cloud ดึง `main` ใหม่เองหลัง merge (Manage app → Reboot ถ้ายังไม่เห็น)
+
+**เงินจริงพร้อม LEAPS** (audit 3 พ.ย.): ใช้ `deploy/cloudshell-prod-live.sh` (`docs/PROD_LIVE_RUNBOOK_TH.md` ข้อ 16).
+ก่อน plan, account preflight (`tools/prod_live_preflight.py`, อ่านอย่างเดียว) ตรวจ:
+- LEAPS ที่ถือจริง = long CALL × `option_contract_multiplier` ≥ `LEGO_LEAPS` และหมดอายุหลัง window
+- ทุกแถว position ของ symbol มี `instrument_type` (แถวที่ไม่มี type จะถูก `_extract_qty` นับเป็นหุ้น)
+- ราคาเทียบช่วงข้างบน
+- หุ้นจริงที่ต้องถือก่อน เพื่อให้ order แรกพอดี caps canary
+
+ตรวจไม่ผ่านข้อใด ⇒ BLOCK ก่อน deploy.
 
 ## 8. เทสต์
 

@@ -291,3 +291,59 @@ incident ของ health-policy ปิดเองหลัง 30 นาที�
 
 **เกณฑ์ canary เพิ่ม**: นับสัดส่วน intent ที่ถูกเลื่อน (`gate_defer_count` ≥ 1) ต่อ order ที่ถึง Place และสัดส่วนที่เลื่อนจนจบเป็น `NOT_PLACED` — บน PROD ถ้า `balances/get` ล้มบ่อยพอจะกินขีด decision age 120 s ให้หยุดและส่ง request id ให้ Webull ก่อนขยาย caps.
 การเลื่อนไม่ผ่อนผัน guard ใด: ถ้าสงสัยว่า order ถูกส่งซ้ำหรือผิดฝั่ง ให้ดู `webull_lego_order_audit` (`dispatch_quote_check`) และ `webull_lego_execution_transitions` ก่อนสรุป
+
+## 16. เปิดเงินจริงด้วยคำสั่งเดียว: `deploy/cloudshell-prod-live.sh` (prefunded canary, audit 3 พ.ย.)
+
+ทางนี้แทนการทำข้อ 2–3 ด้วยมือ (export ค่าประมาณ 15 ตัวจาก plan) สำหรับ **release prefunded** — release funding ที่ caps หลวม (วิธี B) ยังทำได้เฉพาะทางมือตามข้อ 1–3.
+ทุก gate fail closed ตามลำดับ (`docs/AUDIT_20261103_TH.md` G1–G10):
+
+1. **ท้องถิ่น ก่อนเรียก cloud**:
+   - ค่าเงินทุกตัวต้องระบุเอง ไม่มีค่าเริ่มต้น (`LEGO_SYMBOL/FIX_C/DIFF/LEAPS/ALLOW_FRACTIONAL_OVERRIDE`)
+   - checkout สะอาด, ไม่มี `WEBULL_API_DEBUG`, `LEGO_ALERTS_CONFIRMED=yes` (G4: drill ถึงคนจริงแล้ว)
+   - DB ต้องไม่ใช่ paper และไม่ใช่ default instance, prefunded เท่านั้น, ไม่อยู่ใน regular session
+2. credentials PROD มีอยู่แล้ว; token จาก Check Token สด > 3 วัน (ถ้าไม่สด ⇒ 2FA ในแอป)
+3. `lego-firebase-prod`: ลง `database.rules.prod.json` และพิสูจน์ `Permission denied`
+4. candidate = git HEAD (`tools/candidate_manifest.py --from-head`)
+5. **account preflight** `tools/prod_live_preflight.py` (อ่านอย่างเดียว; ไม่ใช้ Firebase; ไม่มี Preview / Place / Cancel):
+   - USD buying power ≥ FIX_C + 1%
+   - ไม่มี open order ของ symbol
+   - instrument OC + `fractionable`
+   - ทุกแถว position ของ symbol มี `instrument_type` EQUITY / OPTION
+   - LEAPS ที่ถือ (long CALL × multiplier) ≥ `LEGO_LEAPS` และหมดอายุหลัง window (อ่านไม่ได้ ⇒ BLOCK เว้นแต่ `LEGO_LEAPS_CONFIRMED=yes`)
+   - ราคา < FIX_C/LEAPS
+   - order แรกพอดี caps canary (ไม่พอดี ⇒ บอกช่วงหุ้นจริงที่ต้องถือก่อน)
+   - route order history
+6. `ops.py release-plan` ที่ราคาจาก snapshot: `--recommended-limits` (canary 10%), `--window-sessions 5`, `--enforce`, finding `leaps_value` (BLOCK ≥ FIX_C/LEAPS)
+7. `deploy/cloudshell-all-in-one.sh`: รอบแรก exit 3 + ack; รอบสองพร้อม `LEGO_PROD_LIVE_ACK` ⇒ deploy **export ของ git HEAD** (`--source=<export>`) ⇒ พิสูจน์ DB อีกรอบ
+
+ตัวอย่าง QBTS (ค่าที่เจ้าของกำหนด 3 พ.ย.). ก่อนรัน ถือหุ้นจริงตามช่วงที่ preflight บอก (ที่ $10.82 = 25–52 หุ้น แนะนำ 38).
+
+รอบแรก (ตรวจทุก gate แล้วพิมพ์ ack, ยังไม่ deploy):
+
+```bash
+git clone https://github.com/firstnattapon/lego ~/lego-live && cd ~/lego-live && LEGO_SYMBOL_OVERRIDE=QBTS LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_ALERTS_CONFIRMED=yes ALERT_WEBHOOK_SECRET_OVERRIDE=<ชื่อ secret ของ webhook> LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod-live.sh
+```
+
+รอบสอง (deploy):
+
+```bash
+cd ~/lego-live && LEGO_PROD_LIVE_ACK=<ค่าที่พิมพ์> LEGO_SYMBOL_OVERRIDE=QBTS LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_ALERTS_CONFIRMED=yes ALERT_WEBHOOK_SECRET_OVERRIDE=<ชื่อ secret ของ webhook> LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod-live.sh
+```
+
+script พิมพ์ kill switch (`ops.py halt-orders`) และ rollback บรรทัดเดียวไว้ทั้งสองรอบ. rollback เป็น observe บน chain เดิม (DNA, policy และ DIFF เดียวกัน ⇒ chain key เดิม; order ที่ส่งแล้วยังถูก reconcile):
+
+```bash
+cd ~/lego-live && LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_SYMBOL_OVERRIDE=QBTS LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 bash deploy/cloudshell-prod-observe.sh
+```
+
+**ข้อหยุด canary** (kill switch แล้วตามด้วย rollback):
+- `needs_manual_check`, `order_contract_anomaly`, `BROKER_REJECT_HALT`, `MANUAL_RECONCILIATION_REQUIRED`
+- `AWAITING_FILL_CONFIRMATION` เกิน 1 tick: การยืนยัน fill ยอมคลาดแค่ 0.000001 หุ้น และเอกสาร Webull TH ไม่ระบุกติกา fractional
+- `AWAITING_BROKER_FEE` เกิน 15 นาที / `FEE_OVERDUE`
+- `EXECUTION_LIMIT_BLOCKED` หรือ `NOT_PLACED` ซ้ำ
+- holdings ใน state ≠ แอป; order ในแอปที่ระบบไม่ได้ส่ง
+- ราคาอยู่ ≥ (FIX_C − DIFF)/LEAPS นานจนไม่มีการเทรด
+
+Go / No-Go เต็มอยู่ใน `docs/AUDIT_20261103_TH.md`.
+
+ทุก deploy (ทุกโหมด) ใช้ hash และ upload จาก git HEAD แล้ว: ไฟล์ที่ git ignore (`token.txt`, credentials, virtualenv) หรือ `../lego-firebase-streamlit` ไม่ทำให้ `LEGO_CANDIDATE_HASH` ต่างจาก commit อีก (CANDIDATE_MISMATCH ของ 00003 / 00005).

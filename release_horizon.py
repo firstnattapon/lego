@@ -34,7 +34,7 @@ import math
 import os
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_DOWN
 
 from dna_engine import decode_dna
 from execution_limits import ExecutionLimitError, ExecutionLimits
@@ -141,6 +141,9 @@ class ReleaseInputs:
     dna_origin: str | None
     initial_funding: bool = False
     reference_price: Decimal | None = None
+    # LEGO_LEAPS share-equivalents (OperatorSettings.leaps_shares). Zero, the default,
+    # adds no finding: a release without LEAPS is judged exactly as it always was.
+    leaps_shares: Decimal = Decimal(0)
 
     @property
     def trading(self) -> bool:
@@ -174,7 +177,8 @@ def inputs_from_runtime(runtime, *, initial_funding: bool = False,
         dna_code=bundle.dna_code, dna_interval=int(bundle.interval_seconds),
         dna_origin=bundle.origin_utc, initial_funding=initial_funding,
         reference_price=(None if reference_price is None
-                         else Decimal(str(reference_price))))
+                         else Decimal(str(reference_price))),
+        leaps_shares=Decimal(str(getattr(operator, "leaps_shares", 0) or 0)))
 
 
 def findings(inp: ReleaseInputs, *, now: datetime | None = None) -> list[dict]:
@@ -200,6 +204,9 @@ def findings(inp: ReleaseInputs, *, now: datetime | None = None) -> list[dict]:
         add("fractional_policy", WARN,
             "production validation should start with whole shares "
             "(LEGO_ALLOW_FRACTIONAL=false); review any change explicitly")
+
+    if inp.leaps_shares > 0:
+        _leaps_findings(inp, add, fail)
 
     horizon = None
     try:
@@ -248,6 +255,63 @@ def findings(inp: ReleaseInputs, *, now: datetime | None = None) -> list[dict]:
                 f"DNA ended {format_window_end(dna_end_at)}; no further decisions",
                 static=False)
     return out
+
+
+def leaps_price_band(principal, diff, leaps) -> tuple[Decimal, Decimal]:
+    """The prices below which a release holding *leaps* share-equivalents can still trade.
+
+    The rebalanced position is real shares + LEAPS (lego_one_row.build_decision). With no
+    real shares a BUY needs LEAPS x P < FIX_C - DIFF, so the first bound is
+    (FIX_C - DIFF) / LEAPS. A SELL can only come out of the real shares: it needs
+    LEAPS + real - FIX_C / P < real (lego_one_row._sell_exceeds_real), i.e. P < FIX_C / LEAPS
+    whatever the real holdings. At or above that second price no order of either side can
+    be sent: every slot is PASS_SELL_EXCEEDS_REAL or PASS_THRESHOLD.
+    """
+    principal, diff, leaps = (Decimal(str(value)) for value in (principal, diff, leaps))
+    if not leaps > 0:
+        raise ValueError("leaps must be > 0")
+    return (principal - diff) / leaps, principal / leaps
+
+
+def _leaps_findings(inp: ReleaseInputs, add, fail) -> None:
+    """LEAPS against FIX_C at the reference price (docs/LEAPS_STOCK_REPLACEMENT_TH.md).
+
+    Static: it depends on the release and the price it was planned at. The runtime gate
+    never has a price, so there this is at most a WARN and the acknowledgement it computes
+    is unchanged; a plan with --reference-price at or above FIX_C / LEAPS gets no ack.
+    """
+    leaps, principal = inp.leaps_shares, inp.principal
+    buy_below, sell_below = leaps_price_band(principal, inp.diff, leaps)
+    band = (f"with LEGO_LEAPS {_plain(leaps)} share-equivalents a BUY needs a price below "
+            f"{_plain(buy_below)} ((FIX_C - DIFF) / LEAPS) and a SELL one below "
+            f"{_plain(sell_below)} (FIX_C / LEAPS); LEAPS are never sold")
+    price = inp.reference_price
+    if price is None:
+        add("leaps_value", WARN,
+            f"{band}. Pass --reference-price to judge this release against that band")
+        return
+    if price >= sell_below:
+        add("leaps_value", fail,
+            f"at the reference price {_plain(price)} the LEAPS alone are worth "
+            f"{_plain(leaps * price)} USD, at least FIX_C {_plain(principal)}: this release can "
+            f"never send an order (every slot is PASS_SELL_EXCEEDS_REAL or PASS_THRESHOLD); "
+            f"{band}. Raise FIX_C above LEAPS x price + DIFF or lower LEGO_LEAPS")
+        return
+    if price >= buy_below:
+        add("leaps_value", WARN,
+            f"at the reference price {_plain(price)} a flat account cannot BUY (the LEAPS alone "
+            f"are within DIFF of FIX_C); only real shares above the target are sold; {band}")
+        return
+    target = (principal / price - leaps).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    first = (principal - leaps * price).quantize(Decimal("0.01"))
+    share = (first / principal * 100).quantize(Decimal("0.1"))
+    funding = ("more than a steady release may carry in one order: hold the real shares "
+               "first (prefunded) or plan --initial-funding"
+               if first / principal > STEADY_NOTIONAL_FRACTION_MAX else "within a steady release")
+    add("leaps_value", INFO,
+        f"at the reference price {_plain(price)} the real-share target is {target} shares "
+        f"(FIX_C / price - LEAPS) and a flat account's first BUY is about {first} USD "
+        f"({share}% of FIX_C, {funding}); {band}")
 
 
 def _limit_findings(inp: ReleaseInputs, limits: ExecutionLimits, add, fail) -> None:

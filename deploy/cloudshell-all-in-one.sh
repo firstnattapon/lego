@@ -150,6 +150,8 @@ trap on_error ERR
 
 # A paused operator job must only be enabled long enough to run the smoke tick.
 SCHEDULER_TEMP_RESUMED=false
+# The git HEAD export that is hashed and uploaded (section 7); removed on exit.
+SOURCE_PARENT=""
 
 restore_scheduler_state() {
     if [[ "${SCHEDULER_TEMP_RESUMED}" != true ]]; then
@@ -178,6 +180,9 @@ restore_scheduler_state() {
 on_exit() {
     local exit_code=$?
     trap - EXIT
+    if [[ -n "${SOURCE_PARENT}" ]]; then
+        rm -rf "${SOURCE_PARENT}"
+    fi
     if ! restore_scheduler_state; then
         echo "ERROR: Could not restore Cloud Scheduler to PAUSED; check ${SCHEDULER_JOB} immediately." >&2
         if (( exit_code == 0 )); then
@@ -674,11 +679,19 @@ PY
 
 GIT_COMMIT="$(git rev-parse --verify HEAD)"
 [[ -z "$(git status --porcelain)" ]] || fail "Deployment requires a clean committed checkout"
+# The candidate is git HEAD itself, exported into a directory of its own: that export is
+# what is hashed and what is uploaded (section 8). Files git ignores in this checkout (a
+# token.txt, a credentials file, a virtualenv) and a sibling reader checkout are neither,
+# so the deployed LEGO_CANDIDATE_HASH is the hash of the reviewed commit on any machine.
+SOURCE_PARENT="$(mktemp -d)"
+SOURCE_EXPORT="${SOURCE_PARENT}/src"
 CANDIDATE_HASH="$(
-    python3 tools/candidate_manifest.py | \
+    python3 tools/candidate_manifest.py --from-head --export-to "${SOURCE_EXPORT}" | \
         python3 -c 'import json, sys; print(json.load(sys.stdin)["candidate_hash"])'
 )"
 require_sha256 "candidate hash" "${CANDIDATE_HASH}"
+[[ -f "${SOURCE_EXPORT}/main.py" || -f "${SOURCE_EXPORT}/config.py" ]] || \
+    fail "git HEAD export is incomplete"
 
 if [[ -n "${EXPECTED_CANDIDATE_HASH}" ]]; then
     require_sha256 "EXPECTED_CANDIDATE_HASH" "${EXPECTED_CANDIDATE_HASH}"
@@ -834,6 +847,7 @@ echo "DNA bundle     : ${DNA_BUNDLE}"
 echo "DNA report     : ${DNA_REPORT}"
 echo "Schedule       : ${SCHEDULE} UTC"
 echo "Candidate hash : ${CANDIDATE_HASH} (${CANDIDATE_STATUS})"
+echo "Source         : git HEAD ${GIT_COMMIT} export (ignored local files are neither hashed nor uploaded)"
 echo "Mode           : ${MODE}"
 echo "Active         : ${ACTIVE}"
 if [[ "${MODE}" == preview ]]; then
@@ -892,7 +906,7 @@ gcloud functions deploy "${FUNCTION_NAME}" \
     --gen2 \
     --runtime=python312 \
     --region="${REGION}" \
-    --source=. \
+    --source="${SOURCE_EXPORT}" \
     --entry-point=lego_tick \
     --trigger-http \
     --no-allow-unauthenticated \
