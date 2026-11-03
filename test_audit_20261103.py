@@ -496,7 +496,7 @@ def test_every_money_value_is_the_owners_and_has_no_default(sandbox, missing):
     ({"LEGO_ALERTS_CONFIRMED": "y"}, "LEGO_ALERTS_CONFIRMED=yes"),
     ({"LEGO_PROD_DB_INSTANCE": "lego-firebase-paper"}, "paper"),
     ({"LEGO_PROD_DB_INSTANCE": "lego-firebase-default-rtdb"}, "default instance"),
-    ({"LEGO_FUNDING_MODE_OVERRIDE": "initial-funding"}, "prefunded"),
+    ({"LEGO_FUNDING_MODE_OVERRIDE": "loose"}, "must be prefunded (the canary) or initial-funding"),
     ({"LEGO_ALLOW_FRACTIONAL_OVERRIDE": "yes"}, "LEGO_ALLOW_FRACTIONAL_OVERRIDE"),
     ({"LEGO_FIX_C_OVERRIDE": "1,500"}, "LEGO_FIX_C_OVERRIDE"),
     ({"LEGO_LEAPS_OVERRIDE": "-1"}, "LEGO_LEAPS_OVERRIDE"),
@@ -611,7 +611,9 @@ def test_the_live_wrapper_is_the_only_wrapper_that_trades():
     assert "WEBULL_ENV=PROD LEGO_MODE=trade LEGO_ACTIVE=true" in live
     assert '"${LEGO_MODE_OVERRIDE:-}" == trade' in live and '"${LEGO_ACTIVE_OVERRIDE:-}" == true' in live
     assert "unset LEGO_PROD_LIVE_ACK" not in live                       # the ack is the owner's input
-    assert "--initial-funding" not in live                              # prefunded canary only
+    # The loose funding caps are planned only in the funding mode (2026-11-03 funding addendum).
+    assert '[[ "${FUNDING}" != initial-funding ]] || PLAN_ARGS+=(--initial-funding)' in live
+    assert live.count("--initial-funding") == 1
 
 
 # ------------------------------------------------------------------ T8 numbers of this export

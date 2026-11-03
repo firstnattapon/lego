@@ -13,7 +13,9 @@ the same broker reads the tick makes (docs/AUDIT_20261103_TH.md, gate G3):
   LEGO_LEAPS and expire after the approval window;
 * the live price against the LEAPS band (release_horizon.leaps_price_band);
 * the first order of a prefunded canary fits the canary caps; when it does not, the real
-  shares to hold first;
+  shares to hold first, or the one-off funding release (--funding initial-funding: the
+  loose funding caps of release_horizon, allowed only for a first BUY the canary caps
+  cannot carry);
 * the order-history route the reconcile path depends on (a probe that matches no order).
 
 No Firebase, no Preview, no Place, no Cancel: it imports none of them. Account id, token
@@ -22,7 +24,7 @@ and app credentials come from the environment and never reach the output.
     WEBULL_ENV=PROD WEBULL_APP_KEY=... WEBULL_APP_SECRET=... WEBULL_ACCOUNT_ID=... \\
         WEBULL_TOKEN_SECRET=projects/P/secrets/N WEBULL_TOKEN_DIR=$(mktemp -d) \\
         python3 tools/prod_live_preflight.py --symbol QBTS --fix-c 1500 --diff 50 \\
-            --leaps 100 --allow-fractional true --window-sessions 5
+            --leaps 100 --allow-fractional true --window-sessions 5 [--funding initial-funding]
 
 Exit 0 when nothing blocks, 1 otherwise; the JSON report is the only thing on stdout.
 """
@@ -72,6 +74,9 @@ class Params:
     window_end: datetime
     leaps_confirmed: bool = False
     interval_seconds: int = 900
+    # prefunded: the canary caps; initial-funding: the one-off funding release whose first
+    # BUY is larger than the canary caps carry (release_horizon.recommend_limits).
+    funding: str = "prefunded"
 
 
 def _plain(value: Decimal) -> str:
@@ -177,6 +182,11 @@ def judge(facts: dict, params: Params) -> dict:
     symbol = params.symbol.strip().upper()
     principal, diff, leaps = params.principal, params.diff, params.leaps
     derived["leaps_declared"] = _plain(leaps)
+    if params.funding not in rh.FUNDING_MODES:
+        add("arguments", BLOCK, f"funding must be one of {', '.join(rh.FUNDING_MODES)}")
+        return _report(facts, findings, derived)
+    funding = params.funding == "initial-funding"
+    derived["funding"] = params.funding
 
     if facts.get("environment") != PROD:
         add("environment", BLOCK, f"environment is {facts.get('environment')!r}: this preflight "
@@ -286,11 +296,17 @@ def judge(facts: dict, params: Params) -> dict:
         effective = real + leaps
         gap = effective * price - principal
         target = principal / price - leaps
-        caps = rh.recommend_limits(principal, price, profile="PROD",
-                                   interval_seconds=params.interval_seconds)
+        canary = rh.recommend_limits(principal, price, profile="PROD",
+                                     interval_seconds=params.interval_seconds)
+        caps = (rh.recommend_limits(principal, price, profile="PROD", initial_funding=True,
+                                    interval_seconds=params.interval_seconds)
+                if funding else canary)
         notional_cap = Decimal(caps["LEGO_MAX_ORDER_NOTIONAL_USD"])
         quantity_cap = Decimal(caps["LEGO_MAX_ORDER_QUANTITY"])
-        low, high = prefund_range(principal, leaps, price, notional_cap, quantity_cap)
+        canary_notional = Decimal(canary["LEGO_MAX_ORDER_NOTIONAL_USD"])
+        canary_quantity = Decimal(canary["LEGO_MAX_ORDER_QUANTITY"])
+        # The real shares a prefunded canary needs are judged against the canary caps.
+        low, high = prefund_range(principal, leaps, price, canary_notional, canary_quantity)
         suggested = max(0, math.floor(target))
         derived.update({
             "effective_shares": _plain(effective), "value_usd": _money(effective * price),
@@ -302,27 +318,52 @@ def judge(facts: dict, params: Params) -> dict:
             "prefund_range": [str(low), str(high)] if low <= high else None,
             "suggested_real_shares": str(suggested),
         })
-        if abs(gap) <= diff:
+        def fits(notional: Decimal, shares: Decimal) -> bool:
+            return abs(gap) * DRIFT_FACTOR <= notional and abs(gap) / price <= shares
+
+        side = None if abs(gap) <= diff else ("SELL" if gap > 0 else "BUY")
+        if funding and (side != "BUY" or fits(canary_notional, canary_quantity)):
+            # The loose caps exist for one BUY the canary cannot carry, nothing else.
+            reason = ("there is no first order (within DIFF of FIX_C)" if side is None else
+                      "the first order is a SELL" if side == "SELL" else
+                      f"the first BUY of about {_money(abs(gap))} USD fits the canary caps")
+            add("funding_not_needed", BLOCK, f"the one-off funding release is refused: {reason}. "
+                "Deploy the prefunded canary instead (run again without "
+                "LEGO_FUNDING_MODE_OVERRIDE)")
+        if side is None:
             derived["first_order"] = None
             add("first_order", INFO, f"{_plain(real)} real + {_plain(leaps)} LEAPS at {_plain(price)} "
                 f"is within DIFF of FIX_C: no order until the price moves")
         else:
-            side = "SELL" if gap > 0 else "BUY"
             quantity = (abs(gap) / price).quantize(CENT, rounding=ROUND_DOWN)
             derived["first_order"] = {"side": side, "notional_usd": _money(abs(gap)),
                                       "quantity": _plain(quantity)}
-            if abs(gap) * DRIFT_FACTOR <= notional_cap and abs(gap) / price <= quantity_cap:
+            if funding and side == "BUY" and fits(notional_cap, quantity_cap):
+                add("first_order", INFO, f"one-off funding release: the first BUY of about "
+                    f"{_money(abs(gap))} USD ({_plain(quantity)} shares) fits the funding caps "
+                    f"({_plain(notional_cap)} USD / {_plain(quantity_cap)} shares, "
+                    f"{caps['LEGO_MAX_SESSION_ORDERS']} orders per session); deploy the canary "
+                    "once the fill is confirmed")
+            elif funding and side == "BUY":
+                add("first_order", BLOCK, f"the first BUY of about {_money(abs(gap))} USD is more "
+                    f"than even the funding caps allow ({_plain(notional_cap)} USD / "
+                    f"{_plain(quantity_cap)} shares)")
+            elif funding:
+                pass                                  # a SELL: funding_not_needed above
+            elif fits(notional_cap, quantity_cap):
                 add("first_order", INFO, f"the first order, a {side} of about {_money(abs(gap))} USD, "
                     f"fits the canary caps ({_plain(notional_cap)} USD / {_plain(quantity_cap)} shares)")
             else:
                 hold = (f"hold between {low} and {high} real {symbol} shares first (about "
                         f"{suggested}; quantity with at most 2 decimals)" if low <= high else
                         "no whole number of real shares fits these caps")
+                funding_hint = (" (or, for this first BUY, the one-off funding release: "
+                                "LEGO_FUNDING_MODE_OVERRIDE=initial-funding)" if side == "BUY" else "")
                 add("first_order", BLOCK, f"the first order would be a {side} of about "
                     f"{_money(abs(gap))} USD ({_plain(quantity)} shares), more than the canary caps "
                     f"allow ({_plain(notional_cap)} USD / {_plain(quantity_cap)} shares): every slot "
-                    f"would be EXECUTION_LIMIT_BLOCKED. This release is prefunded only: {hold}, "
-                    "then run it again")
+                    f"would be EXECUTION_LIMIT_BLOCKED. This release is prefunded: {hold}, "
+                    f"then run it again{funding_hint}")
     elif real is not None and price is not None:
         derived["real_target"] = "0"
 
@@ -429,6 +470,7 @@ def main(argv=None) -> int:
     parser.add_argument("--allow-fractional", required=True)
     parser.add_argument("--window-sessions", type=int, default=5)
     parser.add_argument("--leaps-confirmed", action="store_true")
+    parser.add_argument("--funding", choices=rh.FUNDING_MODES, default="prefunded")
     args = parser.parse_args(argv)
     try:
         symbol = args.symbol.strip().upper()
@@ -443,7 +485,7 @@ def main(argv=None) -> int:
             leaps=_positive(args.leaps, "--leaps", zero=True),
             allow_fractional=args.allow_fractional == "true",
             window_end=rh.window_end_after_sessions(now, args.window_sessions),
-            leaps_confirmed=args.leaps_confirmed)
+            leaps_confirmed=args.leaps_confirmed, funding=args.funding)
     except ValueError as exc:
         report = _report({}, [{"id": "arguments", "severity": BLOCK, "message": str(exc)}], {})
         print(json.dumps(report, ensure_ascii=False, indent=2))

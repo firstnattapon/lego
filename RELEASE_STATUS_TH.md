@@ -1,6 +1,11 @@
 # สถานะ candidate continuous execution v4
 
-ล่าสุด 3 พฤศจิกายน: [เปิด PROD เงินจริง QBTS แบบ fail-closed — re-audit 12 จุดเสี่ยงและ gate G1–G10](docs/AUDIT_20261103_TH.md).
+ล่าสุด 3 พฤศจิกายน (addendum funding): บัญชีจริงยังไม่มีหุ้น QBTS ⇒ `deploy/cloudshell-prod-live.sh` รองรับ release funding ครั้งเดียวก่อน canary
+(`LEGO_FUNDING_MODE_OVERRIDE=initial-funding`: เพดาน 1875 USD / 200 หุ้น / 2 order, window 2 session; ใบแรกจริง ≈ $491 เพราะ LEAPS 100).
+พบและแก้: `recommend_limits` ของ funding ปัด 1875 ขึ้นเป็น 1900 (127%) จน release-plan BLOCK ตัวเอง.
+เทสต์ **2,520 passed / 9 skipped**, mutation 8/8. ยัง NO-GO จนกว่า G4 / Webull / ซื้อ call ครบ — [audit addendum](docs/AUDIT_20261103_TH.md), runbook ข้อ 16.1.
+
+3 พฤศจิกายน: [เปิด PROD เงินจริง QBTS แบบ fail-closed — re-audit 12 จุดเสี่ยงและ gate G1–G10](docs/AUDIT_20261103_TH.md).
 ค่าที่เจ้าของกำหนด: `WEBULL_ENV=PROD LEGO_MODE=trade LEGO_ACTIVE=true LEGO_SYMBOL=QBTS LEGO_FIX_C=1500 LEGO_ALLOW_FRACTIONAL=true LEGO_DIFF=50 LEGO_LEAPS=100`.
 
 log PROD paper 30 ต.ค. 15:31Z → 2 พ.ย. 21:47Z:
