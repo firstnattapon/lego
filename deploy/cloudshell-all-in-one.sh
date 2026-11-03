@@ -51,8 +51,23 @@ readonly PROJECT_ID="lego-firebase"
 readonly REGION="asia-southeast1"
 readonly ENVIRONMENT="${WEBULL_ENV_OVERRIDE:-UAT}"
 readonly SUFFIX="${ENVIRONMENT,,}"
-readonly FUNCTION_NAME="lego-tick-${SUFFIX}"
-readonly SCHEDULER_JOB="lego-tick-${SUFFIX}"
+# One bot = one function: lego-tick-<env> is the first, LEGO_BOT_OVERRIDE=<name> deploys another
+# symbol beside it as lego-tick-<env>-<name> (same account, token, database and service accounts;
+# chains, fences, circuits and the kill switch are keyed by symbol). Before any PROD deploy,
+# tools/bot_inventory.py (step 7) refuses to put another symbol on a function holding a
+# real-money chain, or one symbol in two functions. docs/PROD_LIVE_RUNBOOK_TH.md section 17.
+readonly BOT="${LEGO_BOT_OVERRIDE:-}"
+if [[ -n "${BOT}" && ! "${BOT}" =~ ^[a-z][a-z0-9]{0,15}$ ]]; then
+    echo "LEGO_BOT_OVERRIDE must be a short lower-case name such as usar (1-16 letters and digits, starting with a letter)." >&2
+    exit 1
+fi
+readonly RETIRE_SYMBOL="${LEGO_RETIRE_SYMBOL_OVERRIDE:-}"
+if [[ -n "${RETIRE_SYMBOL}" && ! "${RETIRE_SYMBOL}" =~ ^[A-Z][A-Z0-9.-]{0,9}$ ]]; then
+    echo "LEGO_RETIRE_SYMBOL_OVERRIDE must be the upper-case ticker of the chain to retire, such as QBTS." >&2
+    exit 1
+fi
+readonly FUNCTION_NAME="lego-tick-${SUFFIX}${BOT:+-${BOT}}"
+readonly SCHEDULER_JOB="${FUNCTION_NAME}"
 readonly RUNTIME_SA_NAME="lego-runtime-${SUFFIX}"
 readonly SCHEDULER_SA_NAME="lego-scheduler-${SUFFIX}"
 readonly RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -612,6 +627,20 @@ ALLOW_FRACTIONAL="$(resolve_value "${LEGO_ALLOW_FRACTIONAL_OVERRIDE}" "$(read_ex
 DIFF="$(resolve_value "${LEGO_DIFF_OVERRIDE}" "$(read_existing_env LEGO_DIFF)" "25")"
 LEAPS="$(resolve_value "${LEGO_LEAPS_OVERRIDE}" "$(read_existing_env LEGO_LEAPS)" "0")"
 DNA_BUNDLE="$(resolve_value "${LEGO_DNA_BUNDLE_OVERRIDE}" "$(read_existing_env LEGO_DNA_BUNDLE)" "strategy.example.json")"
+
+if [[ "${ENVIRONMENT}" == PROD ]]; then
+    # Every bot trades the one account. Read them all before anything is planned or deployed:
+    # never another symbol (or database) on a function holding a real-money chain, never one
+    # symbol in two functions, and nothing at all when they cannot be read.
+    INVENTORY_ARGS=(--project "${PROJECT_ID}" --region "${REGION}" --env PROD
+                    --target "${FUNCTION_NAME}" --symbol "${SYMBOL}" --database-url "${DATABASE_URL}")
+    [[ -z "${RETIRE_SYMBOL}" ]] || INVENTORY_ARGS+=(--retire "${RETIRE_SYMBOL}")
+    INVENTORY_STATUS=0
+    python3 tools/bot_inventory.py "${INVENTORY_ARGS[@]}" >/dev/null || INVENTORY_STATUS=$?
+    (( INVENTORY_STATUS == 0 )) || \
+        fail "the bots of ${PROJECT_ID} refuse ${SYMBOL} on ${FUNCTION_NAME} (above); nothing was deployed"
+    echo "OK bots: ${SYMBOL} may deploy to ${FUNCTION_NAME}"
+fi
 
 EXISTING_SCHEDULE="$(
     gcloud scheduler jobs describe "${SCHEDULER_JOB}" \

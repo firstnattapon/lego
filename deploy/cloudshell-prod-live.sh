@@ -31,9 +31,16 @@
 #
 # DNA and order policy are the ones deploy/cloudshell-prod-observe.sh deploys, so rolling back
 # to observe (printed at the end) keeps this chain and keeps reconciling a sent order.
+#
+# Another symbol on the same account is another bot (docs/PROD_LIVE_RUNBOOK_TH.md section 17):
+# LEGO_BOT_OVERRIDE=<name> deploys it to a function of its own beside the first one. Before the
+# preflight, tools/bot_inventory.py refuses another symbol on a function that holds a real-money
+# chain (the first bot's included) and one symbol in two functions, and names the other bots
+# trading real money: the preflight keeps their FIX_C + 1 % out of this release's buying power.
 set -Eeuo pipefail
 
 readonly PROJECT_ID="lego-firebase"
+readonly REGION="asia-southeast1"
 readonly SUFFIX="prod"
 readonly DB_INSTANCE="${LEGO_PROD_DB_INSTANCE:-lego-firebase-prod}"
 readonly DB_LOCATION="asia-southeast1"
@@ -108,6 +115,14 @@ case "${FUNDING}" in
     *) fail "LEGO_FUNDING_MODE_OVERRIDE must be prefunded (the canary) or initial-funding (the one-off funding release of a first BUY larger than the canary caps)" ;;
 esac
 readonly FUNDING WINDOW_SESSIONS
+BOT="${LEGO_BOT_OVERRIDE:-}"
+[[ -z "${BOT}" || "${BOT}" =~ ^[a-z][a-z0-9]{0,15}$ ]] || \
+    fail "LEGO_BOT_OVERRIDE must be a short lower-case name such as usar (1-16 letters and digits, starting with a letter)"
+RETIRE="${LEGO_RETIRE_SYMBOL_OVERRIDE:-}"
+[[ -z "${RETIRE}" || "${RETIRE}" =~ ^[A-Z][A-Z0-9.-]{0,9}$ ]] || \
+    fail "LEGO_RETIRE_SYMBOL_OVERRIDE must be the upper-case ticker of the chain to retire, such as QBTS"
+readonly BOT RETIRE
+readonly FUNCTION_NAME="lego-tick-${SUFFIX}${BOT:+-${BOT}}"   # as deploy/cloudshell-all-in-one.sh names it
 [[ "${DB_INSTANCE}" =~ ^[a-z0-9-]+$ ]] || fail "LEGO_PROD_DB_INSTANCE must be a Realtime Database instance name"
 [[ "${DB_INSTANCE}" != *paper* ]] || \
     fail "${DB_INSTANCE} holds paper holdings; real money keeps its chain in lego-firebase-prod"
@@ -297,7 +312,20 @@ require_private() {
 }
 require_private
 
-step "3/5 Candidate (git HEAD) and the account preflight (read-only)"
+step "3/5 The bots of ${PROJECT_ID}, the candidate (git HEAD) and the account preflight (read-only)"
+INVENTORY_ARGS=(--project "${PROJECT_ID}" --region "${REGION}" --env PROD --target "${FUNCTION_NAME}"
+                --symbol "${SYMBOL}" --database-url "${DATABASE_URL}")
+[[ -z "${RETIRE}" ]] || INVENTORY_ARGS+=(--retire "${RETIRE}")
+INVENTORY_STATUS=0
+INVENTORY_JSON="$(python3 tools/bot_inventory.py "${INVENTORY_ARGS[@]}")" || INVENTORY_STATUS=$?
+(( INVENTORY_STATUS == 0 )) || \
+    fail "the bots of ${PROJECT_ID} refuse ${SYMBOL} on ${FUNCTION_NAME} (above); nothing was planned or deployed"
+RESERVES="$(printf '%s' "${INVENTORY_JSON}" | python3 -c '
+import json, sys
+report = json.load(sys.stdin)
+if report.get("ok") is not True:
+    raise SystemExit(1)
+print("\n".join(report["reserve"]))')" || fail "the bot inventory returned no usable report"
 CANDIDATE="$(python3 tools/candidate_manifest.py --from-head | \
     python3 -c 'import json, sys; print(json.load(sys.stdin)["candidate_hash"])')"
 [[ "${CANDIDATE}" =~ ^[0-9a-f]{64}$ ]] || fail "could not compute the candidate hash of git HEAD"
@@ -306,6 +334,9 @@ PREFLIGHT_ARGS=(--symbol "${SYMBOL}" --fix-c "${FIX_C}" --diff "${DIFF}" --leaps
                 --allow-fractional "${FRACTIONAL}" --window-sessions "${WINDOW_SESSIONS}"
                 --funding "${FUNDING}")
 [[ "${LEGO_LEAPS_CONFIRMED:-}" != yes ]] || PREFLIGHT_ARGS+=(--leaps-confirmed)
+while IFS= read -r reserve; do       # the cash of the other bots trading real money on the account
+    [[ -z "${reserve}" ]] || PREFLIGHT_ARGS+=(--reserve "${reserve}")
+done <<<"${RESERVES}"
 mkdir -m 700 "${WORK}/preflight-token"
 PREFLIGHT_STATUS=0
 PREFLIGHT_JSON="$(
@@ -369,6 +400,7 @@ export WEBULL_TOKEN_SECRET_OVERRIDE="projects/${PROJECT_ID}/secrets/${TOKEN_SECR
 export LEGO_FUNDING_MODE_OVERRIDE="${FUNDING}"
 export ALERT_WEBHOOK_SECRET_OVERRIDE="${ALERT_SECRET}"
 export LEGO_FEE_PCT_OVERRIDE="${FEE}"
+export LEGO_BOT_OVERRIDE="${BOT}" LEGO_RETIRE_SYMBOL_OVERRIDE="${RETIRE}"   # the same function, judged again
 unset LEGO_SCHEDULE_OVERRIDE   # every minute, as tools/verify_deployment.py requires
 
 print_summary() {
@@ -377,6 +409,7 @@ import json, sys
 derived = json.load(sys.stdin)["derived"]
 plan = json.loads(sys.argv[1])["release"]
 funding, confirmed = sys.argv[7], sys.argv[8] == "yes"
+inventory, bot = json.loads(sys.argv[9]), sys.argv[10]
 first = derived.get("first_order")
 band = derived.get("price_band") or {}
 if sys.argv[5] in ("0", "0.0"):
@@ -385,7 +418,14 @@ elif confirmed and derived.get("leaps_held") in (None, "0"):
     leaps_source = "owner-confirmed (LEGO_LEAPS_CONFIRMED=yes), NOT seen in the positions"
 else:
     leaps_source = "verified in the positions (%s held)" % derived.get("leaps_held")
+others = [b["label"] for b in inventory["bots"] if b["function"] != inventory["target"]]
+kept = (" (this bot %s + other bots %s)" % (derived["own_cash_usd"], derived["reserved_usd"])
+        if derived.get("reserved_usd") else "")
 rows = [
+    ("Function (this bot)", "%s (%s%s)" % (inventory["target"],
+                                           "redeploy" if inventory["target_exists"] else "new",
+                                           ", LEGO_BOT_OVERRIDE=" + bot if bot else "")),
+    ("Other LEGO bots", "; ".join(others) or "none"),
     ("Symbol / FIX_C / DIFF / LEAPS / fractional", " / ".join(sys.argv[2:7])),
     ("LEAPS", leaps_source),
     ("Last price (reference)", "%s (quote %s)" % (derived.get("reference_price"),
@@ -398,8 +438,8 @@ rows = [
         plan["LEGO_MAX_ORDER_QUANTITY"], plan["LEGO_MAX_ORDER_NOTIONAL_USD"],
         plan["LEGO_MAX_SESSION_ORDERS"])),
     ("Window ends", plan["LEGO_TRADING_WINDOW_END"]),
-    ("Buying power / required", "%s / %s USD" % (
-        derived.get("buying_power_usd"), derived.get("required_cash_usd"))),
+    ("Buying power / required", "%s / %s USD%s" % (
+        derived.get("buying_power_usd"), derived.get("required_cash_usd"), kept)),
     ("LEAPS price band", "BUY below %s, SELL below %s" % (band.get("buy_below"), band.get("sell_below"))
      if band else ("no LEAPS" if sys.argv[5] in ("0", "0.0") else "see the release plan above")),
 ]
@@ -411,7 +451,7 @@ else:
     print("REAL-MONEY RELEASE (prefunded canary)")
 for label, value in rows:
     print("  %-42s: %s" % (label, value))' "${PLAN_JSON}" "${SYMBOL}" "${FIX_C}" "${DIFF}" "${LEAPS}" "${FRACTIONAL}" \
-        "${FUNDING}" "${LEGO_LEAPS_CONFIRMED:-}"
+        "${FUNDING}" "${LEGO_LEAPS_CONFIRMED:-}" "${INVENTORY_JSON}" "${BOT}"
 }
 
 print_funding_next_step() {
@@ -427,6 +467,7 @@ EOF
 }
 
 print_stop_commands() {
+    local bot_env="${BOT:+LEGO_BOT_OVERRIDE=${BOT} }"
     local halt="WEBULL_ENV=PROD LEGO_SYMBOL=${SYMBOL} LEGO_FIX_C=${FIX_C} LEGO_DIFF=${DIFF} FIREBASE_DB_URL=${DATABASE_URL} WEBULL_ACCOUNT_ID=\"\$(gcloud secrets versions access latest --secret=${ACCOUNT_SECRET} --project=${PROJECT_ID})\" python3 ops.py halt-orders --operator \"<your name>\" --reason \"<why>\""
     cat <<EOF
 
@@ -435,11 +476,11 @@ Dry run, then the same with --apply:
   ${halt}
   ${halt} --apply
 Roll back to observe on the same chain (no new orders; a sent order is still reconciled):
-  LEGO_ALLOW_FRACTIONAL_OVERRIDE=${FRACTIONAL} LEGO_SYMBOL_OVERRIDE=${SYMBOL} LEGO_FIX_C_OVERRIDE=${FIX_C} LEGO_DIFF_OVERRIDE=${DIFF} LEGO_LEAPS_OVERRIDE=${LEAPS} bash deploy/cloudshell-prod-observe.sh
+  ${bot_env}LEGO_ALLOW_FRACTIONAL_OVERRIDE=${FRACTIONAL} LEGO_SYMBOL_OVERRIDE=${SYMBOL} LEGO_FIX_C_OVERRIDE=${FIX_C} LEGO_DIFF_OVERRIDE=${DIFF} LEGO_LEAPS_OVERRIDE=${LEAPS} bash deploy/cloudshell-prod-observe.sh
 EOF
 }
 
-step "5/5 Deploy lego-tick-prod: PROD, trade, active (deploy/cloudshell-all-in-one.sh)"
+step "5/5 Deploy ${FUNCTION_NAME}: PROD, trade, active (deploy/cloudshell-all-in-one.sh)"
 DEPLOY_STATUS=0
 bash deploy/cloudshell-all-in-one.sh || DEPLOY_STATUS=$?
 if (( DEPLOY_STATUS == 3 )); then
@@ -465,7 +506,7 @@ print_stop_commands
 cat <<EOF
 
 PROD trade is deployed. Watch the first session from 09:30 New York (orders, fills, holdings):
-  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="lego-tick-prod" AND jsonPayload.event="lego_tick_completed"' --project=${PROJECT_ID} --freshness=1h --limit=20 --format='table(timestamp,jsonPayload.business_status,jsonPayload.decision.status,jsonPayload.decision.real_holdings,jsonPayload.execution[0].status)'
+  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="${FUNCTION_NAME}" AND jsonPayload.event="lego_tick_completed"' --project=${PROJECT_ID} --freshness=1h --limit=20 --format='table(timestamp,jsonPayload.business_status,jsonPayload.decision.status,jsonPayload.decision.real_holdings,jsonPayload.execution[0].status)'
 Stop at once (kill switch above) on: needs_manual_check, order_contract_anomaly, BROKER_REJECT_HALT,
 MANUAL_RECONCILIATION_REQUIRED, AWAITING_FILL_CONFIRMATION past one tick, AWAITING_BROKER_FEE past
 15 minutes, FEE_OVERDUE, EXECUTION_LIMIT_BLOCKED or NOT_PLACED again and again, holdings that differ

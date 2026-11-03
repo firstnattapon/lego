@@ -27,7 +27,7 @@ COPIED = ["config.py", "dna_engine.py", "recovery_policy.py", "execution_limits.
           "release_horizon.py", "operational_health.py", "market_clock.py", "ops.py",
           "firebase.json", "database.rules.json", ".gitignore", "tools/candidate_manifest.py",
           "requirements.txt", "requirements-dev.txt", "deploy/cloudshell-all-in-one.sh",
-          "deploy/cloudshell-prod-observe.sh", "database.rules.prod.json"]
+          "deploy/cloudshell-prod-observe.sh", "database.rules.prod.json", "tools/bot_inventory.py"]
 
 GCLOUD = r"""#!/usr/bin/env bash
 echo "gcloud $*" >> "${STUB_LOG}"
@@ -41,6 +41,7 @@ case "$*" in
   "secrets versions access"*) printf '%s' "test-account-id" ;;
   "secrets add-iam-policy-binding"*|"projects add-iam-policy-binding"*) ;;
   "functions describe"*|"scheduler jobs describe"*) exit 1 ;;
+  "run services list"*) ;;  # no LEGO function exists yet (tools/bot_inventory.py, PROD only)
   "functions deploy"*) echo "GCLOUD_FUNCTIONS_DEPLOY_REACHED" >> "${STUB_LOG}"; exit 78 ;;
   *) echo "unexpected gcloud call: $*" >&2; exit 99 ;;
 esac

@@ -1,6 +1,14 @@
 # สถานะ candidate continuous execution v4
 
-ล่าสุด 3 พฤศจิกายน (addendum funding): บัญชีจริงยังไม่มีหุ้น QBTS ⇒ `deploy/cloudshell-prod-live.sh` รองรับ release funding ครั้งเดียวก่อน canary
+ล่าสุด 3 พฤศจิกายน (addendum bot ตัวที่ 2): คำสั่ง USAR ของเจ้าของจะ deploy ทับ QBTS ใน `lego-tick-prod` (ชื่อ function ผูกกับ environment) และไม่มี gate ไหนห้าม.
+แก้ที่ชั้น deploy เท่านั้น:
+- `LEGO_BOT_OVERRIDE=usar` ⇒ function ของตัวเอง `lego-tick-prod-usar`
+- `tools/bot_inventory.py` ห้ามหุ้นอื่นทับ chain เงินจริงและห้ามหุ้นซ้ำสอง function
+- preflight กันเงินของ bot อื่น (QBTS + USAR ⇒ 3,030 USD)
+
+เทสต์ **2,576 passed / 9 skipped**. ยัง NO-GO จนกว่า G4 / Webull / ซื้อ call ครบ — [audit addendum](docs/AUDIT_20261103_TH.md), runbook ข้อ 17.
+
+3 พฤศจิกายน (addendum funding): บัญชีจริงยังไม่มีหุ้น QBTS ⇒ `deploy/cloudshell-prod-live.sh` รองรับ release funding ครั้งเดียวก่อน canary
 (`LEGO_FUNDING_MODE_OVERRIDE=initial-funding`: เพดาน 1875 USD / 200 หุ้น / 2 order, window 2 session; ใบแรกจริง ≈ $491 เพราะ LEAPS 100).
 พบและแก้: `recommend_limits` ของ funding ปัด 1875 ขึ้นเป็น 1900 (127%) จน release-plan BLOCK ตัวเอง.
 เทสต์ **2,520 passed / 9 skipped**, mutation 8/8. ยัง NO-GO จนกว่า G4 / Webull / ซื้อ call ครบ — [audit addendum](docs/AUDIT_20261103_TH.md), runbook ข้อ 16.1.

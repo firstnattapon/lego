@@ -44,6 +44,11 @@ readonly APP_SECRET_SECRET="webull-app-secret-${SUFFIX}"
 readonly ACCOUNT_SECRET="webull-account-id-${SUFFIX}"
 readonly TOKEN_SECRET="webull-token-${SUFFIX}"
 readonly SYMBOL="${LEGO_SYMBOL_OVERRIDE:-UBER}"
+# The bot this deploys (docs/PROD_LIVE_RUNBOOK_TH.md section 17): unset = the first function;
+# LEGO_BOT_OVERRIDE=<name> = its own function, as deploy/cloudshell-all-in-one.sh names it
+# (which also refuses another symbol on a function that holds a real-money chain).
+readonly BOT="${LEGO_BOT_OVERRIDE:-}"
+readonly FUNCTION_NAME="lego-tick-${SUFFIX}${BOT:+-${BOT}}"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -57,6 +62,8 @@ step() {
 
 [[ -f deploy/cloudshell-all-in-one.sh && -f database.rules.prod.json ]] || \
     fail "run from the repository root"
+[[ -z "${BOT}" || "${BOT}" =~ ^[a-z][a-z0-9]{0,15}$ ]] || \
+    fail "LEGO_BOT_OVERRIDE must be a short lower-case name such as usar (1-16 letters and digits, starting with a letter)"
 # The deploy refuses a dirty checkout; say so before anyone approves a token for nothing.
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || \
     fail "commit or stash local changes first: the deploy needs a clean checkout"
@@ -323,7 +330,7 @@ require_private() {
 }
 require_private
 
-step "3/4 Deploy lego-tick-prod: PROD, ${MODE}"
+step "3/4 Deploy ${FUNCTION_NAME}: PROD, ${MODE}"
 export WEBULL_ENV_OVERRIDE=PROD LEGO_MODE_OVERRIDE=observe LEGO_ACTIVE_OVERRIDE=false
 export DATABASE_URL_OVERRIDE="${DATABASE_URL}"
 export WEBULL_TOKEN_SECRET_OVERRIDE="projects/${PROJECT_ID}/secrets/${TOKEN_SECRET}"
@@ -392,33 +399,33 @@ PROD paper is running in ${DATABASE_URL}: every READY slot runs the order path u
 Preview and books the fill on paper holdings; Place is never called. In the dashboard set the
 secret FIREBASE_DB_URL_PAPER = "${DATABASE_URL}" and choose PAPER. The Webull app must show no
 order. Paper fills:
-  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="lego-tick-prod" AND jsonPayload.event="lego_tick_completed" AND jsonPayload.execution.paper=true' --project=lego-firebase --freshness=1d --limit=20 --format='table(timestamp,jsonPayload.execution[0].status,jsonPayload.execution[0].paper_fill.price,jsonPayload.execution[0].paper_fill.holdings_after,jsonPayload.execution[0].preview_fee_pct)'
+  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="${FUNCTION_NAME}" AND jsonPayload.event="lego_tick_completed" AND jsonPayload.execution.paper=true' --project=lego-firebase --freshness=1d --limit=20 --format='table(timestamp,jsonPayload.execution[0].status,jsonPayload.execution[0].paper_fill.price,jsonPayload.execution[0].paper_fill.holdings_after,jsonPayload.execution[0].preview_fee_pct)'
 OPERATOR_HALT means the tripwire fired: the real account moved, or an order appeared after a
 Preview. That halt lives in the paper database: check the account before preview or trade.
 The release ends after 5 sessions: run this command again. Back to preview: LEGO_MODE_OVERRIDE=preview.
 Stop:
-  gcloud scheduler jobs pause lego-tick-prod --location=asia-southeast1 --project=lego-firebase
+  gcloud scheduler jobs pause ${FUNCTION_NAME} --location=asia-southeast1 --project=lego-firebase
 EOF
     exit 0
 fi
 if [[ "${MODE}" == preview ]]; then
-    cat <<'EOF'
+    cat <<EOF
 
 PROD preview is running: every READY slot runs the order path up to its Preview and stops
 before Place. Watch the Webull app at the first READY slot: no order may appear. Previews and fees:
-  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="lego-tick-prod" AND jsonPayload.event="lego_tick_completed" AND jsonPayload.execution.preview_only=true' --project=lego-firebase --freshness=1d --limit=20 --format='table(timestamp,jsonPayload.execution[0].status,jsonPayload.execution[0].preview_fee_pct)'
+  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="${FUNCTION_NAME}" AND jsonPayload.event="lego_tick_completed" AND jsonPayload.execution.preview_only=true' --project=lego-firebase --freshness=1d --limit=20 --format='table(timestamp,jsonPayload.execution[0].status,jsonPayload.execution[0].preview_fee_pct)'
 OPERATOR_HALT means the tripwire fired: an open order or a position change right after a Preview.
 The release ends after 5 sessions: run this command again. Back to observe: drop LEGO_MODE_OVERRIDE.
 Stop:
-  gcloud scheduler jobs pause lego-tick-prod --location=asia-southeast1 --project=lego-firebase
+  gcloud scheduler jobs pause ${FUNCTION_NAME} --location=asia-southeast1 --project=lego-firebase
 EOF
     exit 0
 fi
-cat <<'EOF'
+cat <<EOF
 
-PROD observe is running: lego-tick-prod reads the real account and quotes and sends no order.
+PROD observe is running: ${FUNCTION_NAME} reads the real account and quotes and sends no order.
 Watch at least two regular sessions (docs/PROD_OBSERVE_TH.md):
-  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="lego-tick-prod" AND jsonPayload.event="lego_tick_completed"' --project=lego-firebase --freshness=1h --limit=10 --format='table(timestamp,jsonPayload.environment,jsonPayload.mode,jsonPayload.active,jsonPayload.business_status)'
+  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="${FUNCTION_NAME}" AND jsonPayload.event="lego_tick_completed"' --project=lego-firebase --freshness=1h --limit=10 --format='table(timestamp,jsonPayload.environment,jsonPayload.mode,jsonPayload.active,jsonPayload.business_status)'
 Stop:
-  gcloud scheduler jobs pause lego-tick-prod --location=asia-southeast1 --project=lego-firebase
+  gcloud scheduler jobs pause ${FUNCTION_NAME} --location=asia-southeast1 --project=lego-firebase
 EOF

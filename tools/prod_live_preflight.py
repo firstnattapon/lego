@@ -4,7 +4,9 @@
 price). This judges the account the release will trade, right before it is deployed, with
 the same broker reads the tick makes (docs/AUDIT_20261103_TH.md, gate G3):
 
-* buying power: USD buying power >= FIX_C + 1 % (BUYs are never refused for cash);
+* buying power: USD buying power >= FIX_C + 1 % (BUYs are never refused for cash), plus the
+  FIX_C + 1 % of every other bot trading real money on the account (--reserve, named by
+  tools/bot_inventory.py: one account, several bots, one cash balance);
 * open orders of the symbol: none (dispatch would be SUPPRESSED_ACTIVE_ORDER);
 * the instrument profile: OC / US_STOCK / USD and its `fractionable` flag;
 * every position row of the symbol has instrument_type EQUITY or OPTION (an untyped row
@@ -24,7 +26,8 @@ and app credentials come from the environment and never reach the output.
     WEBULL_ENV=PROD WEBULL_APP_KEY=... WEBULL_APP_SECRET=... WEBULL_ACCOUNT_ID=... \\
         WEBULL_TOKEN_SECRET=projects/P/secrets/N WEBULL_TOKEN_DIR=$(mktemp -d) \\
         python3 tools/prod_live_preflight.py --symbol QBTS --fix-c 1500 --diff 50 \\
-            --leaps 100 --allow-fractional true --window-sessions 5 [--funding initial-funding]
+            --leaps 100 --allow-fractional true --window-sessions 5 [--funding initial-funding] \\
+            [--reserve lego-tick-prod:QBTS:1500 ...]
 
 Exit 0 when nothing blocks, 1 otherwise; the JSON report is the only thing on stdout.
 """
@@ -35,6 +38,7 @@ import contextlib
 import json
 import math
 import os
+import re
 import sys
 import uuid
 from dataclasses import dataclass
@@ -77,6 +81,9 @@ class Params:
     # prefunded: the canary caps; initial-funding: the one-off funding release whose first
     # BUY is larger than the canary caps carry (release_horizon.recommend_limits).
     funding: str = "prefunded"
+    # The other bots trading real money on this account (tools/bot_inventory.py): (function,
+    # symbol, principal). Each keeps its FIX_C + 1 % out of the buying power this release may use.
+    reserve: tuple = ()
 
 
 def _plain(value: Decimal) -> str:
@@ -368,14 +375,32 @@ def judge(facts: dict, params: Params) -> dict:
         derived["real_target"] = "0"
 
     buying_power = _decimal(facts.get("buying_power_usd"))
-    required = (principal * CASH_FACTOR).quantize(CENT, rounding=ROUND_CEILING)
+    own = required = (principal * CASH_FACTOR).quantize(CENT, rounding=ROUND_CEILING)
+    # One account, several bots: the cash the others may need is not this release's to spend.
+    kept = [(function, other, (amount * CASH_FACTOR).quantize(CENT, rounding=ROUND_CEILING))
+            for function, other, amount in params.reserve]
+    if kept:
+        reserved = sum((usd for _, _, usd in kept), Decimal("0"))
+        required = own + reserved
+        derived["own_cash_usd"] = str(own)
+        derived["reserved_usd"] = str(reserved)
+        derived["reserved"] = [{"function": function, "symbol": other, "usd": str(usd)}
+                               for function, other, usd in kept]
+        kept_text = ", ".join(f"{function} {other} {usd}" for function, other, usd in kept)
+        need = (f"the {required} these bots may need: {own} for this release (FIX_C + 1 %) and "
+                f"{reserved} kept for the other real-money bots ({kept_text})")
     derived["required_cash_usd"] = str(required)
     derived["buying_power_usd"] = None if buying_power is None else _money(buying_power)
     if buying_power is None:
         add("buying_power", BLOCK, "USD buying power could not be read")
+    elif buying_power < required and kept:
+        add("buying_power", BLOCK, f"USD buying power {_money(buying_power)} is below {need}: a BUY "
+            "of one of them would be refused at Preview")
     elif buying_power < required:
         add("buying_power", BLOCK, f"USD buying power {_money(buying_power)} is below the "
             f"{required} this release may need (FIX_C + 1 %): a BUY would be refused at Preview")
+    elif kept:
+        add("buying_power", INFO, f"USD buying power {_money(buying_power)} >= {need}")
     else:
         add("buying_power", INFO, f"USD buying power {_money(buying_power)} >= {required}")
 
@@ -461,6 +486,15 @@ def _positive(text: str, name: str, *, zero: bool = False) -> Decimal:
     return number
 
 
+def _reserve(text: str) -> tuple:
+    """FUNCTION:SYMBOL:FIX_C of another bot trading real money, as tools/bot_inventory.py names it."""
+    parts = text.split(":")
+    if (len(parts) != 3 or not re.fullmatch(r"lego-tick-[a-z]+(-[a-z][a-z0-9]{0,15})?", parts[0])
+            or not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", parts[1])):
+        raise ValueError(f"--reserve {text!r} must be FUNCTION:SYMBOL:FIX_C such as lego-tick-prod:QBTS:1500")
+    return parts[0], parts[1], _positive(parts[2], "--reserve FIX_C")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--symbol", required=True)
@@ -471,6 +505,8 @@ def main(argv=None) -> int:
     parser.add_argument("--window-sessions", type=int, default=5)
     parser.add_argument("--leaps-confirmed", action="store_true")
     parser.add_argument("--funding", choices=rh.FUNDING_MODES, default="prefunded")
+    parser.add_argument("--reserve", action="append", default=[], metavar="FUNCTION:SYMBOL:FIX_C",
+                        help="another bot trading real money on this account (tools/bot_inventory.py)")
     args = parser.parse_args(argv)
     try:
         symbol = args.symbol.strip().upper()
@@ -485,7 +521,8 @@ def main(argv=None) -> int:
             leaps=_positive(args.leaps, "--leaps", zero=True),
             allow_fractional=args.allow_fractional == "true",
             window_end=rh.window_end_after_sessions(now, args.window_sessions),
-            leaps_confirmed=args.leaps_confirmed, funding=args.funding)
+            leaps_confirmed=args.leaps_confirmed, funding=args.funding,
+            reserve=tuple(_reserve(text) for text in args.reserve))
     except ValueError as exc:
         report = _report({}, [{"id": "arguments", "severity": BLOCK, "message": str(exc)}], {})
         print(json.dumps(report, ensure_ascii=False, indent=2))
