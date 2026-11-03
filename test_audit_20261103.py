@@ -322,7 +322,20 @@ case "$*" in
   "secrets versions access"*webull-token-prod*) printf 'stub-token\n%s000\nNORMAL\n' "$(( $(date +%s) + 864000 ))" ;;
   "secrets versions access"*) printf '%s' "test-account-id" ;;
   "secrets add-iam-policy-binding"*|"projects add-iam-policy-binding"*) ;;
-  "functions describe"*|"scheduler jobs describe"*) exit 1 ;;
+  # The LEGO functions that exist (test_second_bot_20261103): none unless STUB_RUN_SERVICES names
+  # them, each described from STUB_SERVICES_DIR as a Cloud Run service and as a function.
+  "functions describe"*)
+    f="${STUB_SERVICES_DIR:-/nonexistent}/function-$3.json"
+    [[ -f "${f}" ]] || exit 1
+    cat "${f}" ;;
+  "scheduler jobs describe"*) exit 1 ;;
+  "run services list"*)
+    [[ -z "${STUB_RUN_SERVICES_FAIL:-}" ]] || { echo "ERROR: (gcloud.run.services.list) PERMISSION_DENIED" >&2; exit 1; }
+    for name in ${STUB_RUN_SERVICES:-}; do echo "${name}"; done ;;
+  "run services describe"*)
+    f="${STUB_SERVICES_DIR:-/nonexistent}/$4.json"
+    [[ -f "${f}" ]] || exit 1
+    cat "${f}" ;;
   "functions deploy"*)
     for arg in "$@"; do case "${arg}" in --source=*) src="${arg#--source=}" ;; esac; done
     if [[ -n "${src:-}" && -d "${src}" ]]; then
@@ -358,7 +371,7 @@ exec "@REAL_PYTHON@" "$@"
 """.replace("@REAL_PYTHON@", sys.executable)
 
 LIVE_FILES = ["deploy/cloudshell-prod-live.sh", "tools/prod_live_preflight.py",
-              "strategy.uat-continuous.json"]
+              "strategy.uat-continuous.json"]  # (tools/bot_inventory.py is in COPIED)
 
 
 @pytest.fixture(scope="module")

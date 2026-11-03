@@ -377,3 +377,67 @@ cd ~/lego-live && git pull --ff-only && LEGO_FUNDING_MODE_OVERRIDE=initial-fundi
 - อย่าปล่อย release funding ค้าง
 - fill ไม่ยืนยันภายใน 1 tick ⇒ kill switch
 
+## 17. bot ตัวที่ 2: หุ้นอีกตัวในบัญชีเดียวกัน (`LEGO_BOT_OVERRIDE`, addendum 3 พ.ย.)
+
+**ทำไมต้องมี:** ทุก deploy เคยไปที่ function เดียวต่อ environment คือ `lego-tick-prod`.
+- คำสั่ง `LEGO_SYMBOL_OVERRIDE=USAR` แบบเดิมจึงไม่ได้เพิ่ม bot แต่จะ **deploy USAR ทับ QBTS**
+- หุ้น QBTS และ order ที่ค้างจะไม่มี bot ดูแล และไม่มีอะไรห้ามไว้
+
+**ตอนนี้:**
+- `LEGO_BOT_OVERRIDE=<ชื่อ>` (a–z และ 0–9 ยาวไม่เกิน 16 ตัว ขึ้นต้นด้วยตัวอักษร) ⇒ function และ scheduler ชื่อ `lego-tick-prod-<ชื่อ>`
+- ใช้บัญชี, token, DB `lego-firebase-prod` และ service account ชุดเดิม (ไม่มี IAM ใหม่)
+- ไม่ใส่ ⇒ `lego-tick-prod` เหมือนเดิมทุกอย่าง
+
+**แยกกันต่อหุ้นอยู่แล้ว (runtime ไม่ได้แก้):**
+- chain: rows, state, outbox, realized, broker cashflow, heartbeat, trace (`chain_key = SYMBOL_hash`)
+- dispatch lock, session counter, broker circuit, kill switch (`account_symbol_fence_key`)
+- open orders, holdings และ LEAPS ที่อ่านจาก broker
+
+**ใช้ร่วมกัน:**
+- เงินสด (buying power ของบัญชี)
+- rate limit ของบัญชี (positions 10/30s)
+- token (อ่านจาก Secret Manager อย่างเดียว; client rebuild ตาม TTL จึงเห็น token ใหม่ทั้งสอง bot)
+
+**gate ใหม่ (fail closed):** `tools/bot_inventory.py` อ่าน Cloud Run services ของ region แล้วตัดสิน ก่อน preflight ใน `cloudshell-prod-live.sh` และอีกครั้งใน step 7 ของ `cloudshell-all-in-one.sh` ทุก PROD deploy (live, observe, rollback, รันตรง)
+- `symbol_switch` BLOCK: function ปลายทางถือ chain เงินจริง (DB ที่ไม่ใช่ paper) ของหุ้นอื่น หรือจะย้าย DB
+  - หุ้นใหม่ ⇒ ใช้ `LEGO_BOT_OVERRIDE`
+  - เลิกหุ้นเดิมจริง (flat ไม่มี order ค้าง) ⇒ `LEGO_RETIRE_SYMBOL_OVERRIDE=<หุ้นเดิม>` (ต้องตรงชื่อ; ใส่โดยไม่มีอะไรให้เลิก ⇒ BLOCK `retire`)
+  - function บน DB paper เปลี่ยนหุ้นได้ (เช่นตอน QBTS แทน paper UBER)
+- `symbol_twice` BLOCK: หุ้นเดียวกันรันอยู่แล้วใน function อื่นบน DB เงินจริง
+- `inventory_unreadable` BLOCK: อ่านรายการ function หรือ FIX_C ของ bot เงินจริงไม่ได้
+- preflight: buying power ≥ FIX_C + 1% ของ bot นี้ **บวก** FIX_C + 1% ของทุก bot อื่นที่ trade/active บน DB เงินจริง (`--reserve`)
+  - QBTS 1500 + USAR 1500 ⇒ ต้องมี 3,030 USD
+
+**ลำดับ (USAR: FIX_C 1500, DIFF 50, LEAPS 100):**
+1. ทำ QBTS ขั้น B (16.1) ให้เสร็จก่อน
+2. `git pull --ff-only` (checkout เก่าไม่รู้จัก `LEGO_BOT_OVERRIDE` และจะ deploy ทับ `lego-tick-prod`)
+3. USAR ขั้น A รอบ 1 (ไม่ใส่ ack):
+
+```bash
+cd ~/lego-live && git pull --ff-only && LEGO_BOT_OVERRIDE=usar LEGO_FUNDING_MODE_OVERRIDE=initial-funding LEGO_LEAPS_CONFIRMED=yes LEGO_SYMBOL_OVERRIDE=USAR LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_ALERTS_CONFIRMED=yes LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod-live.sh
+```
+
+4. หัวสรุปต้องขึ้น:
+   - `Function (this bot): lego-tick-prod-usar (new, LEGO_BOT_OVERRIDE=usar)`
+   - `Other LEGO bots: lego-tick-prod: QBTS trade/active, real money`
+   - `Buying power / required: … / 3030.00 USD (this bot 1515.00 + other bots 1515.00)`
+   - ขึ้น `lego-tick-prod` ⇒ **หยุด** (ยังไม่ได้ pull)
+5. รอบ 2: คำสั่งเดิมเติม `LEGO_PROD_LIVE_ACK=<ค่าที่พิมพ์>` (ค่าจริง ไม่ใช่ข้อความตัวอย่าง)
+6. หลัง fill ของ USAR ยืนยันและหุ้นในแอปตรง ⇒ ขั้น B: คำสั่งเดิมตัด `LEGO_FUNDING_MODE_OVERRIDE=initial-funding`
+
+**หยุด / ย้อน:**
+- kill switch ของ USAR: คำสั่ง `ops.py halt-orders` ที่ script พิมพ์ (มี `LEGO_SYMBOL=USAR`)
+- rollback: `LEGO_BOT_OVERRIDE=usar LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_SYMBOL_OVERRIDE=USAR LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 bash deploy/cloudshell-prod-observe.sh`
+- หยุดทุก bot: halt-orders ของแต่ละหุ้น; pause scheduler (`lego-tick-prod`, `lego-tick-prod-usar`) หยุดการ reconcile ด้วย ใช้เมื่อจำเป็นเท่านั้น
+
+**ดูแล:**
+- monitoring แยกต่อ function: `python3 tools/monitoring_config.py --service lego-tick-prod-usar --channel <channel> --output-dir <dir>`
+- dashboard: Streamlit มีตัวเลือก Chain เมื่อมีมากกว่า 1 chain (เลือก QBTS / USAR)
+- log: `resource.labels.service_name="lego-tick-prod-usar"`
+
+**ความเสี่ยงที่เหลือ:**
+- rate limit ร่วมของบัญชี: ถ้าสอง bot ส่ง order ในนาทีเดียวกันอาจเจอ 429 แล้ว retry (fail closed) ⇒ เฝ้า `http 429`
+- เงินสดร่วม: reserve ตรวจตอน deploy; ระหว่างวัน runtime ตรวจ BP ก่อน Place (ไม่พอ ⇒ ไม่ส่ง) แต่ถ้าบัญชีเป็น margin BP อาจรวมวงเงินกู้ ⇒ ถาม Webull
+- LEAPS ของ USAR ยังไม่ได้ซื้อ (owner-confirmed) ⇒ exposure จริงต่ำกว่าที่ระบบคิด
+- ราคา USAR ต้อง < (FIX_C − DIFF)/LEAPS = $14.50 จึงซื้อ (preflight ตรวจจากราคาสด)
+- G4 (alert ถึงคนจริง) ยังไม่ได้พิสูจน์ และตอนนี้มีเงินจริงสอง bot

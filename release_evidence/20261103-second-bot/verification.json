@@ -1,0 +1,51 @@
+{
+  "schema": "lego_release_verification_v1",
+  "scope": "a second bot (USAR) beside QBTS on the same account (audit 2026-11-03, second-bot addendum)",
+  "code_commit": "1f9b73e380a5f45b8f12cf961856d7072bc7b5ba",
+  "candidate": {
+    "candidate_hash": "ec7a12278a6a10cc911cc52e8b7a5e1f977f18290c2778b77f9d06c0970163f4",
+    "scope": "backend-only",
+    "files": 230,
+    "source": "tools/candidate_manifest.py --from-head at the code commit"
+  },
+  "pytest": {
+    "passed": 2576,
+    "skipped": 9,
+    "failed": 0,
+    "previous": {"passed": 2520, "skipped": 9},
+    "junit_sha256": "730c660c689d8baa1afc828541ccd8dc654730c54263eaff10d02933b581bfd4",
+    "new_tests": "test_second_bot_20261103.py (56)",
+    "harness_changes": "the stub gcloud of test_deploy_scripts.py and test_audit_20261103.py answer `run services list` (no function unless a test names one); no assertion removed or weakened"
+  },
+  "fail_first": [
+    "without tools/bot_inventory.py the new test module could not be imported",
+    "with the helper but before the preflight and deploy scripts changed: 18 failed / 38 passed; the owner's USAR command without a bot got an acknowledgement (LIVE-PROD-USAR-q200-n1875-o2-...-initial-funding-...) that would have deployed to lego-tick-prod"
+  ],
+  "mutation": {
+    "killed": 12,
+    "total": 12,
+    "restored_byte_exact": true,
+    "mutants": [
+      "all-in-one ignores LEGO_BOT_OVERRIDE",
+      "symbol_switch guard removed",
+      "guard also blocks a paper function",
+      "symbol_twice guard removed",
+      "retire accepts any symbol",
+      "preflight ignores the reserve",
+      "observe/paper bots counted in the reserve",
+      "an unreadable function listing passes",
+      "rollback command without the bot",
+      "wrapper drops the reserve",
+      "all-in-one skips the inventory",
+      "wrapper deploys without the bot"
+    ]
+  },
+  "static": {"py_compile": "pass", "bash_n": "pass", "pyflakes_tools": "clean", "carriage_returns": 0},
+  "runtime_changed": false,
+  "broker_orders_sent_by_this_work": 0,
+  "cloud_calls_made_by_this_work": 0,
+  "unverified": [
+    "gcloud run services list / describe are exercised against a stub; the first real run in Cloud Shell is the first proof of their output shape (a failure there blocks, fail-closed)"
+  ],
+  "status": "NO-GO for real money until G4 delivery is confirmed, Webull answers on margin, settlement and fractional, the QBTS and USAR calls are held, USAR trades below 14.50 and buying power covers both bots (3030 USD)"
+}
