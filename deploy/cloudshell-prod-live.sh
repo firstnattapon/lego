@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# PRODUCTION real money (trade/active) in one Cloud Shell run: the prefunded canary only
+# PRODUCTION real money (trade/active) in one Cloud Shell run: the prefunded canary, or once,
+# before it, the one-off funding release of a first BUY the canary caps cannot carry
 # (docs/PROD_LIVE_RUNBOOK_TH.md section 16, docs/AUDIT_20261103_TH.md). From a fresh clone:
 #
 #   LEGO_SYMBOL_OVERRIDE=QBTS LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 \
@@ -9,18 +10,24 @@
 # The first run judges everything, prints the acknowledgement of this exact release and exits 3
 # before anything is deployed; the same command with LEGO_PROD_LIVE_ACK=<that value> deploys it.
 #
+# LEGO_FUNDING_MODE_OVERRIDE=initial-funding (step A, once): the loose funding caps of
+# release_horizon (125% of FIX_C, 2 orders per session) for 2 sessions, refused by the preflight
+# unless the first order is a BUY larger than the canary caps. After its fill is confirmed and
+# the holdings match the Webull app, the same command without it (step B) deploys the canary.
+#
 # Every gate fails closed, in this order:
 #   local, before any cloud call: each money value given explicitly (no defaults), a clean
 #   committed checkout, no WEBULL_API_DEBUG, LEGO_ALERTS_CONFIRMED=yes (an alert drill reached a
 #   person: gate G4), a production database that is neither paper nor a default instance,
-#   prefunded only (the loose funding release stays with the runbook), outside the session;
+#   a funding mode that is prefunded or initial-funding, outside the session;
 #   then: the PROD credentials already stored, a token Webull's Check Token calls NORMAL with more
 #   than 3 days left (otherwise the 2FA login), lego-firebase-prod with rules that deny public
 #   reads; the read-only account preflight (tools/prod_live_preflight.py: buying power, open
 #   orders, fractional flag, position types, LEAPS held and expiry, price band, first order
-#   against the caps); ops.py release-plan at the preflight's price with canary caps, a 5-session
-#   window and the candidate hash of git HEAD; deploy/cloudshell-all-in-one.sh, which deploys
-#   that git HEAD export only with the acknowledgement.
+#   against the caps); ops.py release-plan at the preflight's price with canary caps and a
+#   5-session window (funding: the funding caps and 2 sessions) and the candidate hash of git
+#   HEAD; deploy/cloudshell-all-in-one.sh, which deploys that git HEAD export only with the
+#   acknowledgement.
 #
 # DNA and order policy are the ones deploy/cloudshell-prod-observe.sh deploys, so rolling back
 # to observe (printed at the end) keeps this chain and keeps reconciling a sent order.
@@ -34,7 +41,9 @@ readonly APP_KEY_SECRET="webull-app-key-${SUFFIX}"
 readonly APP_SECRET_SECRET="webull-app-secret-${SUFFIX}"
 readonly ACCOUNT_SECRET="webull-account-id-${SUFFIX}"
 readonly TOKEN_SECRET="webull-token-${SUFFIX}"
-readonly WINDOW_SESSIONS=5
+readonly CANARY_WINDOW_SESSIONS=5
+# The funding caps are loose: the shortest window release_horizon accepts (MIN_SESSIONS_COVERED).
+readonly FUNDING_WINDOW_SESSIONS=2
 readonly DNA_BUNDLE="strategy.uat-continuous.json"
 
 fail() {
@@ -92,8 +101,13 @@ FEE="${LEGO_FEE_PCT_OVERRIDE:-}"
 ALERT_SECRET="${ALERT_WEBHOOK_SECRET_OVERRIDE:-}"
 [[ -z "${ALERT_SECRET}" || "${ALERT_SECRET}" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || \
     fail "ALERT_WEBHOOK_SECRET_OVERRIDE must be a Secret Manager secret name, not the URL"
-[[ -z "${LEGO_FUNDING_MODE_OVERRIDE:-}" || "${LEGO_FUNDING_MODE_OVERRIDE}" == prefunded ]] || \
-    fail "this script deploys the prefunded canary only: hold the real shares the preflight names first; the loose funding release stays with docs/PROD_LIVE_RUNBOOK_TH.md sections 1-3"
+FUNDING="${LEGO_FUNDING_MODE_OVERRIDE:-prefunded}"
+case "${FUNDING}" in
+    prefunded) WINDOW_SESSIONS="${CANARY_WINDOW_SESSIONS}" ;;
+    initial-funding) WINDOW_SESSIONS="${FUNDING_WINDOW_SESSIONS}" ;;
+    *) fail "LEGO_FUNDING_MODE_OVERRIDE must be prefunded (the canary) or initial-funding (the one-off funding release of a first BUY larger than the canary caps)" ;;
+esac
+readonly FUNDING WINDOW_SESSIONS
 [[ "${DB_INSTANCE}" =~ ^[a-z0-9-]+$ ]] || fail "LEGO_PROD_DB_INSTANCE must be a Realtime Database instance name"
 [[ "${DB_INSTANCE}" != *paper* ]] || \
     fail "${DB_INSTANCE} holds paper holdings; real money keeps its chain in lego-firebase-prod"
@@ -289,7 +303,8 @@ CANDIDATE="$(python3 tools/candidate_manifest.py --from-head | \
 [[ "${CANDIDATE}" =~ ^[0-9a-f]{64}$ ]] || fail "could not compute the candidate hash of git HEAD"
 echo "Candidate      : ${CANDIDATE} (git HEAD $(git rev-parse --short HEAD))"
 PREFLIGHT_ARGS=(--symbol "${SYMBOL}" --fix-c "${FIX_C}" --diff "${DIFF}" --leaps "${LEAPS}"
-                --allow-fractional "${FRACTIONAL}" --window-sessions "${WINDOW_SESSIONS}")
+                --allow-fractional "${FRACTIONAL}" --window-sessions "${WINDOW_SESSIONS}"
+                --funding "${FUNDING}")
 [[ "${LEGO_LEAPS_CONFIRMED:-}" != yes ]] || PREFLIGHT_ARGS+=(--leaps-confirmed)
 mkdir -m 700 "${WORK}/preflight-token"
 PREFLIGHT_STATUS=0
@@ -313,9 +328,14 @@ if report.get("ok") is not True or report.get("blocking"):
 print(report["derived"]["reference_price"])')" || fail "the account preflight returned no usable report"
 positive "${PRICE}" || fail "the account preflight returned no usable price"
 
-step "4/5 Plan the release: canary caps, ${WINDOW_SESSIONS} sessions, the price ${PRICE}"
+if [[ "${FUNDING}" == initial-funding ]]; then
+    step "4/5 Plan the release: one-off FUNDING caps, ${WINDOW_SESSIONS} sessions, the price ${PRICE}"
+else
+    step "4/5 Plan the release: canary caps, ${WINDOW_SESSIONS} sessions, the price ${PRICE}"
+fi
 PLAN_ARGS=(--account-id-stdin --candidate-hash "${CANDIDATE}" --window-sessions "${WINDOW_SESSIONS}"
            --reference-price "${PRICE}" --recommended-limits --enforce)
+[[ "${FUNDING}" != initial-funding ]] || PLAN_ARGS+=(--initial-funding)
 [[ -z "${FEE}" ]] || PLAN_ARGS+=(--fee-pct "${FEE}")
 PLAN_STATUS=0
 PLAN_JSON="$(gcloud secrets versions access latest --secret="${ACCOUNT_SECRET}" --project="${PROJECT_ID}" | \
@@ -329,6 +349,7 @@ PLAN_JSON="$(gcloud secrets versions access latest --secret="${ACCOUNT_SECRET}" 
 [[ -n "${PLAN_JSON}" ]] || fail "release-plan produced no report (status ${PLAN_STATUS})"
 printf '%s' "${PLAN_JSON}" | show_findings || true
 (( PLAN_STATUS == 0 )) || fail "the release has BLOCK findings (above); nothing was deployed"
+unset LEGO_FUNDING_MODE_OVERRIDE   # set again below only if the plan is the funding release
 while IFS='=' read -r key value; do
     export "${key}=${value}"
 done < <(printf '%s' "${PLAN_JSON}" | python3 -c '
@@ -341,9 +362,11 @@ for key, value in json.load(sys.stdin)["deploy_env"].items():
 [[ "${LEGO_RELEASE_AUTHORIZATION_OVERRIDE:-}" =~ ^[0-9a-f]{64}$ ]] || \
     fail "release-plan returned no release authorization"
 [[ "${EXPECTED_CANDIDATE_HASH:-}" == "${CANDIDATE}" ]] || fail "release-plan planned another candidate"
+[[ "${LEGO_FUNDING_MODE_OVERRIDE:-prefunded}" == "${FUNDING}" ]] || \
+    fail "release-plan planned another funding mode than ${FUNDING}"
 export DATABASE_URL_OVERRIDE="${DATABASE_URL}"
 export WEBULL_TOKEN_SECRET_OVERRIDE="projects/${PROJECT_ID}/secrets/${TOKEN_SECRET}"
-export LEGO_FUNDING_MODE_OVERRIDE=prefunded
+export LEGO_FUNDING_MODE_OVERRIDE="${FUNDING}"
 export ALERT_WEBHOOK_SECRET_OVERRIDE="${ALERT_SECRET}"
 export LEGO_FEE_PCT_OVERRIDE="${FEE}"
 unset LEGO_SCHEDULE_OVERRIDE   # every minute, as tools/verify_deployment.py requires
@@ -353,10 +376,18 @@ print_summary() {
 import json, sys
 derived = json.load(sys.stdin)["derived"]
 plan = json.loads(sys.argv[1])["release"]
+funding, confirmed = sys.argv[7], sys.argv[8] == "yes"
 first = derived.get("first_order")
 band = derived.get("price_band") or {}
+if sys.argv[5] in ("0", "0.0"):
+    leaps_source = "none"
+elif confirmed and derived.get("leaps_held") in (None, "0"):
+    leaps_source = "owner-confirmed (LEGO_LEAPS_CONFIRMED=yes), NOT seen in the positions"
+else:
+    leaps_source = "verified in the positions (%s held)" % derived.get("leaps_held")
 rows = [
     ("Symbol / FIX_C / DIFF / LEAPS / fractional", " / ".join(sys.argv[2:7])),
+    ("LEAPS", leaps_source),
     ("Last price (reference)", "%s (quote %s)" % (derived.get("reference_price"),
                                                    derived.get("quote_time") or "time not given")),
     ("Real shares / LEAPS held / real target", "%s / %s / %s" % (
@@ -373,9 +404,26 @@ rows = [
      if band else ("no LEAPS" if sys.argv[5] in ("0", "0.0") else "see the release plan above")),
 ]
 print()
-print("REAL-MONEY RELEASE (prefunded canary)")
+if funding == "initial-funding":
+    print("REAL-MONEY RELEASE (one-off FUNDING: caps up to %s USD per order; expect one BUY of about %s USD)"
+          % (plan["LEGO_MAX_ORDER_NOTIONAL_USD"], first["notional_usd"] if first else "?"))
+else:
+    print("REAL-MONEY RELEASE (prefunded canary)")
 for label, value in rows:
-    print("  %-42s: %s" % (label, value))' "${PLAN_JSON}" "${SYMBOL}" "${FIX_C}" "${DIFF}" "${LEAPS}" "${FRACTIONAL}"
+    print("  %-42s: %s" % (label, value))' "${PLAN_JSON}" "${SYMBOL}" "${FIX_C}" "${DIFF}" "${LEAPS}" "${FRACTIONAL}" \
+        "${FUNDING}" "${LEGO_LEAPS_CONFIRMED:-}"
+}
+
+print_funding_next_step() {
+    [[ "${FUNDING}" == initial-funding ]] || return 0
+    cat <<'EOF'
+
+THIS IS THE ONE-OFF FUNDING RELEASE: its caps are loose on purpose, keep it short.
+  * Watch its first BUY fill (python3 ops.py status: nothing in flight; holdings = the Webull app).
+  * The same evening, after the close: run this command again WITHOUT LEGO_FUNDING_MODE_OVERRIDE
+    to deploy the prefunded canary (its caps replace these). Do not leave this release running.
+  * A fill that is not confirmed within one tick (AWAITING_FILL_CONFIRMATION): the kill switch below.
+EOF
 }
 
 print_stop_commands() {
@@ -396,6 +444,7 @@ DEPLOY_STATUS=0
 bash deploy/cloudshell-all-in-one.sh || DEPLOY_STATUS=$?
 if (( DEPLOY_STATUS == 3 )); then
     print_summary
+    print_funding_next_step
     print_stop_commands
     cat <<'EOF'
 
@@ -411,6 +460,7 @@ fi
 
 require_private
 print_summary
+print_funding_next_step
 print_stop_commands
 cat <<EOF
 

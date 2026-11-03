@@ -294,13 +294,13 @@ incident ของ health-policy ปิดเองหลัง 30 นาที�
 
 ## 16. เปิดเงินจริงด้วยคำสั่งเดียว: `deploy/cloudshell-prod-live.sh` (prefunded canary, audit 3 พ.ย.)
 
-ทางนี้แทนการทำข้อ 2–3 ด้วยมือ (export ค่าประมาณ 15 ตัวจาก plan) สำหรับ **release prefunded** — release funding ที่ caps หลวม (วิธี B) ยังทำได้เฉพาะทางมือตามข้อ 1–3.
+ทางนี้แทนการทำข้อ 2–3 ด้วยมือ (export ค่าประมาณ 15 ตัวจาก plan) สำหรับ **release prefunded** และ (ตั้งแต่ addendum funding 3 พ.ย.) **release funding ครั้งเดียวก่อน canary** — ดูหัวข้อ 16.1.
 ทุก gate fail closed ตามลำดับ (`docs/AUDIT_20261103_TH.md` G1–G10):
 
 1. **ท้องถิ่น ก่อนเรียก cloud**:
    - ค่าเงินทุกตัวต้องระบุเอง ไม่มีค่าเริ่มต้น (`LEGO_SYMBOL/FIX_C/DIFF/LEAPS/ALLOW_FRACTIONAL_OVERRIDE`)
    - checkout สะอาด, ไม่มี `WEBULL_API_DEBUG`, `LEGO_ALERTS_CONFIRMED=yes` (G4: drill ถึงคนจริงแล้ว)
-   - DB ต้องไม่ใช่ paper และไม่ใช่ default instance, prefunded เท่านั้น, ไม่อยู่ใน regular session
+   - DB ต้องไม่ใช่ paper และไม่ใช่ default instance, funding เป็น prefunded หรือ initial-funding เท่านั้น, ไม่อยู่ใน regular session
 2. credentials PROD มีอยู่แล้ว; token จาก Check Token สด > 3 วัน (ถ้าไม่สด ⇒ 2FA ในแอป)
 3. `lego-firebase-prod`: ลง `database.rules.prod.json` และพิสูจน์ `Permission denied`
 4. candidate = git HEAD (`tools/candidate_manifest.py --from-head`)
@@ -347,3 +347,33 @@ cd ~/lego-live && LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_SYMBOL_OVERRIDE=QBTS 
 Go / No-Go เต็มอยู่ใน `docs/AUDIT_20261103_TH.md`.
 
 ทุก deploy (ทุกโหมด) ใช้ hash และ upload จาก git HEAD แล้ว: ไฟล์ที่ git ignore (`token.txt`, credentials, virtualenv) หรือ `../lego-firebase-streamlit` ไม่ทำให้ `LEGO_CANDIDATE_HASH` ต่างจาก commit อีก (CANDIDATE_MISMATCH ของ 00003 / 00005).
+
+### 16.1 บัญชีที่ยังไม่มีหุ้นจริง: ให้ระบบซื้อใบแรก (funding) แล้วกลับเป็น canary
+
+ใช้เมื่อ preflight แบบ prefunded ติด `first_order` เพราะใบแรกเป็น BUY ที่ใหญ่กว่าเพดาน canary.
+
+- QBTS ที่ $10.09: BUY ≈ $491 (48.66 หุ้น)
+- LEAPS 100 นับเป็นหุ้น ⇒ ใบแรกคือ FIX_C − 100 × P ไม่ใช่ FIX_C
+
+**ขั้น A – funding ครั้งเดียว**: เติม `LEGO_FUNDING_MODE_OVERRIDE=initial-funding` หน้าคำสั่งเดิม.
+
+- เพดาน = release funding ของ `release_horizon`
+  - QBTS: 1875 USD / 200 หุ้น / 2 order ต่อ session (125% ของ FIX_C ไม่ปัดขึ้นเกิน; ≥ FIX_C + 1%)
+  - window **2 session** (สั้นที่สุดที่ release_horizon ยอม)
+- preflight ปฏิเสธ (`funding_not_needed`) ถ้าใบแรกไม่ใช่ BUY ที่เกิน canary: มีหุ้นอยู่แล้ว, เข้า canary ได้ หรือเป็น SELL
+- runtime เปิด gate ได้เฉพาะ ack `-initial-funding-`: ที่เพดานนี้ไม่มี ack แบบ prefunded และ ack funding ก็เปิด canary ไม่ได้
+- ledger: LEAPS ทำให้ตำแหน่งไม่เป็น 0 ⇒ fill ใบแรกเป็นแถวปกติ (ไม่ใช่ funding baseline) ของ chain เดียวกับ canary
+- ยังไม่ได้ซื้อ call: `LEGO_LEAPS_CONFIRMED=yes` ทำให้ preflight ผ่านแบบ WARN และหัวสรุปพิมพ์ว่า "owner-confirmed, NOT seen in the positions"
+  - ระบบจะคำนวณจากหุ้นเทียบเท่า ~148 แต่ถือจริง ~48 จนกว่าจะซื้อ call
+
+```bash
+cd ~/lego-live && git pull --ff-only && LEGO_FUNDING_MODE_OVERRIDE=initial-funding LEGO_LEAPS_CONFIRMED=yes LEGO_SYMBOL_OVERRIDE=QBTS LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_ALERTS_CONFIRMED=yes LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod-live.sh
+```
+
+ได้ ack (`LIVE-PROD-QBTS-q200-n1875-o2-…-initial-funding-…`) ⇒ รันซ้ำโดยเติม `LEGO_PROD_LIVE_ACK=<ค่า>` ด้านหน้า.
+
+**ขั้น B – canary (เย็นวันที่ fill ยืนยันและหุ้นในแอปตรง)**: คำสั่งเดิม**ตัด** `LEGO_FUNDING_MODE_OVERRIDE=initial-funding` ⇒ ack ใหม่ (`…-q20-n150-o10-…-prefunded-…`) ⇒ deploy.
+
+- อย่าปล่อย release funding ค้าง
+- fill ไม่ยืนยันภายใน 1 tick ⇒ kill switch
+

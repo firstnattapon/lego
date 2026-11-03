@@ -1,0 +1,38 @@
+{
+  "schema": "lego_release_verification_v1",
+  "scope": "funding release before the QBTS canary (audit 2026-11-03 addendum)",
+  "code_commit": "6e56f25a3983d1d716034ca276f7d4d73f9c0f78",
+  "candidate": {
+    "candidate_hash": "39b1e9f0e1f1b5d175e6f12ec8a7c9e20a2d0f5e3a6c3bb0db6af44237db91ee",
+    "scope": "backend-only",
+    "files": 228,
+    "source": "tools/candidate_manifest.py --from-head at the code commit"
+  },
+  "pytest": {
+    "passed": 2520,
+    "skipped": 9,
+    "failed": 0,
+    "previous": {"passed": 2497, "skipped": 9},
+    "junit_sha256": "813cead80d64ebbcafadb8d34e2ffdd8377665fb9559f441d5ef91859996e8e3",
+    "new_tests": "test_funding_release_20261103.py (23)"
+  },
+  "fail_first": "before the recommend_limits fix, 8 tests of the new file failed on the 1900 funding cap (notional_cap_ratio BLOCK); 2 more failed on bugs of the tests themselves, fixed",
+  "mutation": {
+    "killed": 8,
+    "total": 8,
+    "restored_byte_exact": true,
+    "mutants": [
+      "preflight judges funding against the canary caps",
+      "funding_not_needed removed",
+      "wrapper drops --initial-funding",
+      "funding window 5 sessions",
+      "unknown funding mode accepted",
+      "funding mode not exported to the all-in-one deploy",
+      "125% clamp of the recommended funding cap removed",
+      "funding offered for a first SELL"
+    ]
+  },
+  "static": {"py_compile": "pass", "bash_n": "pass", "carriage_returns": 0},
+  "broker_orders_sent_by_this_work": 0,
+  "status": "NO-GO for real money until G4 delivery is confirmed, Webull answers on settlement and fractional, and the QBTS call is held"
+}

@@ -69,7 +69,7 @@ def path(start, signs, step="0.04"):
 class TradeSession:
     """Slots of one regular session on the real-money path; the broker double fills every Place."""
 
-    def __init__(self, monkeypatch, *, real, buying_power="1600.00", price="10.82"):
+    def __init__(self, monkeypatch, *, real, buying_power="1600.00", price="10.82", values=None):
         webull_io.reset_clients()
         execution.configure(main)
         decision_service.configure(main)
@@ -77,7 +77,7 @@ class TradeSession:
         self.real = Decimal(real)                      # the account's real QBTS shares
         self.buying_power = Decimal(buying_power)
         self.price = Decimal(price)
-        values = trade_values()
+        values = values or trade_values()
         for key, value in values.items():
             monkeypatch.setenv(key, value)
         self.runtime = load_runtime_config(values)

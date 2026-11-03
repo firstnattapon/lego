@@ -383,9 +383,15 @@ def recommend_limits(principal, reference_price=None, *, profile: str = "UAT",
     else:
         basis = principal * RECOMMENDED_NOTIONAL_FRACTION[profile]
         orders = slots if profile == "UAT" else min(slots, PROD_CANARY_SESSION_ORDERS)
+    notional = _nice_ceiling(basis)
+    if initial_funding:
+        # Rounding up must not leave the ratio _limit_findings allows: 1500 x 125 % is 1875,
+        # whose nice ceiling 1900 (127 %) made the recommended funding release block itself.
+        notional = min(notional, int((principal * FUNDING_NOTIONAL_FRACTION_MAX)
+                                     .to_integral_value(rounding=ROUND_DOWN)))
     result = {
         "profile": profile, "initial_funding": initial_funding,
-        "LEGO_MAX_ORDER_NOTIONAL_USD": str(_nice_ceiling(basis)),
+        "LEGO_MAX_ORDER_NOTIONAL_USD": str(notional),
         "LEGO_MAX_SESSION_ORDERS": str(orders),
     }
     if reference_price is not None:
