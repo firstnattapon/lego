@@ -1,0 +1,138 @@
+{
+ "schema": "lego_audit_input_hashes_v1",
+ "generated_at": "2026-11-03T10:23:11+00:00",
+ "note": "Raw inputs stay private: they carry account, project and deployment identifiers. SHA-256 identifies exactly what was audited; the aggregates are the numbers quoted in docs/AUDIT_20261103_TH.md. Per-tick ids are left out.",
+ "inputs": [
+  {
+   "name": "downloaded-logs-20261103-114916.json",
+   "role": "Cloud Run export of lego-tick-prod (stdout, requests, stderr, audit), revisions 00003-dob, 00004-dob, 00005-tul",
+   "bytes": 20795631,
+   "sha256": "4d7f9adf616435bed7358e3e59eabf2e0a392020ba21bb15eb96443b2a7d5cdd"
+  },
+  {
+   "name": "lego-firebase-paper-export.json",
+   "role": "Realtime Database export of lego-firebase-paper (the PROD paper chain UBER_7e55ddb82)",
+   "bytes": 1411428,
+   "sha256": "814021b7b556726e426be78efb030263d305e2cc53048a0e71f21af75d0e0da2"
+  },
+  {
+   "name": "YAML.txt",
+   "role": "Cloud Run revision lego-tick-prod-00005-tul (env, secrets by reference)",
+   "bytes": 6853,
+   "sha256": "14d4222fc927db1aec2efd049eb59643f0330e023a7a43ab5f1121c341c205f9"
+  },
+  {
+   "name": "webull-llms.txt",
+   "role": "Webull TH OpenAPI documentation index (same as earlier audits)",
+   "bytes": 9289,
+   "sha256": "4bc263da9f41cc0810e53dc85672bbfd608e5ad8142a1ab5c3acbf17a22143e8"
+  }
+ ],
+ "aggregates": {
+  "log": {
+   "entries": 9990,
+   "first": "2026-10-30T15:31:05Z",
+   "last": "2026-11-02T21:47:04Z",
+   "ticks": {
+    "lego-tick-prod-00003-dob": 791,
+    "lego-tick-prod-00004-dob": 1529,
+    "lego-tick-prod-00005-tul": 2379,
+    "total": 4699
+   },
+   "http": {
+    "200": 4699
+   },
+   "pipeline_status": {
+    "TICK_OK": 4699
+   },
+   "business_status": {
+    "MARKET_CLOSED": 4040,
+    "SLOT_CONSUMED": 616,
+    "ROW_COMMITTED": 43
+   },
+   "duration_ms": {
+    "p50": 781.7,
+    "p95": 1456.6,
+    "max": 10806.4
+   },
+   "quote_age_at_decision_s": {
+    "median": 1.2,
+    "p95": 4.9,
+    "max": 6.0,
+    "over_60s": 0
+   },
+   "webull_errors": {
+    "positions_429": 3,
+    "first": "2026-10-30T16:00:09Z",
+    "last": "2026-10-30T18:45:07Z"
+   },
+   "pace_positions": 8,
+   "token_warning_ticks": 0,
+   "halted_ticks": 0
+  },
+  "sessions": {
+   "2026-10-30_from_15:31Z": {
+    "rows": 17,
+    "ready_buy": 6,
+    "ready_sell": 4,
+    "pass_threshold": 7,
+    "paper_fills": 8,
+    "suppressed_state_changed": 2
+   },
+   "2026-11-02": {
+    "rows": 26,
+    "ready_buy": 5,
+    "ready_sell": 5,
+    "pass_threshold": 16,
+    "paper_fills": 10
+   }
+  },
+  "paper_preview_fee_pct": {
+   "n": 18,
+   "median": 0.154,
+   "max": 0.3401
+  },
+  "rtdb": {
+   "chain": "UBER_7e55ddb82",
+   "rows": "v1-52",
+   "steps": "988-1039",
+   "fills_finalized": 26,
+   "recorded_equations_recomputed": 78
+  },
+  "deployment": {
+   "revision": "lego-tick-prod-00005-tul",
+   "git_commit": "ed80112",
+   "environment": "PROD",
+   "mode": "paper",
+   "symbol": "UBER",
+   "fix_c": 3000,
+   "diff": 5,
+   "leaps": 1,
+   "caps": [
+    60,
+    3750,
+    2
+   ],
+   "window_end": "2026-11-06T21:00:00Z",
+   "alert_webhook": false
+  },
+  "qbts_reference": {
+   "price_used": 10.82,
+   "source": "web quotes of late October 2026, unverified (10.7-11.8)",
+   "buy_below": 14.5,
+   "sell_below": 15.0,
+   "real_target_shares": 38.63,
+   "flat_account_first_buy_usd": 418.0,
+   "prefund_range_whole_shares": [
+    25,
+    52
+   ],
+   "canary_caps": {
+    "quantity": 20,
+    "notional_usd": 150,
+    "session_orders": 10
+   },
+   "required_buying_power_usd": 1515.0
+  }
+ }
+}

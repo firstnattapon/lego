@@ -1,0 +1,163 @@
+{
+ "schema": "lego_audit_verification_v1",
+ "generated_at": "2026-11-03T10:23:11+00:00",
+ "base_commit": "ed80112813a2e1a56854a8c43578207be01ba8b4",
+ "commit": "dd731653c2106a7382771a11993c40e50b4d6635",
+ "python": "Python 3.12.3 (the version CI runs), dependencies exactly as pinned in requirements-dev.txt",
+ "local_status": "PASS",
+ "failed_checks": [],
+ "real_money_ready": false,
+ "release_state": "NO_GO",
+ "mode": "code-ready for the PROD prefunded canary; the deployed revision lego-tick-prod-00005-tul stays paper until the owner deploys with deploy/cloudshell-prod-live.sh",
+ "requested_parameters": {
+  "WEBULL_ENV": "PROD",
+  "LEGO_MODE": "trade",
+  "LEGO_ACTIVE": "true",
+  "LEGO_SYMBOL": "QBTS",
+  "LEGO_FIX_C": "1500",
+  "LEGO_ALLOW_FRACTIONAL": "true",
+  "LEGO_DIFF": "50",
+  "LEGO_LEAPS": "100"
+ },
+ "candidate": {
+  "hash_of_this_tree": "89a337a0e466c7eb14614155d7030d9a1f12714eb2e7f3d3de30a266a460aed3",
+  "file_count": 227,
+  "scope": "backend-only",
+  "dependency_lock_hash": "83fe34847c136c16702bb842ce58b1603d5ddfcdca1a812bed30ec258067031c",
+  "computed_with": "python tools/candidate_manifest.py --from-head (git archive of the commit; release_evidence/ is excluded from the hash); equals the walk of the clean checkout",
+  "deployed_before_this_change": "ae67b221a137c820e85fd5ff6e4bd8ffdd803c8ab026b178c41f1e2ed8105da6",
+  "clean_hash_of_the_deployed_commit_ed80112": "d66d42626d6ed783b16a770b2b3ec34749771e3df7f9abef930b220146e554b1",
+  "note": "00003-dob 272fdb43 != clean ed793b3 6528b8ae; 00004-dob 25670bbc == clean f07f5f6; 00005-tul ae67b221 != clean ed80112 d66d4262 (computed from git objects in memory). From this commit on the deploy hashes and uploads the git HEAD export, so a merge of this tree deploys exactly hash_of_this_tree."
+ },
+ "code_change": {
+  "files": {
+   "release_horizon.py": "ReleaseInputs.leaps_shares (default 0), inputs_from_runtime passes it, leaps_price_band(), _leaps_findings only when LEAPS > 0: finding leaps_value BLOCK at price >= FIX_C/LEAPS, WARN >= (FIX_C-DIFF)/LEAPS, INFO below, WARN without a price",
+   "tools/candidate_manifest.py": "_manifest_for(root, reader); build_manifest() reads ROOT/STREAMLIT at call time; export_head/head_manifest (git archive HEAD); --from-head and --export-to; no-argument output unchanged",
+   "deploy/cloudshell-all-in-one.sh": "candidate = --from-head --export-to SOURCE_EXPORT; gcloud functions deploy --source=SOURCE_EXPORT; export removed on exit"
+  },
+  "new_files": [
+   "tools/prod_live_preflight.py",
+   "deploy/cloudshell-prod-live.sh",
+   "test_audit_20261103.py",
+   "test_prod_live_preflight.py",
+   "test_prod_live_trade_session.py",
+   "docs/AUDIT_20261103_TH.md",
+   "release_evidence/20261103-pr/"
+  ],
+  "docs_changed": [
+   "RELEASE_STATUS_TH.md",
+   "docs/PROD_LIVE_RUNBOOK_TH.md",
+   "docs/LEAPS_STOCK_REPLACEMENT_TH.md"
+  ],
+  "untouched": [
+   "lego_one_row.py",
+   "decision_service.py",
+   "execution_service.py",
+   "lego_state.py",
+   "lego_outbox.py",
+   "order_recovery.py",
+   "broker_circuit.py",
+   "execution_limits.py",
+   "config.py",
+   "webull_io.py",
+   "deploy/cloudshell-prod-observe.sh",
+   "LEARNING_GUIDE_TH.html"
+  ],
+  "existing_tests_changed": 0
+ },
+ "full_suite": {
+  "command": "pytest -q",
+  "junit_sha256": "e3ae5d788737fca30e21021c0fd477caed7980e30442d962ef5f2efd11c09a75",
+  "counts": {
+   "tests": 2506,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2497
+  },
+  "baseline_before_change": {
+   "tests": 2359,
+   "failures": 0,
+   "errors": 0,
+   "skipped": 9,
+   "passed": 2350
+  },
+  "baseline_junit_sha256": "8c04e384be19a010bd4a20eea098bdf5e3633a2545ef519ad69e86bca2694867",
+  "duration_s": {
+   "baseline": 65.38,
+   "after": 82.21
+  },
+  "note": "skipped = emulator-only tests (9); CI runs them against the Firebase Database emulator. +147 tests: test_audit_20261103.py 77, test_prod_live_preflight.py 65, test_prod_live_trade_session.py 4, and test_deploy_scripts.py::test_every_shell_script_parses picks up the new script (its file is unchanged). The added time is the deploy-script sandboxes (slowest new test 4.2 s)."
+ },
+ "fail_first": {
+  "test_audit_20261103.py": "before the change: 20 failed, 26 errors, 31 passed (the 31 pin behaviour that already existed: the exact parameters through config and the runtime gate, and the 26 decisions of 2026-11-02)",
+  "test_prod_live_preflight.py": "before the change: ImportError (the tool did not exist)",
+  "provenance_against_the_old_deploy_script": "test_the_deploy_hashes_and_uploads_git_head_whatever_the_checkout_holds and test_a_reviewed_candidate_deploys_from_a_polluted_checkout both failed against git show ed80112:deploy/cloudshell-all-in-one.sh: the hash of a checkout with git-ignored files differed from the commit, and the reviewed candidate was refused ('candidate hash ... release evidence')"
+ },
+ "mutation": {
+  "mutants": 25,
+  "killed": 25,
+  "survivors": [],
+  "by_file": {
+   "release_horizon.py": 6,
+   "deploy/cloudshell-all-in-one.sh": 1,
+   "tools/candidate_manifest.py": 2,
+   "tools/prod_live_preflight.py": 10,
+   "deploy/cloudshell-prod-live.sh": 6
+  },
+  "note": "each mutant applied to one file, its tests run, the file restored byte for byte (sha256 checked). M1-M6 re-run with one -k expression after the first run passed two -k options (pytest keeps the last). release_horizon: no finding, >= -> > at FIX_C/LEAPS, no DIFF in the BUY bound, BLOCK -> WARN, leaps not passed from the runtime, > 0 -> >= 0; provenance: --source=., hash of the working tree, sibling reader hashed; preflight: no buying-power check, puts counted, shorts counted, expiry boundary, no open-order check, first order over the caps accepted, untyped rows accepted, cash factor 1.00, unreadable LEAPS accepted, environment not checked; wrapper: no G4, paper database accepted, fixed reference price, FIX_C default, no session check, funding release accepted"
+ },
+ "trace_audit": {
+  "command": "python -m tools.trace_audit --json --logs downloaded-logs-20261103-114916.json --rtdb lego-firebase-paper-export.json --yaml YAML.txt --repo <git checkout of ed80112>",
+  "summary_with_git_checkout": {
+   "P0": 0,
+   "P1": 3,
+   "P2": 2,
+   "INFO": 1
+  },
+  "p1": [
+   "ALERTING_NOT_CONFIGURED",
+   "RELEASE_WINDOW (3.68 days)",
+   "CANDIDATE_MISMATCH (deployed ae67b221 vs clean d66d4262)"
+  ],
+  "summary_with_archive_export": {
+   "P0": 0,
+   "P1": 2,
+   "P2": 2,
+   "INFO": 2
+  },
+  "note": "with --repo pointing at a git-archive export (no .git) CANDIDATE_MISMATCH becomes CANDIDATE_NOT_COMPARED (INFO); the findings are otherwise the same"
+ },
+ "checks": [
+  {
+   "id": "py_compile",
+   "command": "python -m py_compile *.py tools/*.py",
+   "exit_code": 0
+  },
+  {
+   "id": "pyflakes_changed",
+   "command": "python -m pyflakes release_horizon.py tools/candidate_manifest.py tools/prod_live_preflight.py test_audit_20261103.py test_prod_live_preflight.py test_prod_live_trade_session.py",
+   "result": "only test_prod_live_trade_session.py: 'test_dispatch_overshoot.isolate' imported but unused (the autouse fixture import with noqa F401, as in test_paper_mode.py and test_leaps_stock_replacement.py)"
+  },
+  {
+   "id": "bash_syntax",
+   "command": "bash -n deploy/*.sh",
+   "exit_code": 0
+  },
+  {
+   "id": "secret_scan",
+   "command": "grep the added lines for api|key|secret|token|passw|credential|auth followed by an assigned value of 10+ characters",
+   "result": "only Secret Manager names and configuration keys; no value"
+  },
+  {
+   "id": "line_endings",
+   "command": "grep -l CR in every changed file",
+   "result": "LF only"
+  },
+  {
+   "id": "walk_equals_head",
+   "command": "python tools/candidate_manifest.py vs --from-head on the clean commit",
+   "result": "89a337a0e466c7eb14614155d7030d9a1f12714eb2e7f3d3de30a266a460aed3"
+  }
+ ]
+}
