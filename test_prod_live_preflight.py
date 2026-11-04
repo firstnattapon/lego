@@ -86,7 +86,10 @@ def test_a_prefunded_account_holding_its_leaps_passes_with_the_numbers_it_trades
     assert (derived["real_shares"], derived["leaps_declared"], derived["leaps_held"]) == ("38", "100", "100")
     assert derived["real_target"] == "38.63"                  # 1500 / 10.82 - 100
     assert derived["first_order"] is None                     # 138 x 10.82 - 1500 = -6.84: inside DIFF
-    assert derived["required_cash_usd"] == "1515.00"          # FIX_C + 1 %
+    # Owner's rule 2026-11-04: the least that opens the next order. No first order here, so one
+    # order at the canary cap (150 + 1 %); FIX_C + 1 % stays visible as a WARN threshold.
+    assert derived["required_cash_usd"] == "151.50" and derived["own_cash_usd"] == "151.50"
+    assert derived["principal_cash_usd"] == "1515.00"
     assert derived["caps"] == {"LEGO_MAX_ORDER_QUANTITY": "20", "LEGO_MAX_ORDER_NOTIONAL_USD": "150",
                                "LEGO_MAX_SESSION_ORDERS": "10"}
     assert derived["prefund_range"] == ["25", "52"] and derived["suggested_real_shares"] == "38"
@@ -95,12 +98,28 @@ def test_a_prefunded_account_holding_its_leaps_passes_with_the_numbers_it_trades
     assert report["broker_mutations"] is False
 
 
-@pytest.mark.parametrize("buying_power,ok", [("1514.99", False), ("1515.00", True), ("1515.01", True),
-                                             ("0", False)])
-def test_buying_power_must_cover_fix_c_plus_one_percent(buying_power, ok):
+@pytest.mark.parametrize("buying_power,ok,short_of_principal", [
+    ("0", False, None), ("151.49", False, None),            # cannot pay the next order: BLOCK
+    ("151.50", True, True), ("1514.99", True, True),        # can, but not FIX_C + 1 %: WARN
+    ("1515.00", True, False), ("1515.01", True, False)])
+def test_buying_power_must_open_the_next_order_and_warns_below_fix_c(buying_power, ok, short_of_principal):
     report = pf.judge(facts(buying_power_usd=buying_power), params())
     assert report["ok"] is ok
     assert ("buying_power" in report["blocking"]) is (not ok)
+    if short_of_principal is not None:
+        assert ("buying_power_principal" in report["warnings"]) is short_of_principal
+
+
+def test_a_first_buy_is_the_cash_the_release_needs_now():
+    """No real shares, 100 LEAPS held, 10.09: the first BUY of 491.00 (+ 1 %) is what opens it."""
+    flat = facts(positions=[option()], quote={"price": "10.09", "quote_time": None},
+                 buying_power_usd="495.91")
+    report = pf.judge(flat, params(funding="initial-funding"))
+    assert report["derived"]["first_order"]["notional_usd"] == "491.00"
+    assert report["derived"]["required_cash_usd"] == "495.91" and report["ok"] is True
+    assert "its first BUY of 491.00 USD" in finding(report, "buying_power")["message"]
+    short = pf.judge({**flat, "buying_power_usd": "495.90"}, params(funding="initial-funding"))
+    assert short["blocking"] == ["buying_power"]
 
 
 def test_an_open_order_of_the_symbol_blocks():

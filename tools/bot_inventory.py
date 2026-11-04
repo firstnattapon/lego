@@ -14,12 +14,13 @@ this refuses, fail-closed:
 * symbol_twice: another function runs the symbol on a real-money database already; two bots
   would rebalance the same shares.
 * retire: LEGO_RETIRE_SYMBOL_OVERRIDE names no chain this deploy would leave.
-* inventory_unreadable: the functions, or the principal of a bot trading real money, cannot
-  be read.
+* inventory_unreadable: the functions, or the principal or order cap of a bot trading real
+  money, cannot be read.
 
-It also names the other bots trading real money (trade, active, not paper), whose principal the
-account preflight keeps out of the buying power of this release (tools/prod_live_preflight.py
---reserve FUNCTION:SYMBOL:FIX_C).
+It also names the other bots trading real money (trade, active, not paper) for the account
+preflight (tools/prod_live_preflight.py --reserve FUNCTION:SYMBOL:FIX_C:ORDER_CAP): one order at
+each one's cap is kept out of the buying power of this release, and their FIX_C is the WARN
+threshold (owner's rule 2026-11-04).
 
     python3 tools/bot_inventory.py --project P --region R --env PROD --target lego-tick-prod-usar \\
         --symbol USAR --database-url https://... [--retire QBTS]
@@ -178,13 +179,16 @@ def judge(functions: dict, *, target: str, symbol: str, database_url: str,
         if name == target or not _trades_real_money(env):
             continue
         principal, other = _principal(env.get("LEGO_FIX_C")), _symbol(env)
-        if principal is None or not re.fullmatch(SYMBOL_PATTERN, other):
-            add("inventory_unreadable", BLOCK, f"{name} trades real money but its LEGO_SYMBOL or "
-                "LEGO_FIX_C cannot be read: the cash it may need is unknown")
+        cap = _principal(env.get("LEGO_MAX_ORDER_NOTIONAL_USD"))
+        if principal is None or cap is None or not re.fullmatch(SYMBOL_PATTERN, other):
+            add("inventory_unreadable", BLOCK, f"{name} trades real money but its LEGO_SYMBOL, "
+                "LEGO_FIX_C or LEGO_MAX_ORDER_NOTIONAL_USD cannot be read: the cash it may need "
+                "is unknown")
             continue
-        reserve.append(f"{name}:{other}:{_plain(principal)}")
+        reserve.append(f"{name}:{other}:{_plain(principal)}:{_plain(cap)}")
     if reserve:
-        add("reserve", INFO, "the account preflight keeps the principal of " + ", ".join(reserve))
+        add("reserve", INFO, "the account preflight keeps one order of each other real-money bot "
+            "(FUNCTION:SYMBOL:FIX_C:ORDER_CAP): " + ", ".join(reserve))
 
     blocking = [f["id"] for f in findings if f["severity"] == BLOCK]
     return {"schema": SCHEMA, "ok": not blocking, "target": target,

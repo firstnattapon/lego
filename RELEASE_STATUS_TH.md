@@ -1,6 +1,9 @@
 # สถานะ candidate continuous execution v4
 
-ล่าสุด 3 พฤศจิกายน (addendum bot ตัวที่ 2): คำสั่ง USAR ของเจ้าของจะ deploy ทับ QBTS ใน `lego-tick-prod` (ชื่อ function ผูกกับ environment) และไม่มี gate ไหนห้าม.
+ล่าสุด 4 พฤศจิกายน (คำขอเจ้าของ): preflight เปลี่ยน gate buying power จาก FIX_C + 1% ของทุก bot เป็น **เงินที่เปิด order ถัดไปได้** (BUY แรก หรือ 1 order เต็มเพดาน + 1 order เต็มเพดานของ bot อื่น, ทั้งหมด + 1%); ต่ำกว่า FIX_C + 1% ⇒ WARN `buying_power_principal`.
+runtime ไม่เปลี่ยน (เช็กเงินก่อน Place ทุก BUY). runbook ข้อ 18.
+
+3 พฤศจิกายน (addendum bot ตัวที่ 2): คำสั่ง USAR ของเจ้าของจะ deploy ทับ QBTS ใน `lego-tick-prod` (ชื่อ function ผูกกับ environment) และไม่มี gate ไหนห้าม.
 แก้ที่ชั้น deploy เท่านั้น:
 - `LEGO_BOT_OVERRIDE=usar` ⇒ function ของตัวเอง `lego-tick-prod-usar`
 - `tools/bot_inventory.py` ห้ามหุ้นอื่นทับ chain เงินจริงและห้ามหุ้นซ้ำสอง function

@@ -406,6 +406,7 @@ unset LEGO_SCHEDULE_OVERRIDE   # every minute, as tools/verify_deployment.py req
 print_summary() {
     printf '%s' "${PREFLIGHT_JSON}" | python3 -c '
 import json, sys
+from decimal import Decimal
 derived = json.load(sys.stdin)["derived"]
 plan = json.loads(sys.argv[1])["release"]
 funding, confirmed = sys.argv[7], sys.argv[8] == "yes"
@@ -419,8 +420,9 @@ elif confirmed and derived.get("leaps_held") in (None, "0"):
 else:
     leaps_source = "verified in the positions (%s held)" % derived.get("leaps_held")
 others = [b["label"] for b in inventory["bots"] if b["function"] != inventory["target"]]
-kept = (" (this bot %s + other bots %s)" % (derived["own_cash_usd"], derived["reserved_usd"])
+kept = (" (this bot %s + one order of other bots %s)" % (derived["own_cash_usd"], derived["reserved_usd"])
         if derived.get("reserved_usd") else "")
+full, power = derived.get("principal_cash_usd"), derived.get("buying_power_usd")
 rows = [
     ("Function (this bot)", "%s (%s%s)" % (inventory["target"],
                                            "redeploy" if inventory["target_exists"] else "new",
@@ -440,6 +442,9 @@ rows = [
     ("Window ends", plan["LEGO_TRADING_WINDOW_END"]),
     ("Buying power / required", "%s / %s USD%s" % (
         derived.get("buying_power_usd"), derived.get("required_cash_usd"), kept)),
+    ("FIX_C + 1 % of every bot", "%s USD: %s" % (full, "covered" if Decimal(power) >= Decimal(full)
+        else "NOT covered (in a large fall a BUY the cash does not cover ends NOT_PLACED)")
+     if full and power else "not reported"),
     ("LEAPS price band", "BUY below %s, SELL below %s" % (band.get("buy_below"), band.get("sell_below"))
      if band else ("no LEAPS" if sys.argv[5] in ("0", "0.0") else "see the release plan above")),
 ]

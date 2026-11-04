@@ -39,9 +39,10 @@ ROOT = Path(__file__).parent
 PAPER_DB = "https://lego-firebase-paper.asia-southeast1.firebasedatabase.app"
 
 
-def bot_env(symbol, *, mode="trade", active="true", db=PROD_DB, fix_c="1500"):
+def bot_env(symbol, *, mode="trade", active="true", db=PROD_DB, fix_c="1500", cap="150"):
     return {"WEBULL_ENV": "PROD", "FIREBASE_DB_URL": db, "LEGO_SYMBOL": symbol, "LEGO_FIX_C": fix_c,
-            "LEGO_DIFF": "50", "LEGO_LEAPS": "100", "LEGO_MODE": mode, "LEGO_ACTIVE": active}
+            "LEGO_DIFF": "50", "LEGO_LEAPS": "100", "LEGO_MODE": mode, "LEGO_ACTIVE": active,
+            "LEGO_MAX_ORDER_NOTIONAL_USD": cap}
 
 
 QBTS_LIVE = {"lego-tick-prod": bot_env("QBTS")}
@@ -100,7 +101,7 @@ def test_a_usar_bot_beside_qbts_is_allowed_and_names_the_cash_qbts_keeps():
     report = judge(QBTS_LIVE)
     assert report["ok"] is True, report["findings"]
     assert report["target"] == "lego-tick-prod-usar" and report["target_exists"] is False
-    assert report["reserve"] == ["lego-tick-prod:QBTS:1500"]
+    assert report["reserve"] == ["lego-tick-prod:QBTS:1500:150"]
     assert report["bots"] == [{"function": "lego-tick-prod", "symbol": "QBTS", "mode": "trade",
                                "active": "true", "fix_c": "1500", "database": "real",
                                "label": "lego-tick-prod: QBTS trade/active, real money"}]
@@ -108,10 +109,10 @@ def test_a_usar_bot_beside_qbts_is_allowed_and_names_the_cash_qbts_keeps():
 
 def test_redeploying_a_bot_keeps_it_and_reserves_the_other_one():
     both = {**QBTS_LIVE, "lego-tick-prod-usar": bot_env("USAR")}
-    assert judge(both, target="lego-tick-prod", symbol="QBTS")["reserve"] == ["lego-tick-prod-usar:USAR:1500"]
+    assert judge(both, target="lego-tick-prod", symbol="QBTS")["reserve"] == ["lego-tick-prod-usar:USAR:1500:150"]
     again = judge(both)
     assert again["ok"] is True and again["target_exists"] is True
-    assert again["reserve"] == ["lego-tick-prod:QBTS:1500"]                 # never itself
+    assert again["reserve"] == ["lego-tick-prod:QBTS:1500:150"]                 # never itself
 
 
 def test_a_paper_function_may_change_symbol_as_qbts_replaced_paper_uber():
@@ -162,12 +163,13 @@ def test_only_real_money_bots_keep_cash():
         "lego-tick-prod-nvda": bot_env("NVDA", mode="preview", fix_c="4000"),
         "lego-tick-prod-amd": bot_env("AMD", mode="trade", active="false", fix_c="5000"),
     }
-    assert judge(functions)["reserve"] == ["lego-tick-prod:QBTS:1500"]
+    assert judge(functions)["reserve"] == ["lego-tick-prod:QBTS:1500:150"]
 
 
-@pytest.mark.parametrize("fix_c", ["", "abc", "-5", "0", "NaN"])
-def test_a_real_money_bot_whose_principal_cannot_be_read_blocks(fix_c):
-    report = judge({"lego-tick-prod": bot_env("QBTS", fix_c=fix_c)})
+@pytest.mark.parametrize("fix_c,cap", [("", "150"), ("abc", "150"), ("-5", "150"), ("0", "150"),
+                                       ("NaN", "150"), ("1500", ""), ("1500", "0"), ("1500", "x")])
+def test_a_real_money_bot_whose_principal_or_order_cap_cannot_be_read_blocks(fix_c, cap):
+    report = judge({"lego-tick-prod": bot_env("QBTS", fix_c=fix_c, cap=cap)})
     assert "inventory_unreadable" in report["blocking"]
 
 
@@ -225,7 +227,7 @@ def test_the_cli_reports_the_bots_and_the_cash_they_keep(monkeypatch, capsys):
     code = bi.main(["--project", "lego-firebase", "--region", "asia-southeast1", "--env", "PROD",
                     "--target", "lego-tick-prod-usar", "--symbol", "USAR", "--database-url", PROD_DB])
     out = capsys.readouterr()
-    assert code == 0 and json.loads(out.out)["reserve"] == ["lego-tick-prod:QBTS:1500"]
+    assert code == 0 and json.loads(out.out)["reserve"] == ["lego-tick-prod:QBTS:1500:150"]
     assert "lego-tick-prod: QBTS trade/active, real money" in out.err
 
 
@@ -242,7 +244,10 @@ def test_malformed_arguments_block(monkeypatch, capsys, argv):
 
 
 # ------------------------------------------------------------------ the preflight keeps their cash
-QBTS_KEPT = (("lego-tick-prod", "QBTS", Decimal("1500")),)
+# Owner's rule 2026-11-04: the least that opens the next order. This release's first BUY (or one
+# order at its cap) plus one order at the cap of every other bot trading real money, all + 1 %.
+# FIX_C + 1 % of every bot is a WARN (buying_power_principal), no longer a BLOCK.
+QBTS_KEPT = (("lego-tick-prod", "QBTS", Decimal("1500"), Decimal("150")),)
 
 
 def usar_facts(**overrides):
@@ -250,28 +255,47 @@ def usar_facts(**overrides):
                  quote={"price": "10.51", "quote_time": None}, **overrides)
 
 
-def test_the_preflight_keeps_the_cash_of_the_other_real_money_bots():
-    blocked = pf.judge(usar_facts(buying_power_usd="2000.00"),
+def test_the_preflight_needs_the_next_order_of_this_bot_and_one_of_each_other():
+    # USAR flat at 10.51 with 100 LEAPS: first BUY 449.00 -> 453.49; QBTS one order 150 -> 151.50.
+    blocked = pf.judge(usar_facts(buying_power_usd="604.98"),
                        params(symbol="USAR", funding="initial-funding", reserve=QBTS_KEPT))
-    assert "buying_power" in blocked["blocking"]
+    assert blocked["blocking"] == ["buying_power"]
     text = finding(blocked, "buying_power")["message"]
-    for part in ("2000.00", "3030.00", "1515.00 for this release", "lego-tick-prod QBTS 1515.00"):
+    for part in ("604.98", "604.99", "453.49 for this release (its first BUY of 449.00 USD + 1 %)",
+                 "151.50 for one order of each other real-money bot (lego-tick-prod QBTS 151.50)"):
         assert part in text, part
     derived = blocked["derived"]
-    assert (derived["required_cash_usd"], derived["own_cash_usd"], derived["reserved_usd"]) == (
-        "3030.00", "1515.00", "1515.00")
-    assert derived["reserved"] == [{"function": "lego-tick-prod", "symbol": "QBTS", "usd": "1515.00"}]
-    passed = pf.judge(usar_facts(buying_power_usd="4490.00"),
+    assert (derived["required_cash_usd"], derived["own_cash_usd"], derived["reserved_usd"],
+            derived["principal_cash_usd"]) == ("604.99", "453.49", "151.50", "3030.00")
+    assert derived["reserved"] == [{"function": "lego-tick-prod", "symbol": "QBTS", "usd": "151.50"}]
+    # The owner's account on 4 Nov: 2218.31 opens it; below FIX_C + 1 % of both bots, so a WARN.
+    passed = pf.judge(usar_facts(buying_power_usd="2218.31"),
                       params(symbol="USAR", funding="initial-funding", reserve=QBTS_KEPT))
     assert passed["ok"] is True, passed["findings"]
     assert finding(passed, "buying_power")["severity"] == "INFO"
+    warn = finding(passed, "buying_power_principal")
+    assert warn["severity"] == "WARN" and "3030.00" in warn["message"] and "NOT_PLACED" in warn["message"]
+    rich = pf.judge(usar_facts(buying_power_usd="3030.00"),
+                    params(symbol="USAR", funding="initial-funding", reserve=QBTS_KEPT))
+    assert "buying_power_principal" not in {f["id"] for f in rich["findings"]}
 
 
-def test_without_other_bots_the_preflight_is_what_it_was():
+def test_a_canary_with_no_first_order_needs_one_order_at_its_cap():
+    usar_kept = (("lego-tick-prod-usar", "USAR", Decimal("1500"), Decimal("150")),)
+    report = pf.judge(facts(buying_power_usd="303.00"), params(reserve=usar_kept))   # 38 real: none
+    assert report["derived"]["first_order"] is None and report["ok"] is True, report["findings"]
+    assert report["derived"]["required_cash_usd"] == "303.00"
+    assert "one order at its 150 USD cap" in finding(report, "buying_power")["message"]
+    assert pf.judge(facts(buying_power_usd="302.99"), params(reserve=usar_kept))["blocking"] == ["buying_power"]
+
+
+def test_without_other_bots_only_this_release_counts():
     report = pf.judge(facts(), params())
-    assert report["derived"]["required_cash_usd"] == "1515.00"
-    assert finding(report, "buying_power")["message"] == "USD buying power 1600.00 >= 1515.00"
-    assert not {"own_cash_usd", "reserved_usd", "reserved"} & set(report["derived"])
+    assert report["derived"]["required_cash_usd"] == "151.50"
+    assert finding(report, "buying_power")["message"] == (
+        "USD buying power 1600.00 >= the 151.50 that opens the next order: 151.50 for this release "
+        "(one order at its 150 USD cap + 1 %)")
+    assert not {"reserved_usd", "reserved"} & set(report["derived"])
 
 
 def test_the_preflight_cli_reads_the_reserve(monkeypatch, capsys):
@@ -279,10 +303,11 @@ def test_the_preflight_cli_reads_the_reserve(monkeypatch, capsys):
     monkeypatch.setattr(pf, "run", lambda p: seen.setdefault("params", p) and pf._report({}, [], {}))
     argv = ["--symbol", "USAR", "--fix-c", "1500", "--diff", "50", "--leaps", "100",
             "--allow-fractional", "true", "--window-sessions", "2", "--funding", "initial-funding"]
-    assert pf.main(argv + ["--reserve", "lego-tick-prod:QBTS:1500"]) == 0
+    assert pf.main(argv + ["--reserve", "lego-tick-prod:QBTS:1500:150"]) == 0
     assert seen["params"].reserve == QBTS_KEPT
     capsys.readouterr()
-    for bad in ("lego-tick-prod:QBTS", "lego-tick-prod:QBTS:-1", "x:QBTS:1500", "lego-tick-prod:q;b:1500"):
+    for bad in ("lego-tick-prod:QBTS:1500", "lego-tick-prod:QBTS:-1:150", "lego-tick-prod:QBTS:1500:0",
+                "x:QBTS:1500:150", "lego-tick-prod:q;b:1500:150"):
         assert pf.main(argv + ["--reserve", bad]) == 1
         assert json.loads(capsys.readouterr().out)["blocking"] == ["arguments"]
 
@@ -306,9 +331,10 @@ USAR = {**EXACT, "LEGO_SYMBOL_OVERRIDE": "USAR", "LEGO_FUNDING_MODE_OVERRIDE": "
         "LEGO_LEAPS_CONFIRMED": "yes"}
 USAR_PREFLIGHT = {**PREFLIGHT_OK, "warnings": ["leaps_held"], "derived": {
     **PREFLIGHT_OK["derived"], "reference_price": "10.51", "real_shares": "0", "leaps_held": "0",
-    "real_target": "42.72", "funding": "initial-funding", "required_cash_usd": "3030.00",
-    "buying_power_usd": "4490.00", "own_cash_usd": "1515.00", "reserved_usd": "1515.00",
-    "reserved": [{"function": "lego-tick-prod", "symbol": "QBTS", "usd": "1515.00"}],
+    "real_target": "42.72", "funding": "initial-funding", "required_cash_usd": "604.99",
+    "buying_power_usd": "2218.31", "own_cash_usd": "453.49", "reserved_usd": "151.50",
+    "principal_cash_usd": "3030.00",
+    "reserved": [{"function": "lego-tick-prod", "symbol": "QBTS", "usd": "151.50"}],
     "first_order": {"side": "BUY", "notional_usd": "449.00", "quantity": "42.72"}}}
 USAR_ACK = re.compile(
     r"LEGO_PROD_LIVE_ACK=(LIVE-PROD-USAR-q\d+-n1875-o2-\d{8}T\d{4}Z-initial-funding-[0-9a-f]{16})")
@@ -334,10 +360,11 @@ def test_a_usar_bot_stops_at_its_own_acknowledgement(sandbox, tmp_path):
     assert USAR_ACK.search(result.stdout), result.stdout[-3000:]
     assert "functions deploy" not in log(sandbox)
     call = preflight_call(sandbox)
-    assert "--symbol USAR" in call and "--reserve lego-tick-prod:QBTS:1500" in call
+    assert "--symbol USAR" in call and "--reserve lego-tick-prod:QBTS:1500:150" in call
     for text in ("lego-tick-prod-usar (new, LEGO_BOT_OVERRIDE=usar)",
                  "lego-tick-prod: QBTS trade/active, real money",
-                 "4490.00 / 3030.00 USD (this bot 1515.00 + other bots 1515.00)",
+                 "2218.31 / 604.99 USD (this bot 453.49 + one order of other bots 151.50)",
+                 "3030.00 USD: NOT covered",
                  "LEGO_BOT_OVERRIDE=usar LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_SYMBOL_OVERRIDE=USAR",
                  "WEBULL_ENV=PROD LEGO_SYMBOL=USAR"):
         assert text in result.stdout, text
