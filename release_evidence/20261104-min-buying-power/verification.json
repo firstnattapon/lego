@@ -1,0 +1,48 @@
+{
+  "schema": "lego_release_verification_v1",
+  "scope": "buying power gate lowered to the cash that opens the next order (owner's rule, 2026-11-04)",
+  "code_commit": "9a82b9d",
+  "candidate": {
+    "candidate_hash": "96c6a78e5ed221fd19fe1625905c1660c50801d44089ccdf5e71520c09fefaf7",
+    "scope": "backend-only",
+    "files": 230,
+    "source": "tools/candidate_manifest.py --from-head at the code commit"
+  },
+  "rule": {
+    "before": "buying power >= FIX_C + 1 % of this release + FIX_C + 1 % of every other real-money bot (BLOCK)",
+    "after": "buying power >= (first BUY, or one order at the release's notional cap) + one order at the cap of every other real-money bot, all + 1 % (BLOCK); below FIX_C + 1 % of every bot is a WARN (buying_power_principal)",
+    "owner_decision": "next order of this bot + one order of each other bot",
+    "runtime_changed": false
+  },
+  "pytest": {
+    "passed": 2583,
+    "skipped": 9,
+    "failed": 0,
+    "previous": {"passed": 2576, "skipped": 9},
+    "junit_sha256": "39a544b81115b2cddd68840d22796f71a648e9107c79d6b5b026606e7955549f",
+    "tests_rewritten_for_the_new_rule": [
+      "test_prod_live_preflight.py: required 1515.00 -> 151.50 (+ principal_cash_usd); the FIX_C + 1 % table became a BLOCK/WARN table",
+      "test_second_bot_20261103.py: reserve carries ORDER_CAP; preflight tests rewritten for the new rule; wrapper summary text"
+    ]
+  },
+  "fail_first": "16 failed / 112 passed in the two changed test files against the previous rule",
+  "mutation": {
+    "killed": 8,
+    "total": 8,
+    "restored_byte_exact": true,
+    "mutants": [
+      "own requirement back to FIX_C",
+      "first BUY ignored",
+      "other bots not kept",
+      "other bots kept at FIX_C",
+      "no principal WARN",
+      "no + 1 %",
+      "BLOCK became WARN",
+      "inventory ignores an unreadable order cap"
+    ]
+  },
+  "static": {"py_compile": "pass", "bash_n": "pass", "pyflakes_tools": "clean", "carriage_returns": 0},
+  "example_owner_account_2026_11_04": "USAR canary, no first BUY: 151.50 + QBTS 151.50 = 303.00 <= 2218.31 -> passes with WARN (below 3030.00)",
+  "broker_orders_sent_by_this_work": 0,
+  "status": "NO-GO for full real money until G4 delivery, Webull answers on margin/settlement/fractional and the USAR call are done"
+}
