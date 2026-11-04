@@ -4,9 +4,11 @@
 price). This judges the account the release will trade, right before it is deployed, with
 the same broker reads the tick makes (docs/AUDIT_20261103_TH.md, gate G3):
 
-* buying power: USD buying power >= FIX_C + 1 % (BUYs are never refused for cash), plus the
-  FIX_C + 1 % of every other bot trading real money on the account (--reserve, named by
-  tools/bot_inventory.py: one account, several bots, one cash balance);
+* buying power (owner's rule 2026-11-04): enough to open the next order, + 1 %: this release's
+  first BUY, or one order at its notional cap when there is none, plus one order at the cap of
+  every other bot trading real money on the account (--reserve, named by
+  tools/bot_inventory.py). Less than FIX_C + 1 % of every bot is a WARN: a fall in price then
+  asks for BUYs the cash does not cover, each refused before Place (NOT_PLACED);
 * open orders of the symbol: none (dispatch would be SUPPRESSED_ACTIVE_ORDER);
 * the instrument profile: OC / US_STOCK / USD and its `fractionable` flag;
 * every position row of the symbol has instrument_type EQUITY or OPTION (an untyped row
@@ -27,7 +29,7 @@ and app credentials come from the environment and never reach the output.
         WEBULL_TOKEN_SECRET=projects/P/secrets/N WEBULL_TOKEN_DIR=$(mktemp -d) \\
         python3 tools/prod_live_preflight.py --symbol QBTS --fix-c 1500 --diff 50 \\
             --leaps 100 --allow-fractional true --window-sessions 5 [--funding initial-funding] \\
-            [--reserve lego-tick-prod:QBTS:1500 ...]
+            [--reserve lego-tick-prod:QBTS:1500:150 ...]
 
 Exit 0 when nothing blocks, 1 otherwise; the JSON report is the only thing on stdout.
 """
@@ -82,7 +84,8 @@ class Params:
     # BUY is larger than the canary caps carry (release_horizon.recommend_limits).
     funding: str = "prefunded"
     # The other bots trading real money on this account (tools/bot_inventory.py): (function,
-    # symbol, principal). Each keeps its FIX_C + 1 % out of the buying power this release may use.
+    # symbol, principal, order notional cap). One order at each cap is kept out of the buying
+    # power this release may use; their principals add to the WARN threshold.
     reserve: tuple = ()
 
 
@@ -93,6 +96,11 @@ def _plain(value: Decimal) -> str:
 
 def _money(value: Decimal) -> str:
     return str(value.quantize(CENT))
+
+
+def _cash(notional: Decimal) -> Decimal:
+    """The cash an order of *notional* USD needs: + 1 % (fees and dispatch drift), up to the cent."""
+    return (notional * CASH_FACTOR).quantize(CENT, rounding=ROUND_CEILING)
 
 
 def _decimal(value) -> Decimal | None:
@@ -375,34 +383,49 @@ def judge(facts: dict, params: Params) -> dict:
         derived["real_target"] = "0"
 
     buying_power = _decimal(facts.get("buying_power_usd"))
-    own = required = (principal * CASH_FACTOR).quantize(CENT, rounding=ROUND_CEILING)
-    # One account, several bots: the cash the others may need is not this release's to spend.
-    kept = [(function, other, (amount * CASH_FACTOR).quantize(CENT, rounding=ROUND_CEILING))
-            for function, other, amount in params.reserve]
+    # Owner's rule (2026-11-04): the least that opens the next order. This release's first BUY,
+    # or one order at its notional cap when the first order is none or a SELL; plus one order at
+    # the cap of every other bot trading real money on the account; all + 1 %. The runtime still
+    # checks every BUY against the buying power before Place (validate_preview_funding).
+    first, caps_now = derived.get("first_order"), derived.get("caps")
+    if first and first.get("side") == "BUY":
+        basis, what = Decimal(first["notional_usd"]), f"its first BUY of {first['notional_usd']} USD"
+    elif caps_now:
+        basis = Decimal(caps_now["LEGO_MAX_ORDER_NOTIONAL_USD"])
+        what = f"one order at its {_plain(basis)} USD cap"
+    else:                                    # nothing could be sized: the release is blocked anyway
+        basis, what = principal, f"FIX_C {_plain(principal)} USD"
+    own = _cash(basis)
+    kept = [(function, other, _cash(cap), _cash(amount))
+            for function, other, amount, cap in params.reserve]
+    reserved = sum((usd for _, _, usd, _ in kept), Decimal("0"))
+    required = own + reserved if kept else own
+    full = _cash(principal) + sum((fix for *_, fix in kept), Decimal("0")) if kept else _cash(principal)
+    derived["required_cash_usd"] = str(required)
+    derived["own_cash_usd"] = str(own)
+    derived["principal_cash_usd"] = str(full)
+    others = ""
     if kept:
-        reserved = sum((usd for _, _, usd in kept), Decimal("0"))
-        required = own + reserved
-        derived["own_cash_usd"] = str(own)
         derived["reserved_usd"] = str(reserved)
         derived["reserved"] = [{"function": function, "symbol": other, "usd": str(usd)}
-                               for function, other, usd in kept]
-        kept_text = ", ".join(f"{function} {other} {usd}" for function, other, usd in kept)
-        need = (f"the {required} these bots may need: {own} for this release (FIX_C + 1 %) and "
-                f"{reserved} kept for the other real-money bots ({kept_text})")
-    derived["required_cash_usd"] = str(required)
+                               for function, other, usd, _ in kept]
+        others = (f" and {reserved} for one order of each other real-money bot ("
+                  + ", ".join(f"{function} {other} {usd}" for function, other, usd, _ in kept) + ")")
+    need = f"the {required} that opens the next order: {own} for this release ({what} + 1 %){others}"
     derived["buying_power_usd"] = None if buying_power is None else _money(buying_power)
     if buying_power is None:
         add("buying_power", BLOCK, "USD buying power could not be read")
-    elif buying_power < required and kept:
-        add("buying_power", BLOCK, f"USD buying power {_money(buying_power)} is below {need}: a BUY "
-            "of one of them would be refused at Preview")
     elif buying_power < required:
-        add("buying_power", BLOCK, f"USD buying power {_money(buying_power)} is below the "
-            f"{required} this release may need (FIX_C + 1 %): a BUY would be refused at Preview")
-    elif kept:
-        add("buying_power", INFO, f"USD buying power {_money(buying_power)} >= {need}")
+        add("buying_power", BLOCK, f"USD buying power {_money(buying_power)} is below {need}: that "
+            "BUY would be refused at Preview")
     else:
-        add("buying_power", INFO, f"USD buying power {_money(buying_power)} >= {required}")
+        add("buying_power", INFO, f"USD buying power {_money(buying_power)} >= {need}")
+        if buying_power < full:
+            add("buying_power_principal", WARN, f"USD buying power {_money(buying_power)} is below "
+                f"FIX_C + 1 % of {'every bot' if kept else 'this release'} ({full}): a fall in price "
+                "asks for BUYs the cash does not cover, and each one ends NOT_PLACED (checked before "
+                "Place; on a cash account nothing is borrowed). Add cash, or stop on NOT_PLACED "
+                "again and again")
 
     orders = facts.get("open_orders")
     if not isinstance(orders, list):
@@ -487,12 +510,14 @@ def _positive(text: str, name: str, *, zero: bool = False) -> Decimal:
 
 
 def _reserve(text: str) -> tuple:
-    """FUNCTION:SYMBOL:FIX_C of another bot trading real money, as tools/bot_inventory.py names it."""
+    """FUNCTION:SYMBOL:FIX_C:ORDER_CAP of another bot trading real money (tools/bot_inventory.py)."""
     parts = text.split(":")
-    if (len(parts) != 3 or not re.fullmatch(r"lego-tick-[a-z]+(-[a-z][a-z0-9]{0,15})?", parts[0])
+    if (len(parts) != 4 or not re.fullmatch(r"lego-tick-[a-z]+(-[a-z][a-z0-9]{0,15})?", parts[0])
             or not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", parts[1])):
-        raise ValueError(f"--reserve {text!r} must be FUNCTION:SYMBOL:FIX_C such as lego-tick-prod:QBTS:1500")
-    return parts[0], parts[1], _positive(parts[2], "--reserve FIX_C")
+        raise ValueError(f"--reserve {text!r} must be FUNCTION:SYMBOL:FIX_C:ORDER_CAP such as "
+                         "lego-tick-prod:QBTS:1500:150")
+    return (parts[0], parts[1], _positive(parts[2], "--reserve FIX_C"),
+            _positive(parts[3], "--reserve ORDER_CAP"))
 
 
 def main(argv=None) -> int:

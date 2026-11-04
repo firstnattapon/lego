@@ -305,7 +305,7 @@ incident ของ health-policy ปิดเองหลัง 30 นาที�
 3. `lego-firebase-prod`: ลง `database.rules.prod.json` และพิสูจน์ `Permission denied`
 4. candidate = git HEAD (`tools/candidate_manifest.py --from-head`)
 5. **account preflight** `tools/prod_live_preflight.py` (อ่านอย่างเดียว; ไม่ใช้ Firebase; ไม่มี Preview / Place / Cancel):
-   - USD buying power ≥ FIX_C + 1%
+   - USD buying power พอเปิด order ถัดไป + 1% (กฎเจ้าของ 4 พ.ย.: BUY แรก หรือ 1 order เต็มเพดานถ้าไม่มี BUY แรก, บวก 1 order เต็มเพดานของทุก bot เงินจริงตัวอื่น); ต่ำกว่า FIX_C + 1% ของทุก bot ⇒ WARN `buying_power_principal`
    - ไม่มี open order ของ symbol
    - instrument OC + `fractionable`
    - ทุกแถว position ของ symbol มี `instrument_type` EQUITY / OPTION
@@ -405,8 +405,11 @@ cd ~/lego-live && git pull --ff-only && LEGO_FUNDING_MODE_OVERRIDE=initial-fundi
   - function บน DB paper เปลี่ยนหุ้นได้ (เช่นตอน QBTS แทน paper UBER)
 - `symbol_twice` BLOCK: หุ้นเดียวกันรันอยู่แล้วใน function อื่นบน DB เงินจริง
 - `inventory_unreadable` BLOCK: อ่านรายการ function หรือ FIX_C ของ bot เงินจริงไม่ได้
-- preflight: buying power ≥ FIX_C + 1% ของ bot นี้ **บวก** FIX_C + 1% ของทุก bot อื่นที่ trade/active บน DB เงินจริง (`--reserve`)
-  - QBTS 1500 + USAR 1500 ⇒ ต้องมี 3,030 USD
+- preflight (กฎเจ้าของ 4 พ.ย.): buying power ≥ เงินที่เปิด order ถัดไปได้ + 1%
+  - ของ bot นี้: BUY แรก หรือ 1 order เต็มเพดาน (canary $150) ถ้าไม่มี BUY แรก
+  - **บวก** 1 order เต็มเพดานของทุก bot อื่นที่ trade/active บน DB เงินจริง (`--reserve FUNCTION:SYMBOL:FIX_C:ORDER_CAP`)
+  - USAR canary + QBTS ⇒ 151.50 + 151.50 = 303 USD
+  - ต่ำกว่า FIX_C + 1% ของทุก bot (QBTS + USAR = 3,030) ⇒ WARN `buying_power_principal`: ถ้าราคาลงแรง BUY ที่เงินไม่พอจะจบที่ `NOT_PLACED` (runtime เช็กก่อน Place ทุก order)
 
 **ลำดับ (USAR: FIX_C 1500, DIFF 50, LEAPS 100):**
 1. ทำ QBTS ขั้น B (16.1) ให้เสร็จก่อน
@@ -420,7 +423,8 @@ cd ~/lego-live && git pull --ff-only && LEGO_BOT_OVERRIDE=usar LEGO_FUNDING_MODE
 4. หัวสรุปต้องขึ้น:
    - `Function (this bot): lego-tick-prod-usar (new, LEGO_BOT_OVERRIDE=usar)`
    - `Other LEGO bots: lego-tick-prod: QBTS trade/active, real money`
-   - `Buying power / required: … / 3030.00 USD (this bot 1515.00 + other bots 1515.00)`
+   - `Buying power / required: … USD (this bot … + one order of other bots 151.50)`
+   - `FIX_C + 1 % of every bot: 3030.00 USD: covered` หรือ `NOT covered (…)` (WARN ไม่ BLOCK)
    - ขึ้น `lego-tick-prod` ⇒ **หยุด** (ยังไม่ได้ pull)
 5. รอบ 2: คำสั่งเดิมเติม `LEGO_PROD_LIVE_ACK=<ค่าที่พิมพ์>` (ค่าจริง ไม่ใช่ข้อความตัวอย่าง)
 6. หลัง fill ของ USAR ยืนยันและหุ้นในแอปตรง ⇒ ขั้น B: คำสั่งเดิมตัด `LEGO_FUNDING_MODE_OVERRIDE=initial-funding`
@@ -441,3 +445,16 @@ cd ~/lego-live && git pull --ff-only && LEGO_BOT_OVERRIDE=usar LEGO_FUNDING_MODE
 - LEAPS ของ USAR ยังไม่ได้ซื้อ (owner-confirmed) ⇒ exposure จริงต่ำกว่าที่ระบบคิด
 - ราคา USAR ต้อง < (FIX_C − DIFF)/LEAPS = $14.50 จึงซื้อ (preflight ตรวจจากราคาสด)
 - G4 (alert ถึงคนจริง) ยังไม่ได้พิสูจน์ และตอนนี้มีเงินจริงสอง bot
+
+## 18. Buying power ขั้นต่ำ = เปิด order ถัดไปได้ (กฎเจ้าของ 4 พ.ย.)
+
+เจ้าของเปลี่ยน gate G3 ของ preflight จาก "FIX_C + 1% ของทุก bot" เป็น **"น้อยที่สุดที่เปิด order ได้ขณะนั้น"**:
+- ของ release นี้: BUY แรก + 1% (เช่น USAR $449 ⇒ 453.49) หรือ 1 order เต็มเพดาน + 1% ถ้าไม่มี BUY แรก (canary $150 ⇒ 151.50)
+- บวก 1 order เต็มเพดานของทุก bot อื่นที่ใช้เงินจริง (QBTS canary ⇒ 151.50)
+- ต่ำกว่านั้น ⇒ BLOCK `buying_power`
+- ต่ำกว่า FIX_C + 1% ของทุก bot ⇒ WARN `buying_power_principal` (deploy ได้)
+
+ผลที่ต้องรับรู้:
+- runtime ไม่เปลี่ยน: เช็ก Preview cost + fee กับ buying power ก่อน Place ทุก BUY; ไม่พอ ⇒ `NOT_PLACED` (บัญชีเงินสดไม่ยืมเงิน)
+- ถ้าราคาลงแรงและเงินสดไม่พอ bot ซื้อตามสูตรไม่ได้ และหลาย bot แย่งเงินก้อนเดียวกัน ⇒ `NOT_PLACED` ซ้ำ ⇒ เติมเงินหรือใช้ kill switch
+- บัญชี margin: buying power อาจรวมวงเงินกู้ (ยังต้องถาม Webull)
