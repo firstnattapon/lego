@@ -70,6 +70,7 @@ def main() -> None:
         "LEGO_MAX_ORDER_QUANTITY": "100",
         "LEGO_MAX_ORDER_NOTIONAL_USD": "2000",
         "LEGO_MAX_SESSION_ORDERS": "1",
+        "LEGO_MAX_SESSION_BUY_ORDERS": "1",
         "LEGO_TRADING_WINDOW_END": "2030-01-01T00:00:00Z",
     }
     staged = load_runtime_config(env)

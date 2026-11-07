@@ -212,3 +212,28 @@ def test_the_reservation_itself_reports_the_buy_quota_when_the_advisory_read_mis
     assert not client.order_v3.place_order.calls
     assert observability.business_status({"dispatch": {"results": [result]}}, 200) == (
         "SESSION_BUY_CAP_REACHED")
+
+
+# ------------------------------------------------------------------ no four-limit release left
+def test_every_file_that_sets_the_session_cap_also_sets_the_buy_cap():
+    """A release built from the four old limits is unusable: every new order is NOT_PLACED.
+
+    tools/emulator_tick_race_probe.py kept the four old limits and failed only in CI, under
+    the Firebase emulator that the local suite skips. This finds the same omission locally in
+    every executable or configuration file; tests and the docs/release-evidence history are
+    left out on purpose (they show old and refused releases).
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parent
+    skip = {"docs", "release_evidence", "release_evidence_v2", "node_modules", "venv"}
+    missing = []
+    for pattern in ("*.py", "*.sh", "*.ps1", "*.yaml", "*.yml", "*.example", "*.env"):
+        for path in root.rglob(pattern):
+            parts = path.relative_to(root).parts
+            if (any(part in skip or part.startswith(".") for part in parts[:-1])
+                    or path.name.startswith("test_") or path.name == "conftest.py"):
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if "LEGO_MAX_SESSION_ORDERS" in text and "LEGO_MAX_SESSION_BUY_ORDERS" not in text:
+                missing.append(path.relative_to(root).as_posix())
+    assert sorted(missing) == []
