@@ -453,6 +453,9 @@ def decision_equation(cfg, snapshot, anchor, row, step) -> None:
         "dp": cfg.decimal_precision, "inc": cfg.quantity_increment,
         "strategy": cfg.strategy_id, "genesis": anchor is None,
     }
+    if meta.get("order_caps"):
+        # Clipped to the per-order caps: tools/trace_audit clips with the same caps.
+        inputs["order_caps"] = meta["order_caps"]
     leaps = getattr(cfg, "leaps_shares", 0.0)
     if leaps:
         # holdings above stays the real reading; tools/trace_audit adds these back.

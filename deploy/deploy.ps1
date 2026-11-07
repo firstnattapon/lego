@@ -15,21 +15,23 @@ param(
   [string]$MaxOrderQuantity = '',
   [string]$MaxOrderNotionalUsd = '',
   [string]$MaxSessionOrders = '',
-  [string]$TradingWindowEnd = ''
+  [string]$TradingWindowEnd = '',
+  [string]$MaxSessionBuyOrders = ''
 )
 $ErrorActionPreference = 'Stop'
 if (-not $DatabaseUrl.StartsWith('https://')) { throw 'DatabaseUrl must be HTTPS' }
 if ($Mode -notin @('observe','trade')) { throw 'Mode must be observe or trade' }
-# Real-money activation needs the acknowledgement flow, which this script does not
-# implement. It used to accept PROD + trade + active with only a release binding.
+# Real-money activation needs the release judgement (ops.py release-plan --enforce),
+# which this script does not run. It used to accept PROD + trade + active with only a
+# release binding.
 if ($Environment -eq 'PROD' -and ($Mode -ne 'observe' -or $Active)) {
-  throw 'PROD is deployed here as observe/inactive only. Real-money activation: deploy/cloudshell-all-in-one.sh with LEGO_PROD_LIVE_ACK (docs/PROD_LIVE_RUNBOOK_TH.md).'
+  throw 'PROD is deployed here as observe/inactive only. Real-money activation: deploy/cloudshell-prod-live.sh (docs/PROD_LIVE_RUNBOOK_TH.md).'
 }
 if ($Mode -eq 'trade' -and $Active) {
-  & python -c 'import sys; from execution_limits import ExecutionLimits; from datetime import datetime,timezone; x=ExecutionLimits.parse(sys.argv[1:]); sys.exit("trading window expired" if datetime.now(timezone.utc) >= x.end else 0)' $MaxOrderQuantity $MaxOrderNotionalUsd $MaxSessionOrders $TradingWindowEnd
+  & python -c 'import sys; from execution_limits import ExecutionLimits; from datetime import datetime,timezone; x=ExecutionLimits.parse(sys.argv[1:]); sys.exit("trading window expired" if datetime.now(timezone.utc) >= x.end else 0)' $MaxOrderQuantity $MaxOrderNotionalUsd $MaxSessionOrders $TradingWindowEnd $MaxSessionBuyOrders
   if ($LASTEXITCODE -ne 0) { throw 'Valid explicit execution limits required for trade+active' }
 }
-foreach ($value in @($MaxOrderQuantity, $MaxOrderNotionalUsd, $MaxSessionOrders, $TradingWindowEnd)) {
+foreach ($value in @($MaxOrderQuantity, $MaxOrderNotionalUsd, $MaxSessionOrders, $TradingWindowEnd, $MaxSessionBuyOrders)) {
   if ($value.Contains(',')) { throw 'Execution limits must not contain commas' }
 }
 $manifestJson = & python tools/candidate_manifest.py
@@ -52,6 +54,7 @@ $envVars = @(
   "LEGO_MAX_ORDER_QUANTITY=$MaxOrderQuantity",
   "LEGO_MAX_ORDER_NOTIONAL_USD=$MaxOrderNotionalUsd",
   "LEGO_MAX_SESSION_ORDERS=$MaxSessionOrders",
+  "LEGO_MAX_SESSION_BUY_ORDERS=$MaxSessionBuyOrders",
   "LEGO_TRADING_WINDOW_END=$TradingWindowEnd",
   'WEBULL_TOKEN_DIR=/tmp/webull_token',
   'LEGO_DNA_CLOCK_MODE=market'

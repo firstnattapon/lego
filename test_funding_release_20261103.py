@@ -23,7 +23,7 @@ import pytest
 import release_horizon as rh
 from config import load_runtime_config
 from operational_health import complete_sessions_between
-from test_audit_20261103 import (PREFLIGHT_OK, acked, authorized, deployed_line, exact_env,
+from test_audit_20261103 import (PREFLIGHT_OK, authorized, deployed_line, exact_env,
                                  log, run_live, sandbox)  # noqa: F401  (sandbox: fixture)
 from test_dispatch_overshoot import isolate  # noqa: F401  (autouse)
 from test_paper_mode import paper_values
@@ -33,7 +33,7 @@ from tools import prod_live_preflight as pf
 
 PRICE = "10.09"                                  # QBTS at the owner's first live run (03 Nov)
 FUNDING_CAPS = {"LEGO_MAX_ORDER_NOTIONAL_USD": "1875", "LEGO_MAX_ORDER_QUANTITY": "200",
-                "LEGO_MAX_SESSION_ORDERS": "2"}
+                "LEGO_MAX_SESSION_ORDERS": "2", "LEGO_MAX_SESSION_BUY_ORDERS": "2"}
 
 
 # ------------------------------------------------------------------ the recommended funding caps
@@ -53,7 +53,7 @@ def test_the_recommended_funding_release_never_blocks_its_own_ratio(principal):
 def test_the_steady_caps_are_unchanged():
     assert rh.recommend_limits(Decimal("1500"), Decimal("10.82"), profile="PROD") == {
         "profile": "PROD", "initial_funding": False, "LEGO_MAX_ORDER_NOTIONAL_USD": "150",
-        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_ORDER_QUANTITY": "20"}
+        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "3", "LEGO_MAX_ORDER_QUANTITY": "20"}
     assert rh.recommend_limits(10000, "67.4", profile="PROD", initial_funding=True)[
         "LEGO_MAX_ORDER_NOTIONAL_USD"] == "12500"
 
@@ -95,12 +95,20 @@ def test_the_funding_release_is_refused_when_the_canary_can_or_must_do_it(positi
     assert why in finding(report, "funding_not_needed")["message"]
 
 
-def test_the_prefunded_preflight_is_unchanged_and_names_the_funding_release():
+def test_the_prefunded_preflight_clips_the_first_buy_and_names_the_funding_release():
+    """Since 2026-11-07 an order above the caps is clipped to them, not refused."""
     report = pf.judge(flat(), params())
-    assert report["blocking"] == ["first_order"]
+    assert "first_order" not in report["blocking"]
     assert report["derived"]["caps"]["LEGO_MAX_ORDER_NOTIONAL_USD"] == "150"
-    message = finding(report, "first_order")["message"]
+    assert report["derived"]["first_order"]["clipped"] is True
+    first = finding(report, "first_order")
+    assert first["severity"] == "WARN"
+    message = first["message"]
+    assert "clipped to the caps" in message and "about 4 orders" in message and "3 BUYs per session" in message
+    assert "ORDER_CLIPPED_LARGE_GAP" in message                    # 491 USD > 3 x 150
     assert "hold between 34 and 63" in message and "LEGO_FUNDING_MODE_OVERRIDE=initial-funding" in message
+    # The cash that opens the next order: one clipped order at the cap, not the whole gap.
+    assert "clipped to the 150 USD cap" in finding(report, "buying_power")["message"]
     # A first SELL beyond the caps is not offered the funding release.
     sell = pf.judge(facts(positions=[equity("120"), option()]), params())
     assert "initial-funding" not in finding(sell, "first_order")["message"]
@@ -128,23 +136,13 @@ def funding_env(tmp_path, **overrides):
     return authorized(exact_env(tmp_path, LEGO_TRADING_WINDOW_END=window, **FUNDING_CAPS, **overrides))
 
 
-def test_only_the_funding_acknowledgement_opens_a_release_with_funding_caps(tmp_path):
+def test_the_funding_release_opens_with_its_own_binding_only(tmp_path):
     values = funding_env(tmp_path)
-    runtime = load_runtime_config(values)
-    acks = rh.prod_live_acks(rh.inputs_from_runtime(runtime), runtime.deployment.expected_release_binding)
-    assert acks["prefunded"] is None                       # 125 % caps are no steady release
-    assert re.fullmatch(r"LIVE-PROD-QBTS-q200-n1875-o2-\d{8}T\d{4}Z-initial-funding-[0-9a-f]{16}",
-                        acks["initial-funding"])
-    opened = load_runtime_config(acked(values, funding="initial-funding"))
-    assert opened.prod_live_gate_open is True and opened.allows_new_broker_mutation is True
-    canary_ack = acked(authorized(exact_env(tmp_path)))["LEGO_PROD_LIVE_ACK"]
-    assert load_runtime_config({**values, "LEGO_PROD_LIVE_ACK": canary_ack}).prod_live_gate_open is False
-
-
-def test_the_funding_acknowledgement_does_not_open_the_canary(tmp_path):
-    funding_ack = acked(funding_env(tmp_path), funding="initial-funding")["LEGO_PROD_LIVE_ACK"]
+    assert load_runtime_config(values).allows_new_broker_mutation is True
+    assert rh.assess(rh.inputs_from_runtime(load_runtime_config(values), initial_funding=True))["ok"]
     canary = authorized(exact_env(tmp_path))
-    assert load_runtime_config({**canary, "LEGO_PROD_LIVE_ACK": funding_ack}).prod_live_gate_open is False
+    assert load_runtime_config({**values, "LEGO_RELEASE_AUTHORIZATION": canary[
+        "LEGO_RELEASE_AUTHORIZATION"]}).allows_new_broker_mutation is False
 
 
 # ------------------------------------------------------------------ the live wrapper, steps A and B
@@ -153,41 +151,30 @@ FUNDING_PREFLIGHT = {**PREFLIGHT_OK, "warnings": ["leaps_held"], "derived": {
     "real_target": "48.66", "funding": "initial-funding",
     "first_order": {"side": "BUY", "notional_usd": "491.00", "quantity": "48.66"}}}
 FUNDING = {"LEGO_FUNDING_MODE_OVERRIDE": "initial-funding", "LEGO_LEAPS_CONFIRMED": "yes"}
-FUNDING_ACK = re.compile(
-    r"LEGO_PROD_LIVE_ACK=(LIVE-PROD-QBTS-q200-n1875-o2-\d{8}T\d{4}Z-initial-funding-[0-9a-f]{16})")
 
 
 def preflight_call(sandbox):
     return next(line for line in log(sandbox).splitlines() if "tools/prod_live_preflight.py" in line)
 
 
-def test_step_a_stops_at_the_funding_acknowledgement(sandbox):
+def test_step_a_deploys_the_funding_release_for_two_sessions_in_one_run(sandbox):
+    started = datetime.now(timezone.utc)
     result = run_live(sandbox, FUNDING, preflight=FUNDING_PREFLIGHT)
-    assert result.returncode == 3, result.stdout[-3000:] + result.stderr
-    assert FUNDING_ACK.search(result.stdout), result.stdout[-3000:]
-    assert not re.search(r"LEGO_PROD_LIVE_ACK=\S*-prefunded-", result.stdout)  # no steady ack here
-    assert "functions deploy" not in log(sandbox)
+    assert result.returncode == 78, result.stdout[-3000:] + result.stderr   # stub stops at deploy
+    assert "LEGO_PROD_LIVE_ACK" not in result.stdout + result.stderr
     call = preflight_call(sandbox)
     assert "--window-sessions 2 --funding initial-funding" in call and "--leaps-confirmed" in call
     for text in ("one-off FUNDING: caps up to 1875 USD per order; expect one BUY of about 491.00 USD",
-                 "200 / 1875 USD / 2 per session", "owner-confirmed (LEGO_LEAPS_CONFIRMED=yes), NOT seen",
-                 "WITHOUT LEGO_FUNDING_MODE_OVERRIDE", "ops.py halt-orders"):
+                 "200 / 1875 USD / 2 per session / 2 BUY", "owner-confirmed (LEGO_LEAPS_CONFIRMED=yes), NOT seen",
+                 "WITHOUT LEGO_FUNDING_MODE_OVERRIDE", "Funding mode   : initial-funding"):
         assert text in result.stdout, text
-
-
-def test_step_a_deploys_the_funding_release_for_two_sessions(sandbox):
-    started = datetime.now(timezone.utc)
-    ack = FUNDING_ACK.search(run_live(sandbox, FUNDING, preflight=FUNDING_PREFLIGHT).stdout).group(1)
-    result = run_live(sandbox, {**FUNDING, "LEGO_PROD_LIVE_ACK": ack}, preflight=FUNDING_PREFLIGHT)
-    assert result.returncode == 78, result.stdout[-3000:] + result.stderr   # stub stops at deploy
-    assert "PROD live acknowledgement verified" in result.stdout
-    assert "Funding mode   : initial-funding" in result.stdout
     deployed = deployed_line(sandbox)
     for value in ("LEGO_SYMBOL=QBTS,LEGO_FIX_C=1500,", "LEGO_DIFF=50,", "LEGO_LEAPS=100,",
                   "LEGO_MODE=trade,LEGO_ACTIVE=true,",
-                  "LEGO_MAX_ORDER_QUANTITY=200,LEGO_MAX_ORDER_NOTIONAL_USD=1875,LEGO_MAX_SESSION_ORDERS=2,",
-                  f"LEGO_PROD_LIVE_ACK={ack}", f"FIREBASE_DB_URL={PROD_DB},"):
+                  "LEGO_MAX_ORDER_QUANTITY=200,LEGO_MAX_ORDER_NOTIONAL_USD=1875,LEGO_MAX_SESSION_ORDERS=2,"
+                  "LEGO_MAX_SESSION_BUY_ORDERS=2,", f"FIREBASE_DB_URL={PROD_DB},"):
         assert value in deployed, value
+    assert "LEGO_PROD_LIVE_ACK" not in deployed
     end = datetime.strptime(re.search(r"LEGO_TRADING_WINDOW_END=([0-9TZ:-]+)", deployed).group(1),
                             "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     assert complete_sessions_between(started, end) == 2
@@ -195,17 +182,11 @@ def test_step_a_deploys_the_funding_release_for_two_sessions(sandbox):
 
 def test_step_b_is_the_canary_once_the_shares_are_held(sandbox):
     result = run_live(sandbox, {"LEGO_LEAPS_CONFIRMED": "yes"})          # PREFLIGHT_OK: 38 real
-    assert result.returncode == 3, result.stdout[-3000:] + result.stderr
-    assert re.search(r"LIVE-PROD-QBTS-q20-n150-o10-\d{8}T\d{4}Z-prefunded-", result.stdout)
-    assert "--window-sessions 5 --funding prefunded" in preflight_call(sandbox)
+    assert result.returncode == 78, result.stdout[-3000:] + result.stderr
+    assert "--window-sessions 30 --funding prefunded" in preflight_call(sandbox)
     assert "one-off FUNDING" not in result.stdout and "WITHOUT LEGO_FUNDING_MODE_OVERRIDE" not in result.stdout
-
-
-def test_a_funding_ack_cannot_deploy_the_canary(sandbox):
-    ack = FUNDING_ACK.search(run_live(sandbox, FUNDING, preflight=FUNDING_PREFLIGHT).stdout).group(1)
-    result = run_live(sandbox, {"LEGO_LEAPS_CONFIRMED": "yes", "LEGO_PROD_LIVE_ACK": ack})
-    assert result.returncode == 1 and "does not match this release" in result.stderr
-    assert "functions deploy" not in log(sandbox)
+    assert ("LEGO_MAX_ORDER_QUANTITY=20,LEGO_MAX_ORDER_NOTIONAL_USD=150,LEGO_MAX_SESSION_ORDERS=10,"
+            "LEGO_MAX_SESSION_BUY_ORDERS=3,") in deployed_line(sandbox)
 
 
 # ------------------------------------------------------------------ a whole funding, then canary
@@ -214,10 +195,8 @@ def funding_values():
         LEGO_SYMBOL="QBTS", LEGO_FIX_C="1500", LEGO_DIFF="50", LEGO_LEAPS="100",
         LEGO_MODE="trade", LEGO_ACTIVE="true", LEGO_ALLOW_FRACTIONAL="true",
         FIREBASE_DB_URL=PROD_DB, **FUNDING_CAPS)
-    runtime = load_runtime_config(values)
-    acks = rh.prod_live_acks(rh.inputs_from_runtime(runtime), runtime.deployment.expected_release_binding)
-    assert acks["prefunded"] is None and acks["initial-funding"]
-    return {**values, "LEGO_PROD_LIVE_ACK": acks["initial-funding"]}
+    assert load_runtime_config(values).allows_new_broker_mutation
+    return values
 
 
 def test_the_funding_release_buys_once_then_the_canary_trades_the_same_chain(monkeypatch):

@@ -7,8 +7,8 @@
 #   LEGO_LEAPS_OVERRIDE=100 LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_ALERTS_CONFIRMED=yes \
 #   ALERT_WEBHOOK_SECRET_OVERRIDE=<secret name> bash deploy/cloudshell-prod-live.sh
 #
-# The first run judges everything, prints the acknowledgement of this exact release and exits 3
-# before anything is deployed; the same command with LEGO_PROD_LIVE_ACK=<that value> deploys it.
+# One run judges everything and deploys the release only when no gate and no BLOCK finding
+# refuses it; the summary of the deployed release is printed at the end.
 #
 # LEGO_FUNDING_MODE_OVERRIDE=initial-funding (step A, once): the loose funding caps of
 # release_horizon (125% of FIX_C, 2 orders per session) for 2 sessions, refused by the preflight
@@ -25,9 +25,9 @@
 #   reads; the read-only account preflight (tools/prod_live_preflight.py: buying power, open
 #   orders, fractional flag, position types, LEAPS held and expiry, price band, first order
 #   against the caps); ops.py release-plan at the preflight's price with canary caps and a
-#   5-session window (funding: the funding caps and 2 sessions) and the candidate hash of git
-#   HEAD; deploy/cloudshell-all-in-one.sh, which deploys that git HEAD export only with the
-#   acknowledgement.
+#   30-session window (funding: the funding caps and 2 sessions) and the candidate hash of git
+#   HEAD; deploy/cloudshell-all-in-one.sh, which judges that release again and deploys the
+#   git HEAD export.
 #
 # DNA and order policy are the ones deploy/cloudshell-prod-observe.sh deploys, so rolling back
 # to observe (printed at the end) keeps this chain and keeps reconciling a sent order.
@@ -48,7 +48,8 @@ readonly APP_KEY_SECRET="webull-app-key-${SUFFIX}"
 readonly APP_SECRET_SECRET="webull-app-secret-${SUFFIX}"
 readonly ACCOUNT_SECRET="webull-account-id-${SUFFIX}"
 readonly TOKEN_SECRET="webull-token-${SUFFIX}"
-readonly CANARY_WINDOW_SESSIONS=5
+# release_horizon.DEFAULT_WINDOW_SESSIONS: the approval window of the canary.
+readonly CANARY_WINDOW_SESSIONS=30
 # The funding caps are loose: the shortest window release_horizon accepts (MIN_SESSIONS_COVERED).
 readonly FUNDING_WINDOW_SESSIONS=2
 readonly DNA_BUNDLE="strategy.uat-continuous.json"
@@ -386,7 +387,7 @@ while IFS='=' read -r key value; do
 done < <(printf '%s' "${PLAN_JSON}" | python3 -c '
 import json, re, sys
 for key, value in json.load(sys.stdin)["deploy_env"].items():
-    if re.fullmatch(r"[A-Z0-9_]+", key) and key != "LEGO_PROD_LIVE_ACK":
+    if re.fullmatch(r"[A-Z0-9_]+", key):
         print(f"{key}={value}")')
 [[ "${WEBULL_ENV_OVERRIDE:-}" == PROD && "${LEGO_MODE_OVERRIDE:-}" == trade && \
    "${LEGO_ACTIVE_OVERRIDE:-}" == true ]] || fail "release-plan did not return a PROD trade release"
@@ -436,9 +437,9 @@ rows = [
         derived.get("real_shares"), derived.get("leaps_held"), derived.get("real_target"))),
     ("First order", "none: within DIFF of FIX_C" if not first else
      "%s about %s USD (%s shares)" % (first["side"], first["notional_usd"], first["quantity"])),
-    ("Caps (quantity / notional / orders)", "%s / %s USD / %s per session" % (
+    ("Caps (quantity / notional / orders / BUYs)", "%s / %s USD / %s per session / %s BUY" % (
         plan["LEGO_MAX_ORDER_QUANTITY"], plan["LEGO_MAX_ORDER_NOTIONAL_USD"],
-        plan["LEGO_MAX_SESSION_ORDERS"])),
+        plan["LEGO_MAX_SESSION_ORDERS"], plan["LEGO_MAX_SESSION_BUY_ORDERS"])),
     ("Window ends", plan["LEGO_TRADING_WINDOW_END"]),
     ("Buying power / required", "%s / %s USD%s" % (
         derived.get("buying_power_usd"), derived.get("required_cash_usd"), kept)),
@@ -485,28 +486,21 @@ Roll back to observe on the same chain (no new orders; a sent order is still rec
 EOF
 }
 
+# What is about to be deployed, read before the deploy starts (no acknowledgement step:
+# every gate above and the release judgement of the deploy script decide).
+print_summary
+print_funding_next_step
+print_stop_commands
+
 step "5/5 Deploy ${FUNCTION_NAME}: PROD, trade, active (deploy/cloudshell-all-in-one.sh)"
 DEPLOY_STATUS=0
 bash deploy/cloudshell-all-in-one.sh || DEPLOY_STATUS=$?
-if (( DEPLOY_STATUS == 3 )); then
-    print_summary
-    print_funding_next_step
-    print_stop_commands
-    cat <<'EOF'
-
-Nothing was deployed. Read every value above. To deploy exactly this release, run the same
-command again with LEGO_PROD_LIVE_ACK=<the value printed above>, outside the regular session.
-EOF
-    exit 3
-fi
 if (( DEPLOY_STATUS != 0 )); then
     echo "ERROR: deploy/cloudshell-all-in-one.sh failed (status ${DEPLOY_STATUS})" >&2
     exit "${DEPLOY_STATUS}"
 fi
 
 require_private
-print_summary
-print_funding_next_step
 print_stop_commands
 cat <<EOF
 
@@ -514,7 +508,8 @@ PROD trade is deployed. Watch the first session from 09:30 New York (orders, fil
   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="${FUNCTION_NAME}" AND jsonPayload.event="lego_tick_completed"' --project=${PROJECT_ID} --freshness=1h --limit=20 --format='table(timestamp,jsonPayload.business_status,jsonPayload.decision.status,jsonPayload.decision.real_holdings,jsonPayload.execution[0].status)'
 Stop at once (kill switch above) on: needs_manual_check, order_contract_anomaly, BROKER_REJECT_HALT,
 MANUAL_RECONCILIATION_REQUIRED, AWAITING_FILL_CONFIRMATION past one tick, AWAITING_BROKER_FEE past
-15 minutes, FEE_OVERDUE, EXECUTION_LIMIT_BLOCKED or NOT_PLACED again and again, holdings that differ
+15 minutes, FEE_OVERDUE, EXECUTION_LIMIT_BLOCKED or NOT_PLACED again and again (SESSION_BUY_CAP_REACHED,
+the spent BUY quota of a falling day, is expected), ORDER_CLIPPED_LARGE_GAP with holdings that differ
 from the Webull app, or any order in the app this system did not send (docs/PROD_LIVE_RUNBOOK_TH.md 16).
 The release ends after ${WINDOW_SESSIONS} sessions: run this command again before then.
 EOF

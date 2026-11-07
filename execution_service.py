@@ -20,7 +20,7 @@ from lego_archive import archive_terminal_records
 from lego_one_row import (READY_BUY, READY_SELL, Config, DNAExhausted, ExecutionFill,
                           HoldingsAnomaly, build_decision,
                           check_holdings_continuity, compute_row, dna_step_for,
-                          dna_steps_remaining, position_vanished)
+                          dna_steps_remaining, position_vanished, OrderCaps)
 from lego_orders import (TERMINAL_STATUSES, UAT, evaluate_submit_gate,
                          normalize_status, order_confirmation_phrase,
                          submitted_order_anomaly, summarize_order_result)
@@ -1216,8 +1216,10 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
     decision_age_seconds = max(0.0, decision_delta_seconds)
     quote_age_seconds = max(0.0, quote_delta_seconds)
     price_drift_bps = abs(fresh_price / decision_price - 1.0) * 10_000.0
-    original = build_decision(cfg, decision_price, decision_holdings, signal)
-    current = build_decision(cfg, fresh_price, fresh_holdings, signal)
+    # The caps the decision clipped with (None for an intent written before clipping).
+    caps = OrderCaps.from_snapshot(intent.get("order_caps"))
+    original = build_decision(cfg, decision_price, decision_holdings, signal, caps)
+    current = build_decision(cfg, fresh_price, fresh_holdings, signal, caps)
     intent_side = str(intent.get("side") or "").strip().upper()
     quantum = 10.0 ** (-cfg.decimal_precision)
     quantity_tolerance = max(1e-12, quantum / 2.0)
@@ -1691,7 +1693,8 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             ck, run_id, quote_safety, phase="pre_preview", claim=intent)
 
     if runtime is not None:
-        from execution_limits import ExecutionLimits, ExecutionLimitError, reserve_attempt
+        from execution_limits import (ExecutionLimits, ExecutionLimitError,
+                                      SessionBuyCapReached, reserve_attempt)
         try:
             limits = ExecutionLimits.parse(runtime.deployment.execution_limits)
             limits.check(intent["quantity"], fresh["price"], now=datetime.now(UTC))
@@ -1699,6 +1702,23 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             return _stop(ck, run_id, "NOT_PLACED", {
                 "terminal_reason": str(exc), "execution_limit_blocked": True},
                 claim=intent, execution_limit_blocked=True)
+        if (str(intent.get("side") or "").upper() == "BUY" and dispatch_claim
+                and not _preview_only(runtime, intent)):
+            # Advisory and read-only: a BUY whose session quota is already spent stops
+            # here, before it spends a broker Preview. reserve_attempt stays the authority.
+            from execution_limits import buy_quota_spent, session_key_for
+            try:
+                quota_key = session_key_for(runtime.deployment.session_key_mode, limits,
+                                            now=datetime.now(UTC))
+            except ExecutionLimitError:
+                quota_key = None                  # reserve_attempt refuses it with its reason
+            if quota_key and buy_quota_spent(
+                    str(dispatch_claim.get("dispatch_scope_key") or ck), limits, quota_key):
+                return _stop(ck, run_id, "NOT_PLACED", {
+                    "terminal_reason": f"session BUY limit reached ({limits.buy_orders} "
+                                       "BUY orders per session)",
+                    "session_buy_cap_reached": True, "dispatch_check_phase": "pre_preview"},
+                    claim=intent, session_buy_cap_reached=True)
 
     env = environment_label()
     # Audit-only on purpose: the outbox already holds every one of these fields
@@ -2046,7 +2066,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
             with tick_runtime.phase("reserve_attempt", witness="fenced_unsent"):
                 evidence.update(reserve_attempt(
                     dispatch_scope, dispatch_claim, run_id, limits, session_key,
-                    now=datetime.now(UTC)))
+                    side=intent["side"], now=datetime.now(UTC)))
             _persist(ck, run_id, {"execution_limit_check": evidence},
                      claim=intent)
             fr.node("W24", "reserved", run_id=run_id,
@@ -2064,6 +2084,11 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                     ck, run_id, final_deadline, phase="post_reservation",
                     claim=intent)
             tick_runtime.require_budget(10.0)
+        except SessionBuyCapReached as exc:
+            # Expected in a long fall: logged as a warning, never paged.
+            return _stop(ck, run_id, "NOT_PLACED", {
+                "terminal_reason": str(exc), "session_buy_cap_reached": True},
+                claim=intent, session_buy_cap_reached=True)
         except ExecutionLimitError as exc:
             return _stop(ck, run_id, "NOT_PLACED", {
                 "terminal_reason": str(exc), "execution_limit_blocked": True},

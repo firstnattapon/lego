@@ -55,7 +55,7 @@ def paper_values(**overrides):
         # The funding caps the PROD preview release carried, 2 orders per session included:
         # paper reserves no quota, so a whole session of fills passes under them.
         "LEGO_MAX_ORDER_QUANTITY": "60", "LEGO_MAX_ORDER_NOTIONAL_USD": "3750",
-        "LEGO_MAX_SESSION_ORDERS": "2", "LEGO_TRADING_WINDOW_END": "2030-01-01T00:00:00Z",
+        "LEGO_MAX_SESSION_ORDERS": "2", "LEGO_MAX_SESSION_BUY_ORDERS": "2", "LEGO_TRADING_WINDOW_END": "2030-01-01T00:00:00Z",
         "LEGO_SESSION_KEY_MODE": "market_day",
     }
     values.update(overrides)
@@ -360,13 +360,12 @@ def test_a_booked_paper_fill_that_lost_its_close_is_closed_on_that_booking(monke
 
 
 # ------------------------------------------------------------ config, locks and logs
-def test_paper_needs_the_release_but_never_the_real_money_acknowledgement():
+def test_paper_needs_the_release_and_is_judged_like_trade():
     runtime = load_runtime_config(paper_values())
     assert runtime.operator.paper and runtime.operator.preview_only
-    assert runtime.allows_new_broker_mutation and runtime.prod_live_gate_open is False
+    assert runtime.allows_new_broker_mutation
     inputs = rh.inputs_from_runtime(runtime)
     assert inputs.trading and not inputs.live
-    assert set(rh.prod_live_acks(inputs, runtime.deployment.expected_release_binding).values()) == {None}
     trade = load_runtime_config({**paper_values(), "LEGO_MODE": "trade"})
     assert trade.deployment.release_is_authorized is False          # the binding includes the mode
 

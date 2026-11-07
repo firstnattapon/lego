@@ -54,9 +54,15 @@ def business_status(body: dict, http_status: int) -> str:
         return "EXECUTION_LIMIT_BLOCKED"
     if any(item.get("reconciliation_overdue") for item in results):
         return "RECONCILIATION_OVERDUE"
+    if decision.get("order_clipped_large_gap"):
+        # Sent clipped to the caps, but |gap| was several caps: check the holdings.
+        return "ORDER_CLIPPED_LARGE_GAP"
     if (any(phase.get("open_order_blocked") for phase in phases)
             or any(item.get("status") == "SUPPRESSED_ACTIVE_ORDER" for item in results)):
         return "OPEN_ORDER_BLOCKED"
+    if any(item.get("session_buy_cap_reached") for item in results):
+        # The BUY quota of the session is spent: expected in a long fall, not paged.
+        return "SESSION_BUY_CAP_REACHED"
     if body.get("pipeline_status") == "TICK_DEFERRED" and (
             body.get("deferred_reason") == "tick_deadline"
             or any(item.get("deferred_reason") == "tick_deadline" for item in results)
@@ -94,11 +100,11 @@ def business_status(body: dict, http_status: int) -> str:
 ERROR_STATUSES = frozenset({
     "ERROR", "FEE_OVERDUE", "MANUAL_RECONCILIATION_REQUIRED", "BROKER_REJECT_HALT",
     "BROKER_ORDER_FAILED", "TOKEN_PREFLIGHT_BLOCKED", "EXECUTION_LIMIT_BLOCKED",
-    "RECONCILIATION_OVERDUE", "RELEASE_UNAUTHORIZED"})
+    "RECONCILIATION_OVERDUE", "RELEASE_UNAUTHORIZED", "ORDER_CLIPPED_LARGE_GAP"})
 WARNING_STATUSES = frozenset({
     "AUTH_BACKOFF", "OPERATOR_HALT", "WAITING_BROKER_FEE", "WAITING_RECONCILIATION",
     "OUTBOX_RECOVERY_PENDING", "INTENT_BLOCKED", "DNA_LOW", "TOKEN_EXPIRY_WARNING",
-    "RELEASE_EXPIRING", "TICK_DEFERRED", "OPEN_ORDER_BLOCKED"})
+    "RELEASE_EXPIRING", "TICK_DEFERRED", "OPEN_ORDER_BLOCKED", "SESSION_BUY_CAP_REACHED"})
 # A finished horizon is a steady state that repeats every minute until an operator
 # deploys the next release. It is alerted by the horizon webhook and the
 # horizon-policy (alerting.notify_tick, tools/monitoring_config), not by one
@@ -177,6 +183,9 @@ def emit_tick(body: dict, code: int, *, request=None, now: datetime | None = Non
         "decision": {**{key: decision.get(key) for key in
                         ("run_id", "market_slot_id", "step", "status", "pipeline_status", "committed",
                          "dna_steps_remaining")},
+                     # Clipped to the order caps only: absent otherwise, so those events keep their shape.
+                     **{key: decision[key] for key in ("order_clipped", "order_clipped_large_gap")
+                        if key in decision},
                      # LEGO_LEAPS only: absent without LEAPS, so those events keep their shape.
                      **{key: decision[key] for key in
                         ("leaps_shares", "real_holdings", "effective_holdings",
@@ -222,7 +231,8 @@ def emit_tick(body: dict, code: int, *, request=None, now: datetime | None = Non
                                              "broker_reason_missing", "broker_reject_code",
                                              "order_contract_anomaly",
                                              "broker_reject_halted", "token_preflight_blocked",
-                                             "execution_limit_blocked", "operator_halt_blocked",
+                                             "execution_limit_blocked", "session_buy_cap_reached",
+                                             "operator_halt_blocked",
                                              "needs_manual_check",
                                              "reconciliation_overdue", "reconciliation_age_seconds",
                                              "cancel_requested_at", "cancel_confirmed_at", "cancel_attempt_count",

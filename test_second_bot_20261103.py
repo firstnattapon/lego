@@ -336,8 +336,6 @@ USAR_PREFLIGHT = {**PREFLIGHT_OK, "warnings": ["leaps_held"], "derived": {
     "principal_cash_usd": "3030.00",
     "reserved": [{"function": "lego-tick-prod", "symbol": "QBTS", "usd": "151.50"}],
     "first_order": {"side": "BUY", "notional_usd": "449.00", "quantity": "42.72"}}}
-USAR_ACK = re.compile(
-    r"LEGO_PROD_LIVE_ACK=(LIVE-PROD-USAR-q\d+-n1875-o2-\d{8}T\d{4}Z-initial-funding-[0-9a-f]{16})")
 
 
 def preflight_call(sandbox):
@@ -350,15 +348,13 @@ def test_the_owners_usar_command_without_a_bot_is_refused_before_anything_is_pla
     assert "[BLOCK] symbol_switch" in result.stderr and "LEGO_BOT_OVERRIDE=usar" in result.stderr
     recorded = log(sandbox)
     assert "prod_live_preflight" not in recorded and "functions deploy" not in recorded
-    assert "LEGO_PROD_LIVE_ACK=" not in result.stdout
 
 
-def test_a_usar_bot_stops_at_its_own_acknowledgement(sandbox, tmp_path):
+def test_a_usar_bot_prints_its_own_release_before_it_deploys(sandbox, tmp_path):
     env = {**USAR, "LEGO_BOT_OVERRIDE": "usar", **services(tmp_path, QBTS_LIVE)}
     result = run_live(sandbox, env, preflight=USAR_PREFLIGHT)
-    assert result.returncode == 3, result.stdout[-3000:] + result.stderr
-    assert USAR_ACK.search(result.stdout), result.stdout[-3000:]
-    assert "functions deploy" not in log(sandbox)
+    assert result.returncode == 78, result.stdout[-3000:] + result.stderr   # stub stops at deploy
+    assert result.stdout.index("REAL-MONEY RELEASE") < result.stdout.index("5/5 Deploy")
     call = preflight_call(sandbox)
     assert "--symbol USAR" in call and "--reserve lego-tick-prod:QBTS:1500:150" in call
     for text in ("lego-tick-prod-usar (new, LEGO_BOT_OVERRIDE=usar)",
@@ -370,24 +366,24 @@ def test_a_usar_bot_stops_at_its_own_acknowledgement(sandbox, tmp_path):
         assert text in result.stdout, text
 
 
-def test_the_acknowledged_usar_bot_deploys_to_its_own_function(sandbox, tmp_path):
+def test_the_usar_bot_deploys_to_its_own_function(sandbox, tmp_path):
     env = {**USAR, "LEGO_BOT_OVERRIDE": "usar", **services(tmp_path, QBTS_LIVE)}
-    ack = USAR_ACK.search(run_live(sandbox, env, preflight=USAR_PREFLIGHT).stdout).group(1)
-    result = run_live(sandbox, {**env, "LEGO_PROD_LIVE_ACK": ack}, preflight=USAR_PREFLIGHT)
+    result = run_live(sandbox, env, preflight=USAR_PREFLIGHT)
     assert result.returncode == 78, result.stdout[-3000:] + result.stderr   # stub stops at deploy
     recorded = log(sandbox)
     deployed = re.search(r"gcloud functions deploy lego-tick-prod-usar .*", recorded).group(0)
     assert "gcloud functions deploy lego-tick-prod " not in recorded            # QBTS untouched
     for value in ("LEGO_SYMBOL=USAR,LEGO_FIX_C=1500,", "LEGO_MODE=trade,LEGO_ACTIVE=true,",
-                  f"LEGO_PROD_LIVE_ACK={ack}", f"FIREBASE_DB_URL={PROD_DB},",
+                  f"FIREBASE_DB_URL={PROD_DB},",
                   "--service-account=lego-runtime-prod@lego-firebase.iam.gserviceaccount.com"):
         assert value in deployed, value
     assert "gcloud scheduler jobs describe lego-tick-prod-usar " in recorded
+    assert "LEGO_PROD_LIVE_ACK" not in deployed
 
 
 def test_the_default_release_has_no_bot_and_keeps_nothing_without_other_bots(sandbox):
     result = run_live(sandbox)
-    assert result.returncode == 3, result.stdout[-3000:] + result.stderr
+    assert result.returncode == 78, result.stdout[-3000:] + result.stderr
     assert "--reserve" not in preflight_call(sandbox)
     assert "lego-tick-prod (new)" in result.stdout and "Other LEGO bots" in result.stdout
     assert "LEGO_BOT_OVERRIDE" not in result.stdout

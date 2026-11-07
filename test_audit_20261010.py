@@ -229,8 +229,9 @@ def test_a_tick_with_the_debug_switch_on_production_answers_config_error(tmp_pat
 def production_observe_env():
     env = release_env(LEGO_MODE_OVERRIDE="observe", LEGO_ACTIVE_OVERRIDE="false")
     for name in ("LEGO_MAX_ORDER_QUANTITY_OVERRIDE", "LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE",
-                 "LEGO_MAX_SESSION_ORDERS_OVERRIDE", "LEGO_TRADING_WINDOW_END_OVERRIDE"):
-        env.pop(name)
+                 "LEGO_MAX_SESSION_ORDERS_OVERRIDE", "LEGO_TRADING_WINDOW_END_OVERRIDE",
+                 "LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE"):
+        env.pop(name, None)
     return env
 
 
@@ -316,7 +317,7 @@ def test_a_production_plan_without_a_measured_fee_warns_and_is_not_blocked(plan_
     assert findings["fee_unmeasured"]["severity"] == "WARN" and "--fee-pct" in findings["fee_unmeasured"]["message"]
     assert findings["alert_unset"]["severity"] == "WARN"
     assert result["blocked"] is False and result["assessment"]["ok"]
-    assert result["prod_live_acks"]["prefunded"] and "fee_check" not in result
+    assert "prod_live_acks" not in result and "fee_check" not in result
 
 
 def test_a_measured_fee_is_reported_as_a_cost_and_still_does_not_gate(plan_env, tmp_path):
@@ -330,9 +331,9 @@ def test_a_measured_fee_is_reported_as_a_cost_and_still_does_not_gate(plan_env, 
     assert result["blocked"] is False                         # even at UAT's fee, which is far above any edge
 
 
-def test_the_fee_never_changes_the_release_or_its_acknowledgement(plan_env, tmp_path):
+def test_the_fee_never_changes_the_release(plan_env, tmp_path):
     bare, measured = prod_plan(tmp_path), prod_plan(tmp_path, fee_pct="0.15")
-    for key in ("release", "prod_live_acks", "deploy_env", "candidate_hash"):
+    for key in ("release", "deploy_env", "candidate_hash"):
         assert bare[key] == measured[key]
 
 
@@ -376,14 +377,14 @@ def test_the_command_line_accepts_fee_pct(plan_env, monkeypatch, capsys):
 
 def test_the_deploy_script_shows_the_operator_warnings_for_a_real_money_release(sandbox):
     result = run(sandbox, deploy_authorized(sandbox, release_env()))
-    assert result.returncode == 3, result.stderr              # stops for the acknowledgement, as before
+    assert result.returncode == 78, result.stderr             # judged, then the stub stops at deploy
     assert "[WARN] fee_unmeasured" in result.stdout and "[WARN] alert_unset" in result.stdout
 
 
 def test_the_deploy_script_hands_the_fee_and_the_webhook_secret_to_the_plan(sandbox):
     result = run(sandbox, deploy_authorized(sandbox, release_env()),
                  LEGO_FEE_PCT_OVERRIDE="0.15", ALERT_WEBHOOK_SECRET_OVERRIDE="lego-alert-webhook-prod")
-    assert result.returncode == 3, result.stderr
+    assert result.returncode == 78, result.stderr
     assert "fee_unmeasured" not in result.stdout and "alert_unset" not in result.stdout
 
 

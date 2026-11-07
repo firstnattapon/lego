@@ -66,9 +66,11 @@ def test_the_policy_file_caps_equal_the_recommendation():
     release = result["release"]
     recommended = result["recommended_limits"]
     assert (release["LEGO_MAX_ORDER_QUANTITY"], release["LEGO_MAX_ORDER_NOTIONAL_USD"],
-            release["LEGO_MAX_SESSION_ORDERS"]) == ("30", "1500", "26")
+            release["LEGO_MAX_SESSION_ORDERS"], release["LEGO_MAX_SESSION_BUY_ORDERS"]) == (
+        "30", "1500", "26", "3")
     assert (recommended["LEGO_MAX_ORDER_QUANTITY"], recommended["LEGO_MAX_ORDER_NOTIONAL_USD"],
-            recommended["LEGO_MAX_SESSION_ORDERS"]) == ("30", "1500", "26")
+            recommended["LEGO_MAX_SESSION_ORDERS"], recommended["LEGO_MAX_SESSION_BUY_ORDERS"]) == (
+        "30", "1500", "26", "3")
 
 
 SCRIPT_BINDING_NAMES = (
@@ -76,7 +78,8 @@ SCRIPT_BINDING_NAMES = (
     "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS", "LEGO_TRADING_WINDOW_END",
     "LEGO_FIX_C", "LEGO_DIFF", "LEGO_DNA_BUNDLE", "LEGO_MODE", "LEGO_ACTIVE",
     "LEGO_ALLOW_FRACTIONAL", "LEGO_STALE_ORDER_ACTION", "LEGO_STALE_ORDER_SECONDS",
-    "LEGO_CANCEL_CONFIRM_GRACE_SECONDS", "LEGO_SESSION_KEY_MODE", "LEGO_LEAPS")
+    "LEGO_CANCEL_CONFIRM_GRACE_SECONDS", "LEGO_SESSION_KEY_MODE", "LEGO_LEAPS",
+    "LEGO_MAX_SESSION_BUY_ORDERS")
 
 
 def test_the_binding_equals_what_the_deploy_script_will_compute():
@@ -96,7 +99,7 @@ def test_the_binding_equals_what_the_deploy_script_will_compute():
 def test_the_incident_release_is_blocked_by_the_plan(monkeypatch):
     for key, value in {"LEGO_TRADING_WINDOW_END": "2026-10-01T06:19:26Z",
                        "LEGO_MAX_ORDER_QUANTITY": "1000", "LEGO_MAX_ORDER_NOTIONAL_USD": "36000",
-                       "LEGO_MAX_SESSION_ORDERS": "30",
+                       "LEGO_MAX_SESSION_ORDERS": "30", "LEGO_MAX_SESSION_BUY_ORDERS": "30",
                        "LEGO_DNA_BUNDLE": str(ROOT / "strategy.example.json")}.items():
         monkeypatch.setenv(key, value)
     result = plan(enforce=True)
@@ -139,33 +142,53 @@ def test_recommended_limits_need_a_reference_price():
 
 
 # ---------------------------------------------------------------------- production
-def test_production_plan_prints_the_acknowledgement_the_runtime_will_require(tmp_path):
+def test_production_plan_carries_the_release_and_no_acknowledgement(tmp_path):
     result = plan(env_file=prod_policy(tmp_path), window_sessions=5, recommended_limits=True,
                   reference_price=PRICE, enforce=True)
     assert result["environment"] == "PROD" and result["blocked"] is False
-    ack = result["prod_live_acks"]["prefunded"]
-    assert ack.startswith("LIVE-PROD-UBER-q20-n1000-o10-20261009T2000Z-prefunded-")
-    assert result["prod_live_acks"]["initial-funding"] is None
+    assert "prod_live_acks" not in result and "LEGO_PROD_LIVE_ACK" not in result["deploy_env"]
+    assert result["release"]["LEGO_MAX_SESSION_BUY_ORDERS"] == "3"
+    assert result["deploy_env"]["LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE"] == "3"
     assert "LEGO_FUNDING_MODE_OVERRIDE" not in result["deploy_env"]
-    assert result["deploy_env"]["LEGO_PROD_LIVE_ACK"] == ack
     assert any("WEBULL_TOKEN_SECRET_OVERRIDE" in step for step in result["next_steps"])
     assert result["deploy_env"]["LEGO_RELEASE_AUTHORIZATION_OVERRIDE"] == (
         result["release"]["LEGO_RELEASE_AUTHORIZATION"])
 
 
-def test_the_acknowledgement_opens_the_runtime_gate_for_exactly_this_plan(tmp_path):
+def test_the_planned_binding_opens_the_runtime_gate_for_exactly_this_plan(tmp_path):
     from config import load_runtime_config
     result = plan(env_file=prod_policy(tmp_path), window_sessions=5, recommended_limits=True,
                   reference_price=PRICE)
-    release, deploy = result["release"], result["deploy_env"]
+    release = result["release"]
     env = {"WEBULL_ENV": "PROD", "WEBULL_ACCOUNT_ID": ACCOUNT, "LEGO_MODE": "trade",
            "LEGO_ACTIVE": "true", "LEGO_SYMBOL": "UBER", "LEGO_FIX_C": "10000", "LEGO_DIFF": "25",
            "LEGO_ALLOW_FRACTIONAL": "false", "LEGO_SESSION_KEY_MODE": "market_day",
            "LEGO_STALE_ORDER_ACTION": "hold",
-           "LEGO_DNA_BUNDLE": str(ROOT / "strategy.uat-continuous.json"), **release,
-           "LEGO_PROD_LIVE_ACK": deploy["LEGO_PROD_LIVE_ACK"]}
+           "LEGO_DNA_BUNDLE": str(ROOT / "strategy.uat-continuous.json"), **release}
     assert load_runtime_config(env).allows_new_broker_mutation is True
-    assert load_runtime_config({**env, "LEGO_PROD_LIVE_ACK": "LIVE-PROD"}).allows_new_broker_mutation is False
+    assert load_runtime_config({**env, "LEGO_MAX_SESSION_BUY_ORDERS": "4"}
+                               ).allows_new_broker_mutation is False
+
+
+def test_without_a_window_the_plan_ends_after_the_default_thirty_sessions(tmp_path):
+    import release_horizon as rh
+    result = plan(env_file=prod_policy(tmp_path), recommended_limits=True,
+                  reference_price=PRICE, enforce=True)
+    expected = rh.format_window_end(rh.window_end_after_sessions(NOW, rh.DEFAULT_WINDOW_SESSIONS))
+    assert result["release"]["LEGO_TRADING_WINDOW_END"] == expected
+    assert result["assessment"]["limits"]["complete_sessions_in_window"] == 30
+    assert result["blocked"] is False
+
+
+def test_an_explicit_window_end_in_the_environment_is_kept(monkeypatch):
+    monkeypatch.setenv("LEGO_TRADING_WINDOW_END", "2026-10-16T20:00:00Z")
+    assert plan()["release"]["LEGO_TRADING_WINDOW_END"] == "2026-10-16T20:00:00Z"
+
+
+def test_a_release_window_session_key_blocks_a_trading_plan(monkeypatch):
+    monkeypatch.setenv("LEGO_SESSION_KEY_MODE", "release_window")
+    result = plan(window_sessions=10, enforce=True)
+    assert result["blocked"] and "session_key_mode" in result["assessment"]["blocking"]
 
 
 def test_funding_plan_uses_loose_caps_a_separate_ack_and_reminds_to_redeploy(tmp_path):
@@ -175,8 +198,8 @@ def test_funding_plan_uses_loose_caps_a_separate_ack_and_reminds_to_redeploy(tmp
     assert (release["LEGO_MAX_ORDER_QUANTITY"], release["LEGO_MAX_ORDER_NOTIONAL_USD"],
             release["LEGO_MAX_SESSION_ORDERS"]) == ("200", "12500", "2")
     assert result["blocked"] is False and "funding_release_temporary" in result["assessment"]["warnings"]
-    assert result["prod_live_acks"]["prefunded"] is None
-    assert "-initial-funding-" in result["deploy_env"]["LEGO_PROD_LIVE_ACK"]
+    assert release["LEGO_MAX_SESSION_BUY_ORDERS"] == "2"
+    assert "LEGO_PROD_LIVE_ACK" not in result["deploy_env"]
     assert result["deploy_env"]["LEGO_FUNDING_MODE_OVERRIDE"] == "initial-funding"     # the script must judge it as such
     assert any("FUNDING release" in step and "LEGO_FUNDING_MODE_OVERRIDE" in step for step in result["next_steps"])
 
@@ -186,8 +209,9 @@ def test_steady_caps_cannot_fund_a_flat_account_and_the_plan_says_so(tmp_path, m
                   reference_price=PRICE, enforce=True)
     assert steady["blocked"] is False
     release = steady["release"]
-    for name in ("LEGO_MAX_ORDER_QUANTITY", "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS"):
-        monkeypatch.setenv(name, release[name])                   # 20 / 1000 / 10
+    for name in ("LEGO_MAX_ORDER_QUANTITY", "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
+                 "LEGO_MAX_SESSION_BUY_ORDERS"):
+        monkeypatch.setenv(name, release[name])                   # 20 / 1000 / 10 / 3
     # The first order of a flat account is ~FIX_C (10,000): these caps would block it
     # every slot, so a plan for the t0 release must not pass with them.
     flat = plan(env_file=prod_policy(tmp_path), window_sessions=2, initial_funding=True,
@@ -195,14 +219,10 @@ def test_steady_caps_cannot_fund_a_flat_account_and_the_plan_says_so(tmp_path, m
     assert flat["blocked"] is True
     assert {"funding_notional_sufficient", "funding_quantity_sufficient"} <= set(
         flat["assessment"]["blocking"])
-    # Those caps are fine for a pre-funded account (its ack exists) but cannot fund one,
-    # so the funding plan hands out no acknowledgement to deploy with.
-    assert flat["prod_live_acks"]["prefunded"] is not None
-    assert flat["prod_live_acks"]["initial-funding"] is None
     assert "LEGO_PROD_LIVE_ACK" not in flat["deploy_env"]
 
 
-def test_production_observe_has_no_acknowledgement(tmp_path):
+def test_production_observe_has_no_acknowledgement_either(tmp_path):
     result = plan(env_file=prod_policy(tmp_path, "observe", "false"), window_sessions=5)
     assert "prod_live_acks" not in result and "LEGO_PROD_LIVE_ACK" not in result["deploy_env"]
 
@@ -287,4 +307,4 @@ def test_check_reports_the_horizon_too(monkeypatch):
     report = ops.check_command(None)
     assert report["horizon"]["ok"] is True and report["horizon"]["trading"] is False
     assert report["new_orders_authorized"] is False       # observe/inactive never sends orders
-    assert report["prod_live_gate_open"] is True          # UAT is not subject to the production gate
+    assert "prod_live_gate_open" not in report            # the release binding is the one gate

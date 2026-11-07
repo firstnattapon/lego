@@ -236,6 +236,58 @@ def dna_steps_remaining(dna_code: str, step: int) -> int:
     return max(0, len(decode_dna(dna_code)) - int(step) - 1)
 
 
+# The typed runtime sends an order whose dispatch quote is at most this far from the
+# decision quote (execution_service.DEFAULT_MAX_DISPATCH_PRICE_DRIFT_BPS = 100 bps), so a
+# clipped order is sized to the notional cap divided by (1 + margin): it then still fits
+# the cap that limits.check applies at the dispatch price.
+CLIP_PRICE_MARGIN = Decimal("0.01")
+# A clipped order whose |gap| is above this many notional caps is still sent, but it is
+# reported (ORDER_CLIPPED_LARGE_GAP): a gap that large is more often a misread position
+# than a market move, and before clipping it was refused and paged a person.
+LARGE_GAP_CAP_MULTIPLE = Decimal("3")
+
+
+@dataclass(frozen=True)
+class OrderCaps:
+    """The deployment's per-order caps the decision clips an oversized order to.
+
+    Not part of Config, so lego_state.config_hash and the chain stay what they were.
+    The intent stores snapshot(), and the dispatch re-check rebuilds the decision
+    with exactly these caps.
+    """
+    quantity: Decimal
+    notional: Decimal
+    price_margin: Decimal = CLIP_PRICE_MARGIN
+
+    def __post_init__(self):
+        for name in ("quantity", "notional", "price_margin"):
+            value = getattr(self, name)
+            if not isinstance(value, Decimal) or not value.is_finite():
+                raise ValueError(f"order caps {name} ต้องเป็น Decimal finite")
+        if self.quantity <= 0 or self.notional <= 0 or self.price_margin < 0:
+            raise ValueError("order caps ต้อง > 0 (margin >= 0)")
+
+    def snapshot(self) -> dict:
+        return {"quantity": format(self.quantity, "f"), "notional_usd": format(self.notional, "f"),
+                "price_margin": format(self.price_margin, "f")}
+
+    @classmethod
+    def from_snapshot(cls, raw) -> "OrderCaps | None":
+        """None for an intent written before clipping existed: it is re-checked unclipped."""
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise ValueError("order_caps ต้องเป็น object")
+        try:
+            return cls(Decimal(str(raw["quantity"])), Decimal(str(raw["notional_usd"])),
+                       Decimal(str(raw["price_margin"])))
+        except (KeyError, ArithmeticError) as exc:
+            raise ValueError("order_caps ไม่ถูกต้อง") from exc
+
+    def large_gap(self, gap: float) -> bool:
+        return Decimal(str(abs(gap))) > self.notional * LARGE_GAP_CAP_MULTIPLE
+
+
 @dataclass(frozen=True)
 class Decision:
     status: str
@@ -251,7 +303,33 @@ class Decision:
         return self.status in (READY_BUY, READY_SELL) and self.quantity > 0
 
 
-def build_decision(cfg: Config, price: float, holdings: float, signal: int) -> Decision:
+def clip_quantity(cfg: Config, qty: float, price: float, caps: OrderCaps | None) -> float:
+    """*qty*, or the largest broker quantity within *caps* when *qty* would breach them.
+
+    Only an order that execution_limits.check would refuse at the decision price is
+    touched (quantity above the cap, or quantity x price above the notional cap), so
+    every order that was sent before is sized bit for bit as before. A clipped order
+    targets notional / (1 + margin), rounded down to the broker's increment. When not
+    even one increment fits, *qty* is returned unchanged and the dispatch refuses it
+    as it always did.
+    """
+    if caps is None or not qty > 0:
+        return qty
+    q, p = Decimal(str(qty)), Decimal(str(price))
+    if q <= caps.quantity and q * p <= caps.notional:
+        return qty
+    limit = min(caps.quantity, caps.notional / (1 + caps.price_margin) / p)
+    if cfg.strategy_id.endswith("_v2"):
+        increment = Decimal(str(cfg.quantity_increment))
+        clipped = (limit / increment).to_integral_value(rounding=ROUND_DOWN) * increment
+    else:
+        clipped = limit.quantize(Decimal(1).scaleb(-cfg.decimal_precision), rounding=ROUND_DOWN)
+    clipped = float(clipped)
+    return clipped if clipped > 0 else qty
+
+
+def build_decision(cfg: Config, price: float, holdings: float, signal: int,
+                   caps: OrderCaps | None = None) -> Decision:
     """One slot's decision from the quote and the broker's REAL shares.
 
     ``holdings`` is what the broker says the account holds (option rows are not
@@ -261,6 +339,10 @@ def build_decision(cfg: Config, price: float, holdings: float, signal: int) -> D
     value and gap use real + LEAPS. A SELL can only come out of the real shares:
     its ceiling is the real holdings, and a SELL that needs at least all of them
     is PASS_SELL_EXCEEDS_REAL rather than a truncated order.
+
+    With *caps* an order above the per-order caps is clipped to them (clip_quantity),
+    BUY and SELL alike: the rest of the gap is rebalanced by the next slots. The
+    SELL-exceeds-real test runs on the unclipped quantity, as before.
     """
     if not (math.isfinite(price) and price > 0):
         raise ValueError("price (Pₙ) ต้อง finite และ > 0")
@@ -297,6 +379,7 @@ def build_decision(cfg: Config, price: float, holdings: float, signal: int) -> D
         sell_ceiling = float(Decimal(str(holdings)).quantize(
             quantum, rounding=ROUND_DOWN))
         qty = min(qty, sell_ceiling)
+    qty = clip_quantity(cfg, qty, price, caps)
     if cfg.strategy_id.endswith("_v2") and qty > 0 and qty < 1.0:
         if (Decimal(str(qty)) * Decimal(str(price))) < Decimal("1.0"):
             qty = 0.0
@@ -456,7 +539,7 @@ def finalize_recurrence(cfg: Config, fill: ExecutionFill, *,
 
 
 def compute_row(cfg: Config, snapshot: dict, anchor: Anchor | None,
-                dna_step: int | None = None) -> dict:
+                dna_step: int | None = None, caps: OrderCaps | None = None) -> dict:
     step = dna_step_for(anchor, dna_step)
     signal = dna_signal_for(cfg.dna_code, step)
     price = float(snapshot["price"])
@@ -467,7 +550,10 @@ def compute_row(cfg: Config, snapshot: dict, anchor: Anchor | None,
     # itself from the real reading.
     real_holdings = float(snapshot.get("holdings", 0.0) or 0.0)
     holdings = effective_holdings(real_holdings, cfg.leaps_shares)
-    dec = build_decision(cfg, price, real_holdings, signal)
+    dec = build_decision(cfg, price, real_holdings, signal, caps)
+    # The same decision without caps: equal unless the caps clipped the order.
+    clipped_from = (build_decision(cfg, price, real_holdings, signal).quantity
+                    if caps is not None else dec.quantity)
     # acted=False on every row, including READY_BUY/READY_SELL. A decision is
     # not an execution: the order may be suppressed, expire unsent, be rejected,
     # or fill at another price entirely, and each of those would leave a booked
@@ -512,6 +598,12 @@ def compute_row(cfg: Config, snapshot: dict, anchor: Anchor | None,
         "quantity": dec.quantity,
         "action": dec.action,
     }
+    if dec.acted and clipped_from != dec.quantity:
+        # Clipped to the order caps: column 11 is the clipped quantity, column 13
+        # still the whole gap. Absent on every row that was not clipped, whose
+        # quantity the caps never touched.
+        row["_meta"]["clipped_from_quantity"] = clipped_from
+        row["_meta"]["order_caps"] = caps.snapshot()
     if cfg.strategy_id.endswith("_v2"):
         row["_meta"].update({
             "excess_next": rec.E,

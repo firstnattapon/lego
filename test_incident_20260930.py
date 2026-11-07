@@ -173,7 +173,7 @@ def test_expired_horizons_are_visible_even_when_market_decision_has_no_remaining
     monkeypatch.setenv("LEGO_DNA_ORIGIN_UTC", "2026-09-29T13:30:00Z")
     runtime = SimpleNamespace(operator=SimpleNamespace(dna_bundle=SimpleNamespace(
         dna_code="bypass:1", interval_seconds=900, origin_utc="2026-09-29T13:30:00Z")),
-        deployment=SimpleNamespace(execution_limits=("1000", "36000", "30", "2026-09-30T15:12:22Z")))
+        deployment=SimpleNamespace(execution_limits=("1000", "36000", "30", "2026-09-30T15:12:22Z", "30")))
     health = operational_health.report(runtime, {}, {}, now=datetime(2026, 9, 30, 15, 12, 22, tzinfo=timezone.utc))
     assert health["release_expired"] and health["release_seconds_remaining"] == 0
     assert health["dna_exhausted"]

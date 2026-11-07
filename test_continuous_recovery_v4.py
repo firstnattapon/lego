@@ -149,19 +149,19 @@ def test_transition_replay_is_immutable_idempotent_and_preserves_pending_on_fail
 
 
 def test_daily_quota_does_not_reset_for_release_renewal_and_rolls_next_session():
-    policy = limits.ExecutionLimits.parse(("100", "10000", "1", "2030-01-01T00:00:00Z"))
+    policy = limits.ExecutionLimits.parse(("100", "10000", "1", "2030-01-01T00:00:00Z", "1"))
     claim = {"owner": "worker", "claim_token": "token"}
     ref = FAKE_DB.reference(f"{outbox.DISPATCH_LOCK_PATH}/scope")
     ref.set({**claim, "lease_until": (NOW + timedelta(days=5)).isoformat(), "inflight_run_id": "one"})
     key = limits.session_key_for("market_day", policy, now=NOW)
-    assert limits.reserve_attempt("scope", claim, "one", policy, key, now=NOW)["reservation_count"] == 1
+    assert limits.reserve_attempt("scope", claim, "one", policy, key, side="BUY", now=NOW)["reservation_count"] == 1
     ref.update({"inflight_run_id": "two"})
     renewed = replace(policy, end=policy.end + timedelta(days=1))
     with pytest.raises(limits.ExecutionLimitError):
-        limits.reserve_attempt("scope", claim, "two", renewed, key, now=NOW)
+        limits.reserve_attempt("scope", claim, "two", renewed, key, side="BUY", now=NOW)
     monday = NOW + timedelta(days=3)
     next_key = limits.session_key_for("market_day", policy, now=monday)
-    assert limits.reserve_attempt("scope", claim, "two", renewed, next_key, now=monday)["reservation_count"] == 1
+    assert limits.reserve_attempt("scope", claim, "two", renewed, next_key, side="BUY", now=monday)["reservation_count"] == 1
 
 
 def test_migration_requires_idle_and_never_decreases_count():
@@ -182,9 +182,9 @@ def test_malformed_counter_cannot_be_migrated_or_reset_on_rollover(counter):
     with pytest.raises(limits.ExecutionLimitError): limits.migrate_market_day("scope", now=NOW, apply=True)
     claim = {"owner": "worker", "claim_token": "token"}
     ref.update({**claim, "lease_until": (NOW + timedelta(minutes=2)).isoformat(), "inflight_run_id": "new"})
-    policy = limits.ExecutionLimits.parse(("100", "10000", "30", "2030-01-01T00:00:00Z"))
+    policy = limits.ExecutionLimits.parse(("100", "10000", "30", "2030-01-01T00:00:00Z", "30"))
     with pytest.raises(limits.ExecutionLimitError):
-        limits.reserve_attempt("scope", claim, "new", policy, "XNYS:2026-09-25", now=NOW)
+        limits.reserve_attempt("scope", claim, "new", policy, "XNYS:2026-09-25", side="BUY", now=NOW)
 
 
 def test_release_binding_covers_recovery_strategy_and_fractional():

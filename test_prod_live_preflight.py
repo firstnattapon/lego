@@ -91,7 +91,7 @@ def test_a_prefunded_account_holding_its_leaps_passes_with_the_numbers_it_trades
     assert derived["required_cash_usd"] == "151.50" and derived["own_cash_usd"] == "151.50"
     assert derived["principal_cash_usd"] == "1515.00"
     assert derived["caps"] == {"LEGO_MAX_ORDER_QUANTITY": "20", "LEGO_MAX_ORDER_NOTIONAL_USD": "150",
-                               "LEGO_MAX_SESSION_ORDERS": "10"}
+                               "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "3"}
     assert derived["prefund_range"] == ["25", "52"] and derived["suggested_real_shares"] == "38"
     assert derived["price_band"] == {"buy_below": "14.5", "sell_below": "15"}
     assert derived["leaps_earliest_expiry"] == "2028-01-21"
@@ -230,17 +230,22 @@ def test_the_live_price_is_judged_against_the_leaps_band(price, severity):
     assert finding(report, "leaps_value")["severity"] == severity
 
 
-@pytest.mark.parametrize("real,ok,side", [
+@pytest.mark.parametrize("real,fits,side", [
     ("0", False, "BUY"), ("24", False, "BUY"), ("25", True, "BUY"), ("38", True, None),
     ("52", True, "SELL"), ("53", False, "SELL"), ("120", False, "SELL"),
 ])
-def test_the_first_order_of_a_prefunded_canary_must_fit_its_caps(real, ok, side):
+def test_a_first_order_above_the_canary_caps_is_clipped_not_refused(real, fits, side):
+    """Since 2026-11-07 an order above the caps is clipped to them (a WARN), never a BLOCK."""
     report = pf.judge(facts(positions=[equity(real), option()]), params())
-    assert ("first_order" in report["blocking"]) is (not ok)
+    assert "first_order" not in report["blocking"]
     first = report["derived"]["first_order"]
     assert (first or {}).get("side") == side
-    if not ok:
+    severity = finding(report, "first_order")["severity"]
+    assert severity == ("INFO" if fits else "WARN")
+    if not fits:
+        assert first["clipped"] is True
         message = finding(report, "first_order")["message"]
+        assert "clipped to the caps" in message
         assert "25" in message and "52" in message and "38" in message
 
 
@@ -248,7 +253,8 @@ def test_a_flat_account_is_told_how_many_shares_to_buy_first():
     report = pf.judge(facts(positions=[option()]), params())
     first = report["derived"]["first_order"]
     assert (first["side"], first["notional_usd"]) == ("BUY", "418.00")
-    assert report["blocking"] == ["first_order"]
+    assert finding(report, "first_order")["severity"] == "WARN"
+    assert "about 3 orders (3 BUYs per session)" in finding(report, "first_order")["message"]
 
 
 @pytest.mark.parametrize("change,blocked", [

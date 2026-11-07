@@ -14,24 +14,26 @@ from observability import request_trace, emit_tick
 from test_dispatch_overshoot import dispatch_fixture, CFG, NOW, isolate
 
 
-VALUES = ("200", "5000", "2", "2030-01-01T00:00:00Z")
+VALUES = ("200", "5000", "2", "2030-01-01T00:00:00Z", "2")
 
 
-@pytest.mark.parametrize("values", [("", "", "", ""), ("NaN", *VALUES[1:]),
+@pytest.mark.parametrize("values", [("", "", "", "", ""), ("NaN", *VALUES[1:]),
     ("Infinity", *VALUES[1:]), ("0", *VALUES[1:]),
-    ("200", "5000", "1.5", VALUES[3]), ("200", "5000", "0", VALUES[3]),
-    ("200", "5000", "2", "2030-01-01")])
+    ("200", "5000", "1.5", VALUES[3], "1"), ("200", "5000", "0", VALUES[3], "1"),
+    ("200", "5000", "2", "2030-01-01", "2"), VALUES[:4],
+    ("200", "5000", "2", VALUES[3], ""), ("200", "5000", "2", VALUES[3], "0"),
+    ("200", "5000", "2", VALUES[3], "3"), ("200", "5000", "2", VALUES[3], "1.5")])
 def test_invalid_limits_fail_closed(values):
     with pytest.raises(ExecutionLimitError):
         ExecutionLimits.parse(values)
 
 
 @pytest.mark.parametrize("values,price,preview_count", [
-    (("", "", "", ""), 27.6843, 0),
-    (("180", "10000", "2", VALUES[3]), 27.6843, 0),
-    (("200", "4989", "2", VALUES[3]), 27.6843, 0),
-    (("200", "4991", "2", VALUES[3]), 27.69, 1),
-    (("200", "5000", "2", "2026-09-21T14:59:59Z"), 27.6843, 0),
+    (("", "", "", "", ""), 27.6843, 0),
+    (("180", "10000", "2", VALUES[3], "2"), 27.6843, 0),
+    (("200", "4989", "2", VALUES[3], "2"), 27.6843, 0),
+    (("200", "4991", "2", VALUES[3], "2"), 27.69, 1),
+    (("200", "5000", "2", "2026-09-21T14:59:59Z", "2"), 27.6843, 0),
 ])
 def test_limits_block_before_place_and_recheck_post_preview(monkeypatch, values, price, preview_count):
     runtime, intent, claim, client, _ = dispatch_fixture(monkeypatch, final_price=price)
@@ -66,14 +68,14 @@ def test_reservations_survive_restart_and_new_limits_do_not_reset_count():
     ref = FAKE_DB.reference(f"{DISPATCH_LOCK_PATH}/scope")
     ref.set({**claim, "inflight_run_id": "one", "lease_until": (NOW + timedelta(seconds=120)).isoformat()})
     key = str(limits.end.timestamp())
-    assert reserve_attempt("scope", claim, "one", limits, key, now=NOW)["reservation_count"] == 1
-    assert reserve_attempt("scope", claim, "one", limits, key, now=NOW)["reservation_count"] == 1
+    assert reserve_attempt("scope", claim, "one", limits, key, side="BUY", now=NOW)["reservation_count"] == 1
+    assert reserve_attempt("scope", claim, "one", limits, key, side="BUY", now=NOW)["reservation_count"] == 1
     ref.update({"inflight_run_id": "two", "owner": "restarted"})
     claim["owner"] = "restarted"
-    assert reserve_attempt("scope", claim, "two", limits, key, now=NOW)["reservation_count"] == 2
+    assert reserve_attempt("scope", claim, "two", limits, key, side="BUY", now=NOW)["reservation_count"] == 2
     ref.update({"inflight_run_id": "three"})
     with pytest.raises(ExecutionLimitError):
-        reserve_attempt("scope", claim, "three", replace(limits, notional=limits.notional * 2), key, now=NOW)
+        reserve_attempt("scope", claim, "three", replace(limits, notional=limits.notional * 2), key, side="BUY", now=NOW)
     assert ref.get()["execution_session"]["count"] == 2
 
 
@@ -83,14 +85,14 @@ def test_expired_owner_cannot_reuse_existing_reservation():
     ref = FAKE_DB.reference(f"{DISPATCH_LOCK_PATH}/scope")
     ref.set({**claim, "inflight_run_id": "one", "lease_until": (NOW + timedelta(seconds=1)).isoformat()})
     key = str(limits.end.timestamp())
-    reserve_attempt("scope", claim, "one", limits, key, now=NOW)
+    reserve_attempt("scope", claim, "one", limits, key, side="BUY", now=NOW)
     with pytest.raises(ExecutionLimitError):
-        reserve_attempt("scope", claim, "one", limits, key, now=NOW + timedelta(seconds=2))
+        reserve_attempt("scope", claim, "one", limits, key, side="BUY", now=NOW + timedelta(seconds=2))
 
 
 def test_missing_source_row_and_missing_limits_cannot_disable_recovery(monkeypatch):
     runtime, intent, claim, client, _ = dispatch_fixture(monkeypatch)
-    runtime = replace(runtime, deployment=replace(runtime.deployment, execution_limits=("",) * 4))
+    runtime = replace(runtime, deployment=replace(runtime.deployment, execution_limits=("",) * 5))
     intent.update(status="PLACING_UNKNOWN", place_attempted=True)
     FAKE_DB.reference(f"webull_lego_rows/{intent['run_id']}").delete()
     monkeypatch.setattr(execution, "fetch_order_detail", lambda *_: {
@@ -103,7 +105,7 @@ def test_missing_source_row_and_missing_limits_cannot_disable_recovery(monkeypat
 
 def test_window_expiring_during_attempt_marker_cannot_place(monkeypatch):
     runtime, intent, claim, client, _ = dispatch_fixture(monkeypatch)
-    values = ("200", "10000", "2", (NOW + timedelta(seconds=1)).isoformat())
+    values = ("200", "10000", "2", (NOW + timedelta(seconds=1)).isoformat(), "2")
     profile = replace(runtime.deployment, execution_limits=values)
     runtime = replace(runtime, deployment=replace(profile, release_authorization=profile.expected_release_binding))
     begin = execution.begin_place_attempt

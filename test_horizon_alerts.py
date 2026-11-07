@@ -28,7 +28,7 @@ def runtime(end, code="bypass:6500"):
     return SimpleNamespace(
         operator=SimpleNamespace(dna_bundle=SimpleNamespace(
             dna_code=code, interval_seconds=900, origin_utc=ORIGIN)),
-        deployment=SimpleNamespace(execution_limits=("30", "1500", "26", end)))
+        deployment=SimpleNamespace(execution_limits=("30", "1500", "26", end, "26")))
 
 
 @pytest.fixture

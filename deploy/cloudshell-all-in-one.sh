@@ -36,8 +36,8 @@ set -Eeuo pipefail
 #
 # PRODUCTION is observe/inactive unless a real-money release is requested with
 # WEBULL_ENV_OVERRIDE=PROD LEGO_MODE_OVERRIDE=trade LEGO_ACTIVE_OVERRIDE=true. That
-# run first prints the acknowledgement for the exact release and exits 3; deploy by
-# running it again with LEGO_PROD_LIVE_ACK=<that value>. See docs/PROD_LIVE_RUNBOOK_TH.md.
+# run judges the exact release (ops.py release-plan --enforce) and deploys it when no
+# finding blocks it; the runtime checks the release binding. See docs/PROD_LIVE_RUNBOOK_TH.md.
 # The one-off funding release of a flat account (caps up to 125% of the principal) is
 # judged as such only when asked for: LEGO_FUNDING_MODE_OVERRIDE=initial-funding
 # (default prefunded: caps above 25% of the principal are refused in PROD).
@@ -92,12 +92,12 @@ readonly LEGO_SCHEDULE_OVERRIDE="${LEGO_SCHEDULE_OVERRIDE:-}"
 readonly MAX_ORDER_QUANTITY="${LEGO_MAX_ORDER_QUANTITY_OVERRIDE:-}"
 readonly MAX_ORDER_NOTIONAL="${LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE:-}"
 readonly MAX_SESSION_ORDERS="${LEGO_MAX_SESSION_ORDERS_OVERRIDE:-}"
+readonly MAX_SESSION_BUY_ORDERS="${LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE:-}"
 readonly TRADING_WINDOW_END="${LEGO_TRADING_WINDOW_END_OVERRIDE:-}"
 readonly STALE_ACTION="${LEGO_STALE_ORDER_ACTION_OVERRIDE:-hold}"
 readonly STALE_SECONDS="${LEGO_STALE_ORDER_SECONDS_OVERRIDE:-300}"
 readonly CANCEL_GRACE="${LEGO_CANCEL_CONFIRM_GRACE_SECONDS_OVERRIDE:-120}"
 readonly SESSION_MODE="${LEGO_SESSION_KEY_MODE_OVERRIDE:-release_window}"
-readonly PROD_LIVE_ACK="${LEGO_PROD_LIVE_ACK:-}"
 readonly FUNDING_MODE="${LEGO_FUNDING_MODE_OVERRIDE:-prefunded}"
 readonly ALERT_WEBHOOK_SECRET="${ALERT_WEBHOOK_SECRET_OVERRIDE:-}"
 # Measured broker fee, percent of notional per order (python ops.py release-plan --fee-pct).
@@ -109,19 +109,19 @@ if [[ "${FUNDING_MODE}" != prefunded && "${FUNDING_MODE}" != initial-funding ]];
     exit 1
 fi
 # Production is observe/inactive by default. Real-money activation (trade+active)
-# is a separately reviewed release: it needs the acknowledgement derived from the
-# exact release (python ops.py release-plan), is refused during the regular
-# session, and the runtime re-checks the same acknowledgement before any order.
+# is a separately reviewed release: it must pass python ops.py release-plan --enforce
+# below, is refused during the regular session, and the runtime checks its release
+# binding before any order.
 PROD_LIVE=false
 if [[ "${ENVIRONMENT}" == PROD ]]; then
     if [[ "${MODE}" == observe && "${ACTIVE}" == false ]]; then
         :
     elif [[ ( "${MODE}" == preview || "${MODE}" == paper ) && "${ACTIVE}" == true ]]; then
-        :  # every step but Place; no real-money acknowledgement exists for either
+        :  # every step but Place
     elif [[ "${MODE}" == trade && "${ACTIVE}" == true ]]; then
         PROD_LIVE=true
     else
-        echo "Production rollout must be observe/inactive, or trade/active (real money) with LEGO_PROD_LIVE_ACK, or preview/active or paper/active (no Place)." >&2
+        echo "Production rollout must be observe/inactive, or trade/active (real money), or preview/active or paper/active (no Place)." >&2
         exit 1
     fi
     # Real positions and orders are written to this database. Auto-discovery (section 6)
@@ -366,7 +366,8 @@ echo "Repo commit: ${DEPLOY_COMMIT}"
 
 if [[ "${ORDER_PATH}" == true ]]; then
     python3 -c 'import sys; from datetime import datetime,timezone; from execution_limits import ExecutionLimits; x=ExecutionLimits.parse(sys.argv[1:]); sys.exit("trading window expired" if datetime.now(timezone.utc) >= x.end else 0)' \
-        "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}"
+        "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}" \
+        "${MAX_SESSION_BUY_ORDERS}"
 fi
 if [[ "${PROD_LIVE}" == true ]]; then
     # The smoke tick at the end of this script is an ordinary tick. Outside the
@@ -374,7 +375,7 @@ if [[ "${PROD_LIVE}" == true ]]; then
     python3 -c 'import sys; from market_clock import is_regular_session; sys.exit(1 if is_regular_session() else 0)' || \
         fail "PROD live release is refused during the regular session; run it outside 09:30-16:00 New York"
 fi
-for limit_value in "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}"; do
+for limit_value in "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}" "${MAX_SESSION_BUY_ORDERS}"; do
     reject_comma "execution limit" "${limit_value}"
 done
 
@@ -748,17 +749,18 @@ names = ("WEBULL_ENV", "LEGO_CANDIDATE_HASH", "LEGO_SYMBOL", "LEGO_MAX_ORDER_QUA
          "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS", "LEGO_TRADING_WINDOW_END",
          "LEGO_FIX_C", "LEGO_DIFF", "LEGO_DNA_BUNDLE", "LEGO_MODE", "LEGO_ACTIVE",
          "LEGO_ALLOW_FRACTIONAL", "LEGO_STALE_ORDER_ACTION", "LEGO_STALE_ORDER_SECONDS",
-         "LEGO_CANCEL_CONFIRM_GRACE_SECONDS", "LEGO_SESSION_KEY_MODE", "LEGO_LEAPS")
+         "LEGO_CANCEL_CONFIRM_GRACE_SECONDS", "LEGO_SESSION_KEY_MODE", "LEGO_LEAPS",
+         "LEGO_MAX_SESSION_BUY_ORDERS")
 env = dict(zip(names, sys.argv[1:], strict=True))
 env["WEBULL_ACCOUNT_ID"] = sys.stdin.read().strip()
 print(release_binding_for(env))
-' "${ENVIRONMENT}" "${CANDIDATE_HASH}" "${SYMBOL}" "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}" "${FIX_C}" "${DIFF}" "${DNA_BUNDLE}" "${MODE}" "${ACTIVE}" "${ALLOW_FRACTIONAL}" "${STALE_ACTION}" "${STALE_SECONDS}" "${CANCEL_GRACE}" "${SESSION_MODE}" "${LEAPS}"
+' "${ENVIRONMENT}" "${CANDIDATE_HASH}" "${SYMBOL}" "${MAX_ORDER_QUANTITY}" "${MAX_ORDER_NOTIONAL}" "${MAX_SESSION_ORDERS}" "${TRADING_WINDOW_END}" "${FIX_C}" "${DIFF}" "${DNA_BUNDLE}" "${MODE}" "${ACTIVE}" "${ALLOW_FRACTIONAL}" "${STALE_ACTION}" "${STALE_SECONDS}" "${CANCEL_GRACE}" "${SESSION_MODE}" "${LEAPS}" "${MAX_SESSION_BUY_ORDERS}"
 )"
 require_sha256 "computed release binding" "${EXPECTED_RELEASE_BINDING}"
 
 # Judge the whole release before anything is deployed: complete sessions left in
-# the approval window, DNA horizon, caps against the principal and, for
-# production, the acknowledgement. A clean environment on purpose: the plan must
+# the approval window, DNA horizon, caps against the principal and the session key
+# mode. A clean environment on purpose: the plan must
 # see exactly the values the function will receive, never ambient LEGO_* values
 # from this shell. The account id is piped in and never printed.
 PLAN_JSON=""
@@ -783,6 +785,7 @@ if [[ "${ORDER_PATH}" == true ]]; then
             LEGO_MAX_ORDER_QUANTITY="${MAX_ORDER_QUANTITY}" \
             LEGO_MAX_ORDER_NOTIONAL_USD="${MAX_ORDER_NOTIONAL}" \
             LEGO_MAX_SESSION_ORDERS="${MAX_SESSION_ORDERS}" \
+            LEGO_MAX_SESSION_BUY_ORDERS="${MAX_SESSION_BUY_ORDERS}" \
             LEGO_TRADING_WINDOW_END="${TRADING_WINDOW_END}" \
             LEGO_STALE_ORDER_ACTION="${STALE_ACTION}" LEGO_STALE_ORDER_SECONDS="${STALE_SECONDS}" \
             LEGO_CANCEL_CONFIRM_GRACE_SECONDS="${CANCEL_GRACE}" \
@@ -813,29 +816,6 @@ if [[ "${ORDER_PATH}" == true ]]; then
 elif [[ -n "${RELEASE_AUTHORIZATION_OVERRIDE}" \
         && "${RELEASE_AUTHORIZATION_OVERRIDE}" != "${EXPECTED_RELEASE_BINDING}" ]]; then
     fail "release authorization ไม่ตรงกับ environment/account/candidate นี้"
-fi
-
-if [[ "${PROD_LIVE}" == true ]]; then
-    EXPECTED_ACKS="$(printf '%s' "${PLAN_JSON}" | python3 -c '
-import json, sys
-acks = json.load(sys.stdin).get("prod_live_acks", {})
-print("\n".join(value for value in acks.values() if value))
-')"
-    [[ -n "${EXPECTED_ACKS}" ]] || \
-        fail "this PRODUCTION release cannot be acknowledged; fix the findings above"
-    if [[ -z "${PROD_LIVE_ACK}" ]]; then
-        echo
-        echo "REAL-MONEY RELEASE. Review every value above (symbol, caps, window end, funding mode)."
-        echo "To deploy exactly this release, run the same command with:"
-        while IFS= read -r expected_ack; do
-            echo "  LEGO_PROD_LIVE_ACK=${expected_ack}"
-        done <<<"${EXPECTED_ACKS}"
-        echo "(-prefunded-: the account already holds the position; -initial-funding-: the loose one-off funding release)"
-        exit 3
-    fi
-    grep -Fxq -- "${PROD_LIVE_ACK}" <<<"${EXPECTED_ACKS}" || \
-        fail "LEGO_PROD_LIVE_ACK does not match this release (it is bound to its caps, window and binding)"
-    echo "PROD live acknowledgement verified."
 fi
 
 if [[ "${ENVIRONMENT}" == PROD && -z "${TOKEN_SECRET_RESOURCE_OVERRIDE}" ]]; then
@@ -914,16 +894,13 @@ step "8/10 DEPLOY DATABASE RULES + CLOUD FUNCTION GEN2"
     --non-interactive
 
 ENV_VARS="WEBULL_ENV=${ENVIRONMENT},FIREBASE_DB_URL=${DATABASE_URL},LEGO_SYMBOL=${SYMBOL},LEGO_FIX_C=${FIX_C},LEGO_ALLOW_FRACTIONAL=${ALLOW_FRACTIONAL},LEGO_DIFF=${DIFF},LEGO_DNA_BUNDLE=${DNA_BUNDLE},LEGO_MODE=${MODE},LEGO_ACTIVE=${ACTIVE},LEGO_CANDIDATE_HASH=${CANDIDATE_HASH},LEGO_RELEASE_AUTHORIZATION=${RELEASE_AUTHORIZATION_OVERRIDE},WEBULL_TOKEN_DIR=/tmp/webull_token,LEGO_DNA_CLOCK_MODE=market"
-ENV_VARS+=",LEGO_TRACE_PROJECT_ID=${PROJECT_ID},LEGO_MAX_ORDER_QUANTITY=${MAX_ORDER_QUANTITY},LEGO_MAX_ORDER_NOTIONAL_USD=${MAX_ORDER_NOTIONAL},LEGO_MAX_SESSION_ORDERS=${MAX_SESSION_ORDERS},LEGO_TRADING_WINDOW_END=${TRADING_WINDOW_END}"
+ENV_VARS+=",LEGO_TRACE_PROJECT_ID=${PROJECT_ID},LEGO_MAX_ORDER_QUANTITY=${MAX_ORDER_QUANTITY},LEGO_MAX_ORDER_NOTIONAL_USD=${MAX_ORDER_NOTIONAL},LEGO_MAX_SESSION_ORDERS=${MAX_SESSION_ORDERS},LEGO_MAX_SESSION_BUY_ORDERS=${MAX_SESSION_BUY_ORDERS},LEGO_TRADING_WINDOW_END=${TRADING_WINDOW_END}"
 ENV_VARS+=",LEGO_GIT_COMMIT=${GIT_COMMIT}"
 ENV_VARS+=",LEGO_LEAPS=${LEAPS}"
 
 ENV_VARS+=",LEGO_STALE_ORDER_ACTION=${STALE_ACTION},LEGO_STALE_ORDER_SECONDS=${STALE_SECONDS},LEGO_CANCEL_CONFIRM_GRACE_SECONDS=${CANCEL_GRACE},LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER=1,LEGO_SESSION_KEY_MODE=${SESSION_MODE}"
 if [[ -n "${TOKEN_SECRET_RESOURCE}" ]]; then
     ENV_VARS="${ENV_VARS},WEBULL_TOKEN_SECRET=${TOKEN_SECRET_RESOURCE}"
-fi
-if [[ "${PROD_LIVE}" == true ]]; then
-    ENV_VARS="${ENV_VARS},LEGO_PROD_LIVE_ACK=${PROD_LIVE_ACK}"
 fi
 
 SECRET_BINDINGS="WEBULL_APP_KEY=${APP_KEY_SECRET}:latest,WEBULL_APP_SECRET=${APP_SECRET_SECRET}:latest,WEBULL_ACCOUNT_ID=${ACCOUNT_ID_SECRET}:latest"

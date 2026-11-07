@@ -1,4 +1,4 @@
-"""Release horizon / limits assessment and the production acknowledgement."""
+"""Release horizon / limits assessment (the production acknowledgement was removed 2026-11-07)."""
 from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -21,7 +21,7 @@ def make(**overrides):
     base = dict(
         environment="UAT", mode="trade", active=True, symbol="UBER",
         principal=Decimal("10000"), diff=Decimal("25"),
-        limits=("30", "1500", "26", window(10)), allow_fractional=True,
+        limits=("30", "1500", "26", window(10), "26"), allow_fractional=True,
         dna_code="bypass:6500", dna_interval=900, dna_origin=ORIGIN)
     base.update(overrides)
     return rh.ReleaseInputs(**base)
@@ -29,7 +29,7 @@ def make(**overrides):
 
 def prod(**overrides):
     return make(**{"environment": "PROD", "allow_fractional": False,
-                   "limits": ("20", "1000", "10", window(5)), **overrides})
+                   "limits": ("20", "1000", "10", window(5), "3"), **overrides})
 
 
 def ids(result, key="blocking"):
@@ -79,7 +79,7 @@ def test_window_end_rejects_non_positive_or_non_integer_sessions(bad):
 
 # ------------------------------------------------------------------ the incident
 def test_incident_release_is_blocked_and_its_caps_are_flagged():
-    incident = make(limits=("1000", "36000", "30", "2026-10-01T06:19:26Z"),
+    incident = make(limits=("1000", "36000", "30", "2026-10-01T06:19:26Z", "30"),
                     dna_code="bypass:500")
     result = rh.assess(incident, now=NOW)
     assert not result["ok"]
@@ -106,9 +106,9 @@ def test_proposed_uat_profile_has_no_blockers_or_warnings():
 
 
 def test_window_must_cover_two_complete_sessions():
-    one = make(limits=("30", "1500", "26", window(1)))
+    one = make(limits=("30", "1500", "26", window(1), "26"))
     assert ids(rh.assess(one, now=NOW)) == {"window_sessions"}
-    assert rh.assess(make(limits=("30", "1500", "26", window(2))), now=NOW)["ok"]
+    assert rh.assess(make(limits=("30", "1500", "26", window(2), "26")), now=NOW)["ok"]
 
 
 def test_an_exhausted_dna_blocks():
@@ -128,21 +128,21 @@ def test_dna_without_origin_cannot_be_assessed_but_is_not_a_blocker():
     (598, "clear")])     # ends 2026-10-08 20:00Z: two sessions after the window
 def test_dna_must_outlive_the_window_by_two_sessions(length, verdict):
     result = rh.assess(make(dna_code=f"bypass:{length}",
-                            limits=("30", "1500", "26", window(2))))
+                            limits=("30", "1500", "26", window(2), "26")))
     assert ("dna_covers_window" in ids(result)) is (verdict == "blocked")
     assert ("dna_covers_window" in ids(result, "warnings")) is (verdict == "warned")
 
 
 def test_observe_inactive_is_never_enforced():
     incident = make(mode="observe", active=False,
-                    limits=("1000", "36000", "30", "2026-10-01T06:19:26Z"))
+                    limits=("1000", "36000", "30", "2026-10-01T06:19:26Z", "30"))
     result = rh.assess(incident, now=NOW)
     assert result["ok"] and not result["blocking"]
     assert "window_open" in ids(result, "warnings")
 
 
 def test_unusable_limits_block_trading_but_only_inform_observe():
-    unusable = make(limits=("", "", "", ""))
+    unusable = make(limits=("", "", "", "", ""))
     assert ids(rh.assess(unusable)) == {"limits_configured"}
     observe = rh.assess(replace(unusable, mode="observe", active=False))
     assert observe["ok"] and not observe["warnings"]
@@ -152,25 +152,25 @@ def test_unusable_limits_block_trading_but_only_inform_observe():
 @pytest.mark.parametrize("notional,blocked", [("1500", False), ("2500", False),
                                               ("2501", True), ("36000", True)])
 def test_production_notional_cap_is_at_most_a_quarter_of_principal(notional, blocked):
-    result = rh.assess(prod(limits=("20", notional, "10", window(5))))
+    result = rh.assess(prod(limits=("20", notional, "10", window(5), "10")))
     assert ("notional_cap_ratio" in ids(result)) is blocked
 
 
 def test_uat_loose_notional_cap_only_warns():
-    result = rh.assess(make(limits=("30", "36000", "26", window(10))))
+    result = rh.assess(make(limits=("30", "36000", "26", window(10), "26")))
     assert result["ok"] and "notional_cap_ratio" in ids(result, "warnings")
 
 
 def test_session_orders_above_the_slot_count_can_never_bind():
-    assert "session_orders_cap" in ids(rh.assess(prod(limits=("20", "1000", "27", window(5)))))
-    assert "session_orders_cap" in ids(rh.assess(make(limits=("30", "1500", "27", window(10)))),
+    assert "session_orders_cap" in ids(rh.assess(prod(limits=("20", "1000", "27", window(5), "27"))))
+    assert "session_orders_cap" in ids(rh.assess(make(limits=("30", "1500", "27", window(10), "27"))),
                                        "warnings")
-    equal = rh.assess(make(limits=("30", "1500", "26", window(10))))
+    equal = rh.assess(make(limits=("30", "1500", "26", window(10), "26")))
     assert "session_orders_cap" not in ids(equal) | ids(equal, "warnings")
 
 
 def test_notional_cap_below_three_times_diff_warns():
-    result = rh.assess(make(limits=("30", "50", "26", window(10))))
+    result = rh.assess(make(limits=("30", "50", "26", window(10), "26")))
     assert "notional_cap_floor" in ids(result, "warnings")
 
 
@@ -188,12 +188,12 @@ def test_production_with_fractional_shares_warns():
     ("10100", False),
     ("12500", False)])
 def test_funding_cap_must_cover_the_principal_plus_dispatch_drift(notional, blocked):
-    result = rh.assess(prod(initial_funding=True, limits=("200", notional, "2", window(2))))
+    result = rh.assess(prod(initial_funding=True, limits=("200", notional, "2", window(2), "2")))
     assert ("funding_notional_sufficient" in ids(result)) is blocked
 
 
 def test_funding_cap_above_125_percent_is_blocked_in_production_and_warned_in_uat():
-    limits = ("200", "13000", "2", window(2))
+    limits = ("200", "13000", "2", window(2), "2")
     assert "notional_cap_ratio" in ids(rh.assess(prod(initial_funding=True, limits=limits)))
     uat = rh.assess(make(initial_funding=True, limits=limits))
     assert "notional_cap_ratio" in ids(uat, "warnings") and uat["ok"]
@@ -201,16 +201,16 @@ def test_funding_cap_above_125_percent_is_blocked_in_production_and_warned_in_ua
 
 def test_funding_quantity_cap_is_checked_against_the_reference_price():
     base = dict(initial_funding=True, reference_price=Decimal("67.4"))
-    short = rh.assess(prod(limits=("100", "12500", "2", window(2)), **base))
+    short = rh.assess(prod(limits=("100", "12500", "2", window(2), "2"), **base))
     assert "funding_quantity_sufficient" in ids(short)                # needs ~148 shares
-    enough = rh.assess(prod(limits=("200", "12500", "2", window(2)), **base))
+    enough = rh.assess(prod(limits=("200", "12500", "2", window(2), "2"), **base))
     assert "funding_quantity_sufficient" not in ids(enough)
 
 
 def test_funding_release_is_always_flagged_as_temporary():
-    result = rh.assess(prod(initial_funding=True, limits=("200", "12500", "2", window(2))))
+    result = rh.assess(prod(initial_funding=True, limits=("200", "12500", "2", window(2), "2")))
     assert result["ok"] and "funding_release_temporary" in ids(result, "warnings")
-    many = rh.assess(prod(initial_funding=True, limits=("200", "12500", "20", window(2))))
+    many = rh.assess(prod(initial_funding=True, limits=("200", "12500", "20", window(2), "20")))
     assert "session_orders_cap" in ids(many, "warnings")
 
 
@@ -218,13 +218,13 @@ def test_funding_release_is_always_flagged_as_temporary():
 def test_recommended_limits_for_a_ten_thousand_principal():
     assert rh.recommend_limits(10000, "67.4") == {
         "profile": "UAT", "initial_funding": False, "LEGO_MAX_ORDER_NOTIONAL_USD": "1500",
-        "LEGO_MAX_SESSION_ORDERS": "26", "LEGO_MAX_ORDER_QUANTITY": "30"}
+        "LEGO_MAX_SESSION_ORDERS": "26", "LEGO_MAX_SESSION_BUY_ORDERS": "3", "LEGO_MAX_ORDER_QUANTITY": "30"}
     assert rh.recommend_limits(10000, "67.4", profile="PROD") == {
         "profile": "PROD", "initial_funding": False, "LEGO_MAX_ORDER_NOTIONAL_USD": "1000",
-        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_ORDER_QUANTITY": "20"}
+        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "3", "LEGO_MAX_ORDER_QUANTITY": "20"}
     assert rh.recommend_limits(10000, "67.4", profile="PROD", initial_funding=True) == {
         "profile": "PROD", "initial_funding": True, "LEGO_MAX_ORDER_NOTIONAL_USD": "12500",
-        "LEGO_MAX_SESSION_ORDERS": "2", "LEGO_MAX_ORDER_QUANTITY": "200"}
+        "LEGO_MAX_SESSION_ORDERS": "2", "LEGO_MAX_SESSION_BUY_ORDERS": "2", "LEGO_MAX_ORDER_QUANTITY": "200"}
 
 
 def test_recommendation_without_a_reference_price_omits_the_quantity_cap():
@@ -235,12 +235,13 @@ def test_recommended_values_satisfy_the_assessment():
     for profile, builder in (("UAT", make), ("PROD", prod)):
         rec = rh.recommend_limits(10000, "67.4", profile=profile)
         limits = (rec["LEGO_MAX_ORDER_QUANTITY"], rec["LEGO_MAX_ORDER_NOTIONAL_USD"],
-                  rec["LEGO_MAX_SESSION_ORDERS"], window(5))
+                  rec["LEGO_MAX_SESSION_ORDERS"], window(rh.DEFAULT_WINDOW_SESSIONS),
+                  rec["LEGO_MAX_SESSION_BUY_ORDERS"])
         result = rh.assess(builder(limits=limits), now=NOW)
         assert result["ok"], result["blocking"]
     funding = rh.recommend_limits(10000, "67.4", profile="PROD", initial_funding=True)
     limits = (funding["LEGO_MAX_ORDER_QUANTITY"], funding["LEGO_MAX_ORDER_NOTIONAL_USD"],
-              funding["LEGO_MAX_SESSION_ORDERS"], window(2))
+              funding["LEGO_MAX_SESSION_ORDERS"], window(2), funding["LEGO_MAX_SESSION_BUY_ORDERS"])
     assert rh.assess(prod(initial_funding=True, limits=limits,
                           reference_price=Decimal("67.4")), now=NOW)["ok"]
 
@@ -252,46 +253,57 @@ def test_recommendation_rejects_bad_inputs():
         rh.recommend_limits(10000, "0")
 
 
-# ------------------------------------------------------------ the production ack
-def test_ack_carries_the_numbers_being_approved():
-    ack = rh.prod_live_ack(prod(), BINDING, funding="prefunded")
-    assert window(5) == "2026-10-09T20:00:00Z"
-    assert ack == "LIVE-PROD-UBER-q20-n1000-o10-20261009T2000Z-prefunded-" + BINDING[:16]
-    assert rh.prod_live_ack(prod(), BINDING, funding="prefunded") == ack      # deterministic
+# --------------------------------------------- session BUY cap and session key mode
+def test_buy_cap_is_reported_with_the_money_it_allows():
+    result = rh.assess(prod())
+    finding = next(f for f in result["findings"] if f["id"] == "session_buy_orders_cap")
+    assert finding["severity"] == "INFO"
+    assert "at most 3 of the 10" in finding["message"] and "3000 USD" in finding["message"]
+    assert rh.assess(prod(), now=NOW)["limits"]["session_buy_orders"] == 3
 
 
-def test_ack_changes_with_the_release_it_approves():
-    base = rh.prod_live_ack(prod(), BINDING, funding="prefunded")
-    assert rh.prod_live_ack(prod(), "cd" * 32, funding="prefunded") != base
-    assert rh.prod_live_ack(prod(limits=("20", "1000", "10", window(6))), BINDING,
-                            funding="prefunded") != base
-    assert rh.prod_live_ack(prod(symbol="AAPL"), BINDING, funding="prefunded") != base
+@pytest.mark.parametrize("buy", ["", "0", "11", "2.5"])
+def test_an_unusable_buy_cap_blocks_every_new_order(buy):
+    result = rh.assess(prod(limits=("20", "1000", "10", window(5), buy)))
+    assert "limits_configured" in ids(result)
 
 
-def test_funding_release_has_its_own_ack_and_prefunded_ack_is_refused_for_loose_caps():
-    loose = prod(limits=("200", "12500", "2", window(2)))
-    assert rh.prod_live_ack(loose, BINDING, funding="prefunded") is None
-    funding = rh.prod_live_ack(loose, BINDING, funding="initial-funding")
-    assert funding and "-initial-funding-" in funding
-    assert set(rh.prod_live_acks(loose, BINDING)) == {"prefunded", "initial-funding"}
+def test_a_release_without_the_buy_cap_is_unusable():
+    assert "limits_configured" in ids(rh.assess(prod(limits=("20", "1000", "10", window(5)))))
 
 
-@pytest.mark.parametrize("inp", [
-    make(),                                                         # UAT needs no ack
-    prod(mode="observe", active=False),
-    prod(limits=("20", "3000", "10", window(5))),                   # cap above 25% of principal
-    prod(limits=("20", "1000", "27", window(5))),                   # cap cannot bind
-    prod(dna_code="bypass:500"),                                    # DNA ends before the window
-    prod(limits=("", "", "", ""))])
-def test_unfit_or_non_production_releases_have_no_ack(inp):
-    assert rh.prod_live_ack(inp, BINDING, funding="prefunded") is None
+def test_release_window_counters_cannot_carry_a_trading_release():
+    trading = rh.assess(prod(session_key_mode="release_window"))
+    assert "session_key_mode" in ids(trading)
+    assert "per market day" in next(f["message"] for f in trading["findings"]
+                                    if f["id"] == "session_key_mode")
+    uat = rh.assess(make(session_key_mode="release_window"))
+    assert "session_key_mode" in ids(uat)
+    observe = rh.assess(prod(mode="observe", active=False, session_key_mode="release_window"))
+    assert "session_key_mode" in ids(observe, "warnings") and observe["ok"]
+    assert "session_key_mode" not in ids(rh.assess(prod())) | ids(rh.assess(prod()), "warnings")
 
 
-def test_ack_ignores_time_dependent_findings():
-    expired = prod(limits=("20", "1000", "10", "2026-10-01T06:19:26Z"))
-    assert rh.prod_live_ack(expired, BINDING, funding="prefunded") is not None
+def test_runtime_inputs_carry_the_session_key_mode():
+    from types import SimpleNamespace
+    runtime = SimpleNamespace(
+        operator=SimpleNamespace(
+            mode="trade", active=True, symbol="UBER", principal_usd=10000, diff_usd=25,
+            leaps_shares=0, dna_bundle=SimpleNamespace(dna_code="bypass:6500",
+                                                       interval_seconds=900, origin_utc=ORIGIN)),
+        deployment=SimpleNamespace(environment="PROD", execution_limits=("20", "1000", "10", window(5), "3"),
+                                   allow_fractional=False, session_key_mode="release_window"))
+    assert rh.inputs_from_runtime(runtime).session_key_mode == "release_window"
 
 
-def test_unknown_funding_mode_is_an_error():
-    with pytest.raises(ValueError):
-        rh.prod_live_ack(prod(), BINDING, funding="maybe")
+def test_the_default_window_is_thirty_sessions():
+    assert rh.DEFAULT_WINDOW_SESSIONS == 30
+    assert window(30) == "2026-11-13T21:00:00Z"                     # DST ends Nov 1
+    assert rh.assess(prod(limits=("20", "1000", "10", window(30), "3")), now=NOW)["ok"]
+
+
+def test_the_production_acknowledgement_is_gone():
+    for name in ("prod_live_ack", "prod_live_acks", "prod_live_gate_open"):
+        assert not hasattr(rh, name)
+
+

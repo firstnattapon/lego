@@ -238,7 +238,7 @@ def test_a_wait_is_logged_as_its_own_operation(clock, capsys):
 DEPLOYED_PAPER = dict(
     LEGO_MODE="paper", LEGO_ACTIVE="true", LEGO_SYMBOL="UBER", LEGO_FIX_C="3000",
     LEGO_DIFF="5", LEGO_ALLOW_FRACTIONAL="true", LEGO_MAX_ORDER_QUANTITY="60",
-    LEGO_MAX_ORDER_NOTIONAL_USD="3750", LEGO_MAX_SESSION_ORDERS="2",
+    LEGO_MAX_ORDER_NOTIONAL_USD="3750", LEGO_MAX_SESSION_ORDERS="2", LEGO_MAX_SESSION_BUY_ORDERS="2",
     LEGO_TRADING_WINDOW_END="2026-11-05T21:00:00Z", LEGO_SESSION_KEY_MODE="market_day",
     LEGO_STALE_ORDER_ACTION="hold", LEGO_STALE_ORDER_SECONDS="300",
     LEGO_CANCEL_CONFIRM_GRACE_SECONDS="120", LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER="1")
@@ -249,7 +249,7 @@ def test_the_deployed_paper_release_runs_to_preview_without_a_real_money_ack(tmp
     assert (runtime.deployment.environment, runtime.operator.symbol) == ("PROD", "UBER")
     assert runtime.operator.paper and runtime.operator.preview_only
     assert runtime.deployment.allow_fractional is True
-    assert runtime.deployment.release_is_authorized and not runtime.prod_live_gate_open
+    assert runtime.deployment.release_is_authorized
     assert runtime.allows_new_broker_mutation
 
 
@@ -258,6 +258,8 @@ def test_the_paper_authorization_cannot_carry_trade(tmp_path):
     switched = load_runtime_config({**paper, "LEGO_MODE": "trade"})
     assert not switched.deployment.release_is_authorized
     assert not switched.allows_new_broker_mutation
-    own = load_runtime_config(authorized({**paper, "LEGO_MODE": "trade"}))   # its own binding, no ack
-    assert own.deployment.release_is_authorized and not own.prod_live_gate_open
-    assert not own.allows_new_broker_mutation
+    # A trade release needs a binding of its own; since the PROD acknowledgement was removed
+    # (2026-11-07) that binding alone opens it, so trade stays a separately planned release.
+    own = load_runtime_config(authorized({**paper, "LEGO_MODE": "trade"}))
+    assert own.deployment.release_is_authorized and own.allows_new_broker_mutation
+    assert own.deployment.expected_release_binding != switched.deployment.release_authorization

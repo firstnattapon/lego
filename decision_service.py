@@ -3,6 +3,7 @@
 import logging
 import tick_runtime
 import flight_recorder as fr
+import lego_one_row
 import math
 import os
 import time
@@ -19,7 +20,7 @@ from lego_archive import archive_terminal_records
 from lego_one_row import (READY_BUY, READY_SELL, DNAExhausted, ExecutionFill,
                           HoldingsAnomaly, build_decision,
                           check_holdings_continuity, compute_row, dna_step_for,
-                          dna_steps_remaining, position_vanished)
+                          dna_steps_remaining, position_vanished, OrderCaps)
 from lego_orders import (TERMINAL_STATUSES, UAT, evaluate_submit_gate,
                          normalize_status, order_confirmation_phrase,
                          summarize_order_result)
@@ -119,6 +120,22 @@ def configure(deps) -> None:
     for name in _INJECTABLE:
         if hasattr(deps, name):
             target[name] = getattr(deps, name)
+
+
+def _order_caps(runtime) -> OrderCaps | None:
+    """The per-order caps of this release, which an oversized decision is clipped to.
+
+    None without the typed runtime or with limits that do not parse: the order is then
+    sized as before and the dispatch refuses what the release does not allow.
+    """
+    if runtime is None:
+        return None
+    from execution_limits import ExecutionLimitError, ExecutionLimits
+    try:
+        limits = ExecutionLimits.parse(runtime.deployment.execution_limits)
+    except ExecutionLimitError:
+        return None
+    return OrderCaps(limits.quantity, limits.notional)
 
 
 def _outbox_intent(cfg, row: dict, snapshot: dict, slot, decision_time: datetime,
@@ -362,7 +379,8 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             # retry cannot consume the same slot twice.
             slot_id = fallback_slot_id(snapshot["captured_at"])
             mode = f"{mode}:degraded"
-        row = compute_row(cfg, snapshot, anchor, dna_step=effective_step)
+        caps = _order_caps(runtime)
+        row = compute_row(cfg, snapshot, anchor, dna_step=effective_step, caps=caps)
         fr.decision_equation(cfg, snapshot, anchor, row, effective_step)
         # Everything above only reads. Defer before the circuit, the commit and the intent are touched:
         # the next tick decides this slot again with a full budget and nothing here has to be undone.
@@ -454,6 +472,12 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
                     pending_intent["candidate_hash"] = runtime.deployment.candidate_hash
                     pending_intent["release_binding"] = runtime.deployment.expected_release_binding
                     pending_intent["worker_schema_version"] = 4
+                    if caps is not None:
+                        # The dispatch re-check rebuilds this decision with these caps.
+                        pending_intent["order_caps"] = caps.snapshot()
+                    if row["_meta"].get("clipped_from_quantity"):
+                        pending_intent["clipped_from_quantity"] = row["_meta"][
+                            "clipped_from_quantity"]
                     if runtime.operator.preview_only:
                         # Born in preview: never placed, whatever mode the deployment
                         # is in by the time a worker dispatches it.
@@ -581,6 +605,25 @@ def run_decision(request, runtime: RuntimeConfig | None = None, cfg_override=Non
             out["outbox_blocked"] = outbox_blocked
             out["outbox_blocked_checks"] = ((preflight or {}).get("blocked_by")
                                              or [outbox_blocked])
+        clipped_from = row["_meta"].get("clipped_from_quantity")
+        if clipped_from and row["สถานะ"] in (READY_BUY, READY_SELL):
+            out["order_clipped"] = {"from_quantity": clipped_from,
+                                    "quantity": row["จำนวนสั่ง (หุ้น)"],
+                                    "gap_usd": row["ส่วนต่างเป้าหมาย (USD)"]}
+            if caps is not None and caps.large_gap(row["ส่วนต่างเป้าหมาย (USD)"]) and (
+                    preflight and preflight["ok"]):
+                # Sent, clipped; and said to a person: a gap of several caps is more
+                # often a misread position than a market move.
+                out["order_clipped_large_gap"] = True
+                _record_warning(
+                    "order_clipped_large_gap",
+                    "order clipped to the per-order caps: |gap| is more than "
+                    f"{int(lego_one_row.LARGE_GAP_CAP_MULTIPLE)} notional caps; check the "
+                    "holdings against the broker app",
+                    {"run_id": result["run_id"], "side": row["ฝั่ง"],
+                     "gap_usd": row["ส่วนต่างเป้าหมาย (USD)"],
+                     "from_quantity": clipped_from, "quantity": row["จำนวนสั่ง (หุ้น)"],
+                     "notional_cap_usd": format(caps.notional, "f")})
         # The deployed typed runtime reports headroom on every slot for alerts.
         # Keep the legacy response shape for non-deployed migration consumers.
         if runtime is not None or remaining <= int(

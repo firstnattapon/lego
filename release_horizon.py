@@ -14,25 +14,24 @@ continuous trading and whether its limits mean anything:
 * ``assess``            findings (BLOCK / WARN / INFO) for one release
 * ``recommend_limits``  principal-proportional caps, including the t0 funding
                         release (the first order of a flat account is ~FIX_C)
-* ``prod_live_ack``     the acknowledgement a production deployment must echo
-                        before the runtime will send a real-money order
+* ``DEFAULT_WINDOW_SESSIONS``  the approval window ops.py release-plan and the
+                        production scripts plan when none is given
 
 It never extends a window, a DNA array or a token. Renewal stays a reviewed
 operator action; this only makes an unfit release visible while it can still be
 fixed. A BLOCK is enforced only for a deployment that can trade (mode=trade and
 active=true); an observe/inactive deployment gets the same findings as WARN.
 
-Static findings depend only on the release itself, so the production
-acknowledgement derived from them does not flip as time passes. Time-dependent
-findings (window expired, too few sessions left) are produced only when ``now``
-is supplied.
+Static findings depend only on the release itself, so they do not flip as time
+passes. Time-dependent findings (window expired, too few sessions left) are
+produced only when ``now`` is supplied. The deploy scripts enforce BLOCK findings
+(ops.py release-plan --enforce); the runtime checks the release binding only.
 """
 from __future__ import annotations
 
-import hmac
 import math
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_DOWN
 
@@ -67,7 +66,14 @@ FUNDING_NOTIONAL_FRACTION = Decimal("1.25")
 QUANTITY_MARGIN = Decimal("1.3")
 FUNDING_SESSION_ORDERS = 2
 PROD_CANARY_SESSION_ORDERS = 10
+# BUY orders per session (LEGO_MAX_SESSION_BUY_ORDERS): with the PROD notional cap at 10%
+# of FIX_C this puts at most about 30% of FIX_C into the position in one session.
+RECOMMENDED_SESSION_BUY_ORDERS = 3
 FUNDING_MODES = ("prefunded", "initial-funding")
+# The approval window a release gets when none is given (ops.py release-plan,
+# deploy/cloudshell-prod-live.sh, deploy/cloudshell-prod-observe.sh). The one-off
+# funding release keeps the shortest window (MIN_SESSIONS_COVERED).
+DEFAULT_WINDOW_SESSIONS = 30
 
 
 def slots_per_full_session(interval_seconds: int) -> int:
@@ -144,6 +150,9 @@ class ReleaseInputs:
     # LEGO_LEAPS share-equivalents (OperatorSettings.leaps_shares). Zero, the default,
     # adds no finding: a release without LEAPS is judged exactly as it always was.
     leaps_shares: Decimal = Decimal(0)
+    # LEGO_SESSION_KEY_MODE. release_window counts the session caps over the whole
+    # window, so a window of several sessions would share one session's orders.
+    session_key_mode: str = "market_day"
 
     @property
     def trading(self) -> bool:
@@ -178,7 +187,8 @@ def inputs_from_runtime(runtime, *, initial_funding: bool = False,
         dna_origin=bundle.origin_utc, initial_funding=initial_funding,
         reference_price=(None if reference_price is None
                          else Decimal(str(reference_price))),
-        leaps_shares=Decimal(str(getattr(operator, "leaps_shares", 0) or 0)))
+        leaps_shares=Decimal(str(getattr(operator, "leaps_shares", 0) or 0)),
+        session_key_mode=str(getattr(deployment, "session_key_mode", "market_day")))
 
 
 def findings(inp: ReleaseInputs, *, now: datetime | None = None) -> list[dict]:
@@ -197,8 +207,14 @@ def findings(inp: ReleaseInputs, *, now: datetime | None = None) -> list[dict]:
         add("limits_configured", fail if inp.trading else INFO,
             f"execution limits unusable ({reason}); every new order is blocked")
     else:
-        add("limits_configured", INFO, "all four execution limits parse")
+        add("limits_configured", INFO, "all five execution limits parse")
         _limit_findings(inp, limits, add, fail)
+        if inp.session_key_mode == "release_window":
+            # Every valid window covers at least MIN_SESSIONS_COVERED sessions.
+            add("session_key_mode", fail,
+                f"LEGO_SESSION_KEY_MODE=release_window counts the {limits.orders} orders and "
+                f"{limits.buy_orders} BUY orders over the whole approval window, not per "
+                "market day; use LEGO_SESSION_KEY_MODE=market_day")
 
     if inp.production and inp.allow_fractional:
         add("fractional_policy", WARN,
@@ -354,7 +370,7 @@ def _limit_findings(inp: ReleaseInputs, limits: ExecutionLimits, add, fail) -> N
     if limits.notional < floor:
         add("notional_cap_floor", WARN,
             f"notional cap {_plain(limits.notional)} is below 3x DIFF ({_plain(floor)}); "
-            "ordinary rebalances would be blocked")
+            "ordinary rebalances would be clipped to the cap and take several slots")
     slots = slots_per_full_session(inp.dna_interval)
     if limits.orders > slots:
         add("session_orders_cap", fail if production else WARN,
@@ -363,6 +379,9 @@ def _limit_findings(inp: ReleaseInputs, limits: ExecutionLimits, add, fail) -> N
     else:
         add("session_orders_cap", INFO,
             f"max session orders {limits.orders} of {slots} slots per session")
+    add("session_buy_orders_cap", INFO,
+        f"at most {limits.buy_orders} of the {limits.orders} session orders may be BUYs "
+        f"(up to about {_plain(limits.notional * limits.buy_orders)} USD bought per session)")
 
 
 def recommend_limits(principal, reference_price=None, *, profile: str = "UAT",
@@ -380,9 +399,11 @@ def recommend_limits(principal, reference_price=None, *, profile: str = "UAT",
     if initial_funding:
         basis = principal * FUNDING_NOTIONAL_FRACTION
         orders = FUNDING_SESSION_ORDERS
+        buy_orders = FUNDING_SESSION_ORDERS
     else:
         basis = principal * RECOMMENDED_NOTIONAL_FRACTION[profile]
         orders = slots if profile == "UAT" else min(slots, PROD_CANARY_SESSION_ORDERS)
+        buy_orders = min(orders, RECOMMENDED_SESSION_BUY_ORDERS)
     notional = _nice_ceiling(basis)
     if initial_funding:
         # Rounding up must not leave the ratio _limit_findings allows: 1500 x 125 % is 1875,
@@ -393,6 +414,7 @@ def recommend_limits(principal, reference_price=None, *, profile: str = "UAT",
         "profile": profile, "initial_funding": initial_funding,
         "LEGO_MAX_ORDER_NOTIONAL_USD": str(notional),
         "LEGO_MAX_SESSION_ORDERS": str(orders),
+        "LEGO_MAX_SESSION_BUY_ORDERS": str(buy_orders),
     }
     if reference_price is not None:
         price = Decimal(str(reference_price))
@@ -460,7 +482,7 @@ def assess(inp: ReleaseInputs, *, now: datetime | None = None, extra=()) -> dict
     if limits is not None:
         result["limits"] = {
             "quantity": _plain(limits.quantity), "notional_usd": _plain(limits.notional),
-            "session_orders": limits.orders,
+            "session_orders": limits.orders, "session_buy_orders": limits.buy_orders,
             "notional_pct_of_principal": float(limits.notional / inp.principal * 100),
             "window_end_utc": format_window_end(limits.end)}
         if now is not None:
@@ -476,50 +498,3 @@ def assess(inp: ReleaseInputs, *, now: datetime | None = None, extra=()) -> dict
         profile="PROD" if inp.production else "UAT",
         interval_seconds=inp.dna_interval, initial_funding=inp.initial_funding)
     return result
-
-
-def prod_live_ack(inp: ReleaseInputs, binding: str, *, funding: str) -> str | None:
-    """The string a production deployment must echo in LEGO_PROD_LIVE_ACK.
-
-    None when the release is not production/trading or fails a *static* check, so
-    an unfit release can never produce a matching acknowledgement. It carries the
-    numbers a human is approving (symbol, caps, window end, funding mode) plus the
-    first 16 hex of the release binding, so an old acknowledgement cannot be reused
-    for another release. It is a review checkpoint, not a cryptographic signature:
-    the release binding it embeds is itself a plain fingerprint.
-    """
-    if funding not in FUNDING_MODES:
-        raise ValueError("funding must be prefunded or initial-funding")
-    if not (inp.production and inp.live) or len(str(binding)) < 16:
-        return None
-    static = findings(replace(inp, initial_funding=(funding == "initial-funding")))
-    if any(f["severity"] == BLOCK for f in static):
-        return None
-    limits, _ = _parse_limits(inp.limits)
-    if limits is None:
-        return None
-    return "-".join((
-        "LIVE", "PROD", inp.symbol, f"q{_plain(limits.quantity)}",
-        f"n{_plain(limits.notional)}", f"o{limits.orders}",
-        limits.end.astimezone(UTC).strftime("%Y%m%dT%H%MZ"), funding,
-        str(binding)[:16]))
-
-
-def prod_live_acks(inp: ReleaseInputs, binding: str) -> dict:
-    return {mode: prod_live_ack(inp, binding, funding=mode) for mode in FUNDING_MODES}
-
-
-def prod_live_gate_open(runtime) -> bool:
-    """Runtime check behind RuntimeConfig.prod_live_gate_open. Never raises."""
-    try:
-        supplied = str(getattr(runtime.deployment, "prod_live_ack", "") or "")
-        if not supplied:
-            return False
-        inp = inputs_from_runtime(runtime)
-        binding = runtime.deployment.expected_release_binding
-        for expected in prod_live_acks(inp, binding).values():
-            if expected and hmac.compare_digest(supplied.encode(), expected.encode()):
-                return True
-    except Exception:  # noqa: BLE001 - a gate that raises would fail open
-        return False
-    return False

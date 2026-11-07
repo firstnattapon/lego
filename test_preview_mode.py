@@ -59,17 +59,15 @@ def test_preview_needs_the_release_but_never_the_real_money_acknowledgement(tmp_
     assert unauthorized.allows_new_broker_mutation is False          # no release, no intent
     runtime = load_runtime_config(authorized(values))
     assert runtime.allows_new_broker_mutation is True
-    assert runtime.prod_live_gate_open is False                       # the live gate stays shut
     # The binding includes the mode: a preview release never authorizes trade.
     trade = load_runtime_config({**authorized(values), "LEGO_MODE": "trade"})
     assert trade.deployment.release_is_authorized is False
 
 
-def test_a_preview_release_has_no_acknowledgement_to_echo(tmp_path):
+def test_a_preview_release_is_judged_like_trade_and_is_never_live(tmp_path):
     runtime = load_runtime_config(authorized(env(tmp_path, LEGO_MODE="preview")))
     inputs = rh.inputs_from_runtime(runtime)
     assert inputs.trading and not inputs.live                  # judged like trade, never live
-    assert set(rh.prod_live_acks(inputs, runtime.deployment.expected_release_binding).values()) == {None}
 
 
 def test_inactive_preview_creates_nothing(tmp_path):
@@ -98,7 +96,7 @@ def test_preview_runs_the_order_path_to_its_preview_and_never_places(monkeypatch
 
 def test_an_intent_born_in_preview_is_never_placed_by_a_trade_deployment(monkeypatch):
     runtime, intent, claim, client, _ = dispatch_fixture(monkeypatch, environment="PROD")
-    assert runtime.allows_new_broker_mutation and runtime.prod_live_gate_open   # live, with ack
+    assert runtime.allows_new_broker_mutation                                    # live
     forbid_the_money_boundary(monkeypatch)
     result = execution._dispatch_or_reconcile_one(
         client, object(), CFG, {**intent, "preview_only": True}, claim, runtime)
@@ -183,7 +181,7 @@ def preview_tick(monkeypatch):
         "LEGO_MODE": "preview", "LEGO_ACTIVE": "true", "LEGO_CANDIDATE_HASH": "candidate",
         "LEGO_ALLOW_FRACTIONAL": "true", "FIREBASE_DB_URL": "https://test.firebaseio.com",
         "LEGO_MAX_ORDER_QUANTITY": "1000", "LEGO_MAX_ORDER_NOTIONAL_USD": "1000",
-        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_TRADING_WINDOW_END": "2030-01-01T00:00:00Z",
+        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "10", "LEGO_TRADING_WINDOW_END": "2030-01-01T00:00:00Z",
     }
     values["LEGO_RELEASE_AUTHORIZATION"] = load_runtime_config(
         values).deployment.expected_release_binding

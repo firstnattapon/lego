@@ -47,22 +47,17 @@ def verify(service, scheduler, *, candidate, revision, image, function=None, rev
         checks["scheduler_target"] = bool(function_config.get("uri")) and scheduler.get("httpTarget", {}).get("uri") == function_config["uri"]
     if env.get("WEBULL_ENV") == "PROD":
         observe = env.get("LEGO_MODE") == "observe" and env.get("LEGO_ACTIVE") == "false"
-        # A real-money revision must carry everything the runtime requires to trade:
-        # the four execution limits, the release authorization and the acknowledgement.
-        # Whether they are *correct* needs the account id, so it is not verifiable here.
-        live = (env.get("LEGO_MODE") == "trade" and env.get("LEGO_ACTIVE") == "true"
-                and all(env.get(name) for name in (
-                    "LEGO_PROD_LIVE_ACK", "LEGO_RELEASE_AUTHORIZATION", "LEGO_MAX_ORDER_QUANTITY",
-                    "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
-                    "LEGO_TRADING_WINDOW_END")))
-        # Preview and paper run the order path up to Place with the same release, and
-        # never carry the real-money acknowledgement.
+        # A revision on the order path must carry everything the runtime requires to
+        # trade: the five execution limits and the release authorization. Whether they
+        # are *correct* needs the account id, so it is not verifiable here. Preview and
+        # paper run the order path up to Place with the same release.
+        release = all(env.get(name) for name in (
+            "LEGO_RELEASE_AUTHORIZATION", "LEGO_MAX_ORDER_QUANTITY",
+            "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
+            "LEGO_MAX_SESSION_BUY_ORDERS", "LEGO_TRADING_WINDOW_END"))
+        live = env.get("LEGO_MODE") == "trade" and env.get("LEGO_ACTIVE") == "true" and release
         preview = (env.get("LEGO_MODE") in {"preview", "paper"} and env.get("LEGO_ACTIVE") == "true"
-                   and not env.get("LEGO_PROD_LIVE_ACK")
-                   and all(env.get(name) for name in (
-                       "LEGO_RELEASE_AUTHORIZATION", "LEGO_MAX_ORDER_QUANTITY",
-                       "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
-                       "LEGO_TRADING_WINDOW_END")))
+                   and release)
         checks["production_mode"] = observe or live or preview
     # Paper holdings live in a database of their own: a paper revision writes only to
     # an instance named for paper, and no other mode writes to one.

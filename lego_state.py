@@ -577,6 +577,11 @@ def commit_final_row(cfg: Config, snapshot: dict, anchor: Anchor | None, row: di
     if "leaps_shares_changed_from" in meta:
         # The LEAPS rollover event: this row is the first on the new base.
         doc["leaps_shares_changed_from"] = float(meta["leaps_shares_changed_from"])
+    if "clipped_from_quantity" in meta and doc.get("จำนวนสั่ง (หุ้น)"):
+        # Clipped to the per-order caps (lego_one_row.clip_quantity): the caps let
+        # tools/trace_audit recompute column 11. Absent on every unclipped row.
+        doc.update({"clipped_from_quantity": float(meta["clipped_from_quantity"]),
+                    "order_caps": dict(meta["order_caps"])})
     if target_semantics == V2_CASHFLOW_SEMANTICS:
         observed = (state_before or {}).get(EXECUTION_STATE_KEY) or {}
         doc.update({
