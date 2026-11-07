@@ -465,3 +465,44 @@ cd ~/lego-live && git pull --ff-only && LEGO_BOT_OVERRIDE=usar LEGO_FUNDING_MODE
 - runtime ไม่เปลี่ยน: เช็ก Preview cost + fee กับ buying power ก่อน Place ทุก BUY; ไม่พอ ⇒ `NOT_PLACED` (บัญชีเงินสดไม่ยืมเงิน)
 - ถ้าราคาลงแรงและเงินสดไม่พอ bot ซื้อตามสูตรไม่ได้ และหลาย bot แย่งเงินก้อนเดียวกัน ⇒ `NOT_PLACED` ซ้ำ ⇒ เติมเงินหรือใช้ kill switch
 - บัญชี margin: buying power อาจรวมวงเงินกู้ (ยังต้องถาม Webull)
+
+## 19. deploy ทุก bot ด้วยคำสั่งเดียว: `deploy/cloudshell-prod-live-all.sh` (7 พ.ย.)
+
+**ทำไมต้องมี:** มีเงินจริง 3 bot (QBTS, RGTI, USAR) และทุก release หมดอายุพร้อมกัน เดิมต้องรัน `cloudshell-prod-live.sh` 3 ครั้ง และพิมพ์ค่าเงินเองทุกครั้ง
+
+**ใช้ (หลังตลาดปิด):**
+
+```bash
+cd ~/lego-live && git pull --ff-only
+LEGO_ALERTS_CONFIRMED=yes LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod-live-all.sh
+```
+
+- deploy เฉพาะบางตัว: ใส่ชื่อหุ้นต่อท้าย เช่น `... bash deploy/cloudshell-prod-live-all.sh RGTI`
+- ใช้เวลาประมาณ 3–5 นาทีต่อ bot
+
+**ค่าของแต่ละ bot อยู่ในตาราง `BOTS` ในไฟล์ script:**
+
+| SYMBOL | FIX_C | DIFF | LEAPS | FRACTIONAL | BOT (function) | LEAPS_CONFIRMED |
+|---|---|---|---|---|---|---|
+| QBTS | 1500 | 50 | 100 | true | `-` (`lego-tick-prod`) | no |
+| RGTI | 1500 | 50 | 100 | true | `rgti` (`lego-tick-prod-rgti`) | no |
+| USAR | 1500 | 50 | 100 | true | `usar` (`lego-tick-prod-usar`) | yes |
+
+- แก้ค่า = แก้ตารางแล้ว commit (script deploy เฉพาะ checkout ที่ commit แล้ว จึงได้ค่าที่อยู่ใน git เสมอ)
+- `LEGO_LEAPS_CONFIRMED`:
+  - `yes` = เจ้าของยืนยัน LEAPS ที่ positions ไม่แสดง
+  - `no` = preflight ต้องเห็น LEAPS ใน positions เอง ไม่เห็นจะ BLOCK ⇒ แก้ตารางเป็น `yes` ถ้าตั้งใจ
+
+**ทำงานอย่างไร:**
+- ตรวจครั้งเดียวก่อนเริ่ม: ตารางถูกต้อง (หุ้นหรือ function ไม่ซ้ำ), checkout สะอาด, `LEGO_ALERTS_CONFIRMED=yes`, ไม่มี `WEBULL_API_DEBUG`, ไม่อยู่ในเวลาตลาด
+- จากนั้นรัน `cloudshell-prod-live.sh` (prefunded canary) ทีละ bot ตามลำดับในตาราง ทุก gate ของ script นั้นตัดสินแต่ละ bot เอง (token, DB, bot inventory, preflight, `release-plan --enforce`, deploy)
+- ค่า `*_OVERRIDE` ที่ค้างใน shell จากคำสั่งก่อนหน้าจะไม่ถึง bot (เช่น `LEGO_FUNDING_MODE_OVERRIDE`, `LEGO_RETIRE_SYMBOL_OVERRIDE`, caps เก่า) ยกเว้น `LEGO_FEE_PCT_OVERRIDE` และ `ALERT_WEBHOOK_SECRET_OVERRIDE` ที่ใช้ร่วมกันทั้งบัญชี
+- bot ที่ถูก gate ปฏิเสธก่อนขั้น deploy ยังรัน release เดิมต่อ ถ้าล้มหลังขั้น deploy ให้อ่านข้อความใน section ของ bot นั้น
+- ไม่ว่าแบบไหน bot ถัดไปยัง deploy ต่อ ท้ายสุดมีตารางสรุปว่าตัวไหน deploy แล้ว พร้อมคำสั่งสำหรับตัวที่เหลือ
+
+**ไม่ได้ทำ (ใช้ `cloudshell-prod-live.sh` เอง ข้อ 16–17):**
+- release funding ครั้งแรกของ bot ใหม่ (`LEGO_FUNDING_MODE_OVERRIDE=initial-funding`)
+- เลิกหุ้น (`LEGO_RETIRE_SYMBOL_OVERRIDE`)
+- เพิ่ม bot ใหม่: deploy ครั้งแรกด้วย `cloudshell-prod-live.sh` ก่อน แล้วค่อยเพิ่มแถวในตาราง
+
+**หลัง deploy:** แต่ละ bot พิมพ์ kill switch, คำสั่ง rollback และ log query ของตัวเองไว้ด้านบน ⇒ เฝ้า session แรกตั้งแต่ 09:30 New York
