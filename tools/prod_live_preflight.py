@@ -28,7 +28,7 @@ and app credentials come from the environment and never reach the output.
     WEBULL_ENV=PROD WEBULL_APP_KEY=... WEBULL_APP_SECRET=... WEBULL_ACCOUNT_ID=... \\
         WEBULL_TOKEN_SECRET=projects/P/secrets/N WEBULL_TOKEN_DIR=$(mktemp -d) \\
         python3 tools/prod_live_preflight.py --symbol QBTS --fix-c 1500 --diff 50 \\
-            --leaps 100 --allow-fractional true --window-sessions 5 [--funding initial-funding] \\
+            --leaps 100 --allow-fractional true --window-sessions 30 [--funding initial-funding] \\
             [--reserve lego-tick-prod:QBTS:1500:150 ...]
 
 Exit 0 when nothing blocks, 1 otherwise; the JSON report is the only thing on stdout.
@@ -51,7 +51,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import release_horizon as rh  # noqa: E402
-from lego_one_row import Config  # noqa: E402
+from lego_one_row import LARGE_GAP_CAP_MULTIPLE, Config  # noqa: E402
 from lego_orders import PROD  # noqa: E402
 from webull_io import (PROD_ENDPOINT, WebullConfigError, _extract_qty,  # noqa: E402
                        _retry_transient, account_id_is_listed, build_clients,
@@ -329,7 +329,8 @@ def judge(facts: dict, params: Params) -> dict:
             "real_target": _plain(max(target, Decimal(0)).quantize(CENT, rounding=ROUND_DOWN)),
             "caps": {key: caps[key] for key in ("LEGO_MAX_ORDER_QUANTITY",
                                                 "LEGO_MAX_ORDER_NOTIONAL_USD",
-                                                "LEGO_MAX_SESSION_ORDERS")},
+                                                "LEGO_MAX_SESSION_ORDERS",
+                                                "LEGO_MAX_SESSION_BUY_ORDERS")},
             "prefund_range": [str(low), str(high)] if low <= high else None,
             "suggested_real_shares": str(suggested),
         })
@@ -369,16 +370,26 @@ def judge(facts: dict, params: Params) -> dict:
                 add("first_order", INFO, f"the first order, a {side} of about {_money(abs(gap))} USD, "
                     f"fits the canary caps ({_plain(notional_cap)} USD / {_plain(quantity_cap)} shares)")
             else:
-                hold = (f"hold between {low} and {high} real {symbol} shares first (about "
-                        f"{suggested}; quantity with at most 2 decimals)" if low <= high else
+                # Clipped to the caps (lego_one_row.clip_quantity): one order per slot, at
+                # most LEGO_MAX_SESSION_BUY_ORDERS BUYs a session, until the gap is within DIFF.
+                derived["first_order"]["clipped"] = True
+                steps = math.ceil(abs(gap) / notional_cap)
+                hold = (f"to start rebalanced, hold between {low} and {high} real {symbol} shares "
+                        f"first (about {suggested})" if low <= high else
                         "no whole number of real shares fits these caps")
-                funding_hint = (" (or, for this first BUY, the one-off funding release: "
-                                "LEGO_FUNDING_MODE_OVERRIDE=initial-funding)" if side == "BUY" else "")
-                add("first_order", BLOCK, f"the first order would be a {side} of about "
+                funding_hint = (" or, for this first BUY, deploy the one-off funding release "
+                                "(LEGO_FUNDING_MODE_OVERRIDE=initial-funding)" if side == "BUY" else "")
+                large = abs(gap) > notional_cap * LARGE_GAP_CAP_MULTIPLE
+                big = (f"; |gap| is more than {int(LARGE_GAP_CAP_MULTIPLE)} caps, so every clipped "
+                       "order raises ORDER_CLIPPED_LARGE_GAP (a page) until it is closer"
+                       if large else "")
+                # INFO: clipping is the rule now. WARN only when the clipped order will page.
+                add("first_order", WARN if large else INFO, f"the first order would be a {side} of about "
                     f"{_money(abs(gap))} USD ({_plain(quantity)} shares), more than the canary caps "
-                    f"allow ({_plain(notional_cap)} USD / {_plain(quantity_cap)} shares): every slot "
-                    f"would be EXECUTION_LIMIT_BLOCKED. This release is prefunded: {hold}, "
-                    f"then run it again{funding_hint}")
+                    f"({_plain(notional_cap)} USD / {_plain(quantity_cap)} shares): it is clipped to "
+                    f"the caps and the gap closes over about {steps} orders "
+                    f"({caps['LEGO_MAX_SESSION_BUY_ORDERS'] + ' BUYs per session' if side == 'BUY' else 'one per slot'})"
+                    f"{big}. To avoid that, {hold}{funding_hint}")
     elif real is not None and price is not None:
         derived["real_target"] = "0"
 
@@ -388,7 +399,11 @@ def judge(facts: dict, params: Params) -> dict:
     # the cap of every other bot trading real money on the account; all + 1 %. The runtime still
     # checks every BUY against the buying power before Place (validate_preview_funding).
     first, caps_now = derived.get("first_order"), derived.get("caps")
-    if first and first.get("side") == "BUY":
+    if first and first.get("side") == "BUY" and first.get("clipped") and caps_now:
+        # Clipped to the caps: the next order is at most one order at the notional cap.
+        basis = Decimal(caps_now["LEGO_MAX_ORDER_NOTIONAL_USD"])
+        what = f"its first BUY, clipped to the {_plain(basis)} USD cap"
+    elif first and first.get("side") == "BUY":
         basis, what = Decimal(first["notional_usd"]), f"its first BUY of {first['notional_usd']} USD"
     elif caps_now:
         basis = Decimal(caps_now["LEGO_MAX_ORDER_NOTIONAL_USD"])
@@ -527,7 +542,7 @@ def main(argv=None) -> int:
     parser.add_argument("--diff", required=True)
     parser.add_argument("--leaps", required=True)
     parser.add_argument("--allow-fractional", required=True)
-    parser.add_argument("--window-sessions", type=int, default=5)
+    parser.add_argument("--window-sessions", type=int, default=rh.DEFAULT_WINDOW_SESSIONS)
     parser.add_argument("--leaps-confirmed", action="store_true")
     parser.add_argument("--funding", choices=rh.FUNDING_MODES, default="prefunded")
     parser.add_argument("--reserve", action="append", default=[], metavar="FUNCTION:SYMBOL:FIX_C",

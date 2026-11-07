@@ -14,6 +14,7 @@ UAT profile อยู่ใน `deploy/uat-continuous.env.example`: UBER (2026-1
 | `LEGO_MAX_CANCEL_MUTATIONS_PER_ORDER` | 1 | 1 |
 | `LEGO_SESSION_KEY_MODE` | `release_window` (legacy compatibility) | `market_day` |
 | `LEGO_MAX_SESSION_ORDERS` | ต้องระบุเมื่อเปิด new orders | 26 |
+| `LEGO_MAX_SESSION_BUY_ORDERS` (7 พ.ย. 2026) | ต้องระบุเมื่อเปิด new orders (≤ `LEGO_MAX_SESSION_ORDERS`) | 3 |
 | `LEGO_MAX_ORDER_QUANTITY` / `LEGO_MAX_ORDER_NOTIONAL_USD` | ต้องระบุเมื่อเปิด new orders | 30 / 1500 |
 | `LEGO_TRADING_WINDOW_END` | ต้องระบุเมื่อเปิด new orders | เวลาที่เจ้าของบัญชีอนุมัติใหม่ |
 
@@ -76,7 +77,7 @@ ALERT_WEBHOOK_SECRET_OVERRIDE=<secret> bash deploy/continuous-uat.sh
 
 ## Token และ Production observe
 
-Production profile `deploy/prod-observe.env.example` ใช้ PROD/observe/inactive และเว้น monetary limits/expiry ไว้ให้อนุมัติแยก. เส้นทางเงินจริงเป็น release แยกที่ผ่าน acknowledgement (`deploy/prod-canary.env.example`, `docs/PROD_LIVE_RUNBOOK_TH.md`) และยัง NO-GO. Runtime ต้อง hydrate durable token secret ที่ ready ก่อนสร้าง PROD SDK client จึงไม่เริ่ม interactive OTP ระหว่าง cold start. ก่อน new orders ยังต้องผ่าน authenticated account/market-data/capability/positions/buying-power/open-orders reads เดิมครบ.
+Production profile `deploy/prod-observe.env.example` ใช้ PROD/observe/inactive และเว้น monetary limits/expiry ไว้ให้อนุมัติแยก. เส้นทางเงินจริงเป็น release แยก (`deploy/prod-canary.env.example`, `docs/PROD_LIVE_RUNBOOK_TH.md`) และยัง NO-GO. Runtime ต้อง hydrate durable token secret ที่ ready ก่อนสร้าง PROD SDK client จึงไม่เริ่ม interactive OTP ระหว่าง cold start. ก่อน new orders ยังต้องผ่าน authenticated account/market-data/capability/positions/buying-power/open-orders reads เดิมครบ.
 
 Token invalid/expired หรือ Secret Manager unavailable ให้ปิด new orders และตรวจ alert. ผู้ดูแลออก/ยืนยัน token ผ่าน Webull workflow ที่รองรับ แล้วนำไฟล์ token รูปแบบ token/expiry/NORMAL ไปยังพื้นที่ private. ใช้ `python ops.py bootstrap-auth --help` เพื่อดู dry-run/apply สำหรับเพิ่ม secret version; ไม่มี token value ใน command line หรือ PR. เปลี่ยน version ที่ deployment ใช้, cold restart และพิสูจน์ authenticated read ใหม่. Token lifecycle อาจต้องยืนยันตัวตนอีกครั้ง ไม่ต่ออายุอัตโนมัติจากการมี Secret Manager เพียงอย่างเดียว.
 
@@ -121,7 +122,7 @@ Local: `python -m pytest -q` จะ skip emulator เมื่อไม่ได
 
 UAT ต้องผ่านสอง regular sessions ครบ พร้อม cold restart/day rollover, fractional profile, BUY และ SELL positive fill, initial funding และ ledger closure, fault injection ไม่มี duplicate Place/ledger/fence release ผิด, alert delivery และไม่มีการปลด fence ด้วยมือระหว่าง endurance. Whole-share control ทำแยกหลัง fence ว่าง; fractional=false อย่างเดียวไม่รับประกันเกิด whole-share order. Cancel-only หรือ UAT ไม่มี fill ให้ BLOCKED.
 
-PROD observe/inactive อย่างน้อยสอง regular sessions ต้องมี authenticated reads, clock/token/monitoring evidence และไม่มี new-order mutation. การเปิดเงินจริงต้อง release authorization ใหม่พร้อมวงเงินต่อคำสั่ง, daily order count, approval window และ `LEGO_PROD_LIVE_ACK` ที่ผูกกับ release นั้น (runtime ปิดเองถ้าไม่มี/ไม่ตรง). ไม่ใช้ UAT caps เป็นค่าเริ่มต้น. ขั้นตอนและเงื่อนไขอยู่ใน `docs/PROD_LIVE_RUNBOOK_TH.md`.
+PROD observe/inactive อย่างน้อยสอง regular sessions ต้องมี authenticated reads, clock/token/monitoring evidence และไม่มี new-order mutation. การเปิดเงินจริงต้อง release authorization ใหม่พร้อมวงเงินต่อคำสั่ง, daily order count, daily BUY count และ approval window (runtime ปิดเองถ้าไม่มี/ไม่ตรง; `LEGO_PROD_LIVE_ACK` ถูกลบเมื่อ 7 พ.ย. 2026). ไม่ใช้ UAT caps เป็นค่าเริ่มต้น. ขั้นตอนและเงื่อนไขอยู่ใน `docs/PROD_LIVE_RUNBOOK_TH.md`.
 
 Rollback: ปิด new orders แล้วคง worker ที่เข้าใจ cancel/audit schema v4 เพื่อ reconcile ต่อ. ไม่ย้อนกลับไป binary ที่ไม่รู้จักสถานะใหม่ ไม่ลบ outbox/fence ไม่ refund quota และไม่ clear operator halt อัตโนมัติ. chain ที่ commit ด้วย quantity contract ที่แคบลงแล้ว (เช่น 5→2 ตำแหน่ง ดู [UAT_20261005_INCIDENT_TH.md](UAT_20261005_INCIDENT_TH.md)) จะปฏิเสธ revision ที่ใช้ contract กว้างกว่าด้วย `CONFIG_ERROR`: ไม่มี order จึงไม่มีความเสี่ยงเงิน แต่ DNA clock หยุด และไม่มีเครื่องมือ migrate กลับ ให้ roll forward.
 

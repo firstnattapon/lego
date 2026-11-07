@@ -192,6 +192,15 @@ def recompute_decision(i: dict) -> dict:
         if gap > diff and not exceeds_real:              # a SELL never exceeds what is held
             ceiling = _dec(holdings).quantize(Decimal(1).scaleb(-dp), rounding=ROUND_DOWN)
             qty = min(qty, float(ceiling))
+        caps = i.get("order_caps")
+        if caps and qty > 0 and not exceeds_real:       # lego_one_row.clip_quantity
+            cap_qty = _dec(caps["quantity"])
+            budget = _dec(caps["notional_usd"]) / (1 + _dec(caps["price_margin"]))
+            if _dec(qty) > cap_qty or _dec(qty) * _dec(price) > budget:
+                limit = min(cap_qty, budget / _dec(price))
+                clipped = (float((limit / _dec(inc)).to_integral_value(rounding=ROUND_DOWN) * _dec(inc))
+                           if v2 else float(limit.quantize(Decimal(1).scaleb(-dp), rounding=ROUND_DOWN)))
+                qty = clipped if clipped > 0 else qty
         if v2 and 0 < qty < 1.0 and _dec(qty) * _dec(price) < Decimal("1.0"):
             qty = 0.0
         if exceeds_real:                                 # LEAPS are not shares to sell
@@ -275,6 +284,8 @@ def check_rows(rows, *, fix_c=None, diff=None, p0=None, limit=20) -> dict:
             _mismatch(result["mismatch"], limit, version=version, field="FIX_C", recorded=value - gap, expected=fix_c)
         base = {"P_n": price, "holdings": holdings, "FIX_C": fix_c, "DIFF": used,
                 "signal": row.get(c["signal"]), "P0": p0}
+        if isinstance(row.get("order_caps"), dict):
+            base["order_caps"] = row["order_caps"]       # a row clipped to the per-order caps
         if row.get("real_holdings") is not None:
             # LEAPS row: column 7 is real + LEAPS; the decision is recomputed from the
             # real shares and the LEAPS, and the column must be exactly their sum.

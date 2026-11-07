@@ -117,7 +117,7 @@ def release_env(**overrides):
         "LEGO_SESSION_KEY_MODE_OVERRIDE": "market_day", "LEGO_STALE_ORDER_ACTION_OVERRIDE": "hold",
         "LEGO_STALE_ORDER_SECONDS_OVERRIDE": "300", "LEGO_CANCEL_CONFIRM_GRACE_SECONDS_OVERRIDE": "120",
         "LEGO_MAX_ORDER_QUANTITY_OVERRIDE": "20", "LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE": "1000",
-        "LEGO_MAX_SESSION_ORDERS_OVERRIDE": "10", "LEGO_TRADING_WINDOW_END_OVERRIDE": window,
+        "LEGO_MAX_SESSION_ORDERS_OVERRIDE": "10", "LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE": "10", "LEGO_TRADING_WINDOW_END_OVERRIDE": window,
         "WEBULL_TOKEN_SECRET_OVERRIDE": "projects/lego-firebase/secrets/webull-token-prod"}
     env.update(overrides)
     return env
@@ -178,7 +178,7 @@ def test_continuous_uat_script_agrees_with_the_policy_file():
 def test_powershell_deploy_no_longer_accepts_production_live():
     text = (ROOT / "deploy" / "deploy.ps1").read_text()
     assert "$Environment -eq 'PROD' -and ($Mode -ne 'observe' -or $Active)" in text
-    assert "cloudshell-all-in-one.sh with LEGO_PROD_LIVE_ACK" in text
+    assert "deploy/cloudshell-prod-live.sh" in text and "LEGO_PROD_LIVE_ACK" not in text
 
 
 def test_the_production_template_stays_observe_only():
@@ -209,36 +209,41 @@ def test_an_expired_window_is_refused_before_any_cloud_call(sandbox):
     assert log(sandbox) == ""
 
 
-# ----------------------------------------------------- the acknowledgement flow (7)
-def test_production_live_prints_the_acknowledgement_and_stops_before_deploy(sandbox):
+# ------------------------------------- one run, no acknowledgement (2026-11-07)
+def test_an_authorized_production_live_release_deploys_in_one_run(sandbox):
     result = run(sandbox, authorized(sandbox, release_env()))
-    assert result.returncode == 3, result.stderr
-    assert "REAL-MONEY RELEASE" in result.stdout
-    assert re.search(r"LEGO_PROD_LIVE_ACK=LIVE-PROD-UBER-q20-n1000-o10-\d{8}T\d{4}Z-prefunded-[0-9a-f]{16}",
-                     result.stdout)
-    assert "FIREBASE_DEPLOY_REACHED" not in log(sandbox)
+    assert result.returncode == 78, result.stderr              # the stub gcloud stops at `functions deploy`
+    recorded = log(sandbox)
+    assert "FIREBASE_DEPLOY_REACHED" in recorded and "GCLOUD_FUNCTIONS_DEPLOY_REACHED" in recorded
+    assert "WEBULL_ENV=PROD" in recorded and "LEGO_PROD_LIVE_ACK" not in recorded
+    assert ("LEGO_MAX_SESSION_ORDERS=10,LEGO_MAX_SESSION_BUY_ORDERS=10,LEGO_TRADING_WINDOW_END="
+            in recorded)
+
+
+def test_a_leftover_acknowledgement_is_ignored(sandbox):
+    result = run(sandbox, authorized(sandbox, release_env()),
+                 LEGO_PROD_LIVE_ACK="LIVE-PROD-UBER-q20-n1000-o10-20990101T2000Z-prefunded-0123456789abcdef")
+    assert result.returncode == 78, result.stderr
+    assert "LEGO_PROD_LIVE_ACK" not in log(sandbox)
+
+
+def test_a_production_release_without_the_buy_cap_is_refused_before_any_cloud_call(sandbox):
+    env = authorized(sandbox, release_env())
+    env.pop("LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE")
+    result = run(sandbox, env)
+    assert result.returncode == 1 and "all five execution limits" in result.stderr
+    assert log(sandbox) == ""
+
+
+def test_a_release_window_session_key_is_refused_for_a_trading_release(sandbox):
+    env = authorized(sandbox, release_env(LEGO_SESSION_KEY_MODE_OVERRIDE="release_window"))
+    result = run(sandbox, env)
+    assert result.returncode == 1
+    assert "[BLOCK] session_key_mode" in result.stdout
     assert "GCLOUD_FUNCTIONS_DEPLOY_REACHED" not in log(sandbox)
 
 
-def test_a_wrong_acknowledgement_is_refused(sandbox):
-    result = run(sandbox, authorized(sandbox, release_env()),
-                 LEGO_PROD_LIVE_ACK="LIVE-PROD-UBER-q20-n1000-o10-20990101T2000Z-prefunded-0123456789abcdef")
-    assert result.returncode == 1 and "does not match this release" in result.stderr
-    assert "FIREBASE_DEPLOY_REACHED" not in log(sandbox)
-
-
-def test_the_matching_acknowledgement_reaches_deploy_and_travels_to_the_function(sandbox):
-    env = authorized(sandbox, release_env())
-    ack = re.search(r"LEGO_PROD_LIVE_ACK=(\S+)", run(sandbox, env).stdout).group(1)
-    result = run(sandbox, env, LEGO_PROD_LIVE_ACK=ack)
-    assert result.returncode == 78, result.stderr              # the stub gcloud stops at `functions deploy`
-    assert "PROD live acknowledgement verified" in result.stdout
-    recorded = log(sandbox)
-    assert "FIREBASE_DEPLOY_REACHED" in recorded and "GCLOUD_FUNCTIONS_DEPLOY_REACHED" in recorded
-    assert f"LEGO_PROD_LIVE_ACK={ack}" in recorded and "WEBULL_ENV=PROD" in recorded
-
-
-def test_a_production_release_that_cannot_be_acknowledged_is_refused(sandbox):
+def test_an_unfit_production_release_is_refused(sandbox):
     env = authorized(sandbox, release_env(LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE="3000"))   # 30% of principal
     result = run(sandbox, env)
     assert result.returncode == 1
@@ -247,7 +252,7 @@ def test_a_production_release_that_cannot_be_acknowledged_is_refused(sandbox):
 
 
 FUNDING = {"LEGO_MAX_ORDER_QUANTITY_OVERRIDE": "200", "LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE": "12500",
-           "LEGO_MAX_SESSION_ORDERS_OVERRIDE": "2"}      # 125% of principal: the one-off funding release
+           "LEGO_MAX_SESSION_ORDERS_OVERRIDE": "2", "LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE": "2"}      # 125% of principal: the one-off funding release
 
 
 def test_funding_caps_are_refused_unless_the_funding_release_is_requested(sandbox):
@@ -258,17 +263,14 @@ def test_funding_caps_are_refused_unless_the_funding_release_is_requested(sandbo
     assert "FIREBASE_DEPLOY_REACHED" not in log(sandbox)
 
 
-def test_the_funding_release_deploys_with_its_own_acknowledgement(sandbox):
+def test_the_funding_release_deploys_in_one_run_when_requested(sandbox):
     env = authorized(sandbox, release_env(LEGO_FUNDING_MODE_OVERRIDE="initial-funding", **FUNDING))
-    first = run(sandbox, env)
-    assert first.returncode == 3, first.stdout + first.stderr
-    ack = re.search(r"LEGO_PROD_LIVE_ACK=(\S+)", first.stdout).group(1)
-    assert re.fullmatch(r"LIVE-PROD-UBER-q200-n12500-o2-\d{8}T\d{4}Z-initial-funding-[0-9a-f]{16}", ack)
-    assert "funding_release_temporary" in first.stdout                         # loose caps are called out
-    result = run(sandbox, env, LEGO_PROD_LIVE_ACK=ack)
+    result = run(sandbox, env)
     assert result.returncode == 78, result.stdout + result.stderr
+    assert "funding_release_temporary" in result.stdout                        # loose caps are called out
     recorded = log(sandbox)
-    assert f"LEGO_PROD_LIVE_ACK={ack}" in recorded and "GCLOUD_FUNCTIONS_DEPLOY_REACHED" in recorded
+    assert "GCLOUD_FUNCTIONS_DEPLOY_REACHED" in recorded and "LEGO_PROD_LIVE_ACK" not in recorded
+    assert "LEGO_MAX_SESSION_ORDERS=2,LEGO_MAX_SESSION_BUY_ORDERS=2," in recorded
 
 
 def test_the_funding_mode_does_not_loosen_a_steady_release(sandbox):
@@ -289,7 +291,8 @@ def test_an_unknown_funding_mode_is_refused_before_any_cloud_call(sandbox):
 def test_production_observe_deploys_without_an_acknowledgement(sandbox):
     env = release_env(LEGO_MODE_OVERRIDE="observe", LEGO_ACTIVE_OVERRIDE="false")
     for name in ("LEGO_MAX_ORDER_QUANTITY_OVERRIDE", "LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE",
-                 "LEGO_MAX_SESSION_ORDERS_OVERRIDE", "LEGO_TRADING_WINDOW_END_OVERRIDE"):
+                 "LEGO_MAX_SESSION_ORDERS_OVERRIDE", "LEGO_TRADING_WINDOW_END_OVERRIDE",
+                 "LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE"):
         env.pop(name)
     result = run(sandbox, env)
     assert result.returncode == 78, result.stderr
@@ -311,7 +314,7 @@ def test_uat_trade_with_a_valid_plan_reaches_deploy(sandbox):
     env = authorized(sandbox, release_env(
         WEBULL_ENV_OVERRIDE="UAT", LEGO_ALLOW_FRACTIONAL_OVERRIDE="true",
         LEGO_MAX_ORDER_QUANTITY_OVERRIDE="30", LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE="1500",
-        LEGO_MAX_SESSION_ORDERS_OVERRIDE="26"))
+        LEGO_MAX_SESSION_ORDERS_OVERRIDE="26", LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE="26"))
     result = run(sandbox, env)
     assert result.returncode == 78, result.stderr
     assert "LEGO_PROD_LIVE_ACK" not in log(sandbox)               # UAT never carries one
@@ -393,7 +396,7 @@ def test_prod_observe_deploys_observe_only_whatever_the_shell_still_holds(sandbo
     for value in (f"WEBULL_ENV=PROD,FIREBASE_DB_URL={PROD_DB},LEGO_SYMBOL=UBER,LEGO_FIX_C=10000,",
                   "LEGO_MODE=observe,LEGO_ACTIVE=false,", "LEGO_RELEASE_AUTHORIZATION=,",
                   "LEGO_MAX_ORDER_QUANTITY=,LEGO_MAX_ORDER_NOTIONAL_USD=,LEGO_MAX_SESSION_ORDERS=,"
-                  "LEGO_TRADING_WINDOW_END=,", "LEGO_STALE_ORDER_ACTION=hold,",
+                  "LEGO_MAX_SESSION_BUY_ORDERS=,LEGO_TRADING_WINDOW_END=,", "LEGO_STALE_ORDER_ACTION=hold,",
                   "LEGO_SESSION_KEY_MODE=market_day",
                   "WEBULL_TOKEN_SECRET=projects/lego-firebase/secrets/webull-token-prod"):
         assert value in deployed, value
@@ -562,9 +565,9 @@ def captured(env):
 
 
 LIVE = {"WEBULL_ENV": "PROD", "LEGO_MODE": "trade", "LEGO_ACTIVE": "true",
-        "LEGO_PROD_LIVE_ACK": "LIVE-PROD-UBER", "LEGO_RELEASE_AUTHORIZATION": "f" * 64,
+        "LEGO_RELEASE_AUTHORIZATION": "f" * 64,
         "LEGO_MAX_ORDER_QUANTITY": "20", "LEGO_MAX_ORDER_NOTIONAL_USD": "1000",
-        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_TRADING_WINDOW_END": "2026-10-09T20:00:00Z"}
+        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "10", "LEGO_TRADING_WINDOW_END": "2026-10-09T20:00:00Z"}
 
 
 def test_a_captured_production_revision_may_be_observe_or_fully_live():
@@ -572,9 +575,10 @@ def test_a_captured_production_revision_may_be_observe_or_fully_live():
     assert captured(LIVE)["status"] == "PASS"
 
 
-@pytest.mark.parametrize("missing", ["LEGO_PROD_LIVE_ACK", "LEGO_RELEASE_AUTHORIZATION",
+@pytest.mark.parametrize("missing", ["LEGO_RELEASE_AUTHORIZATION",
                                      "LEGO_MAX_ORDER_QUANTITY", "LEGO_MAX_ORDER_NOTIONAL_USD",
-                                     "LEGO_MAX_SESSION_ORDERS", "LEGO_TRADING_WINDOW_END"])
+                                     "LEGO_MAX_SESSION_ORDERS", "LEGO_MAX_SESSION_BUY_ORDERS",
+                                     "LEGO_TRADING_WINDOW_END"])
 def test_a_live_production_revision_missing_any_requirement_fails(missing):
     report = captured({k: v for k, v in LIVE.items() if k != missing})
     assert report["status"] == "FAIL" and report["checks"]["production_mode"] is False
@@ -585,20 +589,17 @@ def test_a_half_live_production_revision_fails(mode, active):
     assert captured({**LIVE, "LEGO_MODE": mode, "LEGO_ACTIVE": active})["status"] == "FAIL"
 
 
-def test_a_captured_production_preview_needs_its_release_and_never_an_ack():
+def test_a_captured_production_preview_needs_its_release():
     preview = {**LIVE, "LEGO_MODE": "preview"}
-    preview.pop("LEGO_PROD_LIVE_ACK")
     assert captured(preview)["status"] == "PASS"
-    assert captured({**preview, "LEGO_PROD_LIVE_ACK": "LIVE-PROD-UBER"})["status"] == "FAIL"
+    assert captured({**preview, "LEGO_PROD_LIVE_ACK": "LIVE-PROD-UBER"})["status"] == "PASS"   # ignored
     assert captured({**preview, "LEGO_RELEASE_AUTHORIZATION": ""})["status"] == "FAIL"
     assert captured({**preview, "LEGO_ACTIVE": "false"})["status"] == "FAIL"
 
 
 def test_a_captured_paper_revision_writes_only_to_a_paper_database():
     paper = {**LIVE, "LEGO_MODE": "paper", "FIREBASE_DB_URL": PAPER_DB}
-    paper.pop("LEGO_PROD_LIVE_ACK")
     assert captured(paper)["status"] == "PASS"
-    assert captured({**paper, "LEGO_PROD_LIVE_ACK": "LIVE-PROD-UBER"})["status"] == "FAIL"
     report = captured({**paper, "FIREBASE_DB_URL": PROD_DB})
     assert report["status"] == "FAIL" and report["checks"]["database_matches_mode"] is False
     # A real chain never lands in the paper database either.

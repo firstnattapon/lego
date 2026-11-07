@@ -46,7 +46,6 @@ def check_command(_args) -> dict:
         "config_hash": runtime.operator.config_hash,
         "account_fingerprint": runtime.deployment.account_fingerprint,
         "release_authorized": runtime.deployment.release_is_authorized,
-        "prod_live_gate_open": runtime.prod_live_gate_open,
         "new_orders_authorized": runtime.allows_new_broker_mutation,
         "candidate_hash_local": local_candidate,
         "candidate_matches": runtime.deployment.candidate_hash == local_candidate,
@@ -76,10 +75,12 @@ DEPLOY_OVERRIDES = {
     "LEGO_MAX_ORDER_QUANTITY": "LEGO_MAX_ORDER_QUANTITY_OVERRIDE",
     "LEGO_MAX_ORDER_NOTIONAL_USD": "LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE",
     "LEGO_MAX_SESSION_ORDERS": "LEGO_MAX_SESSION_ORDERS_OVERRIDE",
+    "LEGO_MAX_SESSION_BUY_ORDERS": "LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE",
     "LEGO_TRADING_WINDOW_END": "LEGO_TRADING_WINDOW_END_OVERRIDE",
     "LEGO_RELEASE_AUTHORIZATION": "LEGO_RELEASE_AUTHORIZATION_OVERRIDE",
 }
-_LIMIT_KEYS = ("LEGO_MAX_ORDER_QUANTITY", "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS")
+_LIMIT_KEYS = ("LEGO_MAX_ORDER_QUANTITY", "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS",
+               "LEGO_MAX_SESSION_BUY_ORDERS")
 
 
 def _read_env_file(path) -> dict:
@@ -102,9 +103,10 @@ def release_plan_command(args, *, now=None) -> dict:
     """Plan the next release. Reads configuration only: nothing is deployed,
     written or sent to a broker, and the account id is never printed.
 
-    Computes the approval window, the candidate hash of this checkout, the
-    principal-proportional caps, the release binding and (production) the
-    acknowledgement, and judges them with release_horizon.assess. Renewal stays
+    Computes the approval window (release_horizon.DEFAULT_WINDOW_SESSIONS sessions
+    unless --window-sessions, --window-end or LEGO_TRADING_WINDOW_END says otherwise),
+    the candidate hash of this checkout, the principal-proportional caps and the
+    release binding, and judges them with release_horizon.assess. Renewal stays
     a reviewed operator action: this makes an unfit release visible before it is
     deployed, which is what the 2026-10-01 expiry lacked.
     """
@@ -127,6 +129,9 @@ def release_plan_command(args, *, now=None) -> dict:
             horizon.window_end_after_sessions(now, args.window_sessions))
     elif args.window_end:
         env["LEGO_TRADING_WINDOW_END"] = args.window_end
+    elif not env.get("LEGO_TRADING_WINDOW_END"):
+        env["LEGO_TRADING_WINDOW_END"] = horizon.format_window_end(
+            horizon.window_end_after_sessions(now, horizon.DEFAULT_WINDOW_SESSIONS))
     if args.candidate_hash:
         if not re.fullmatch(r"[0-9a-f]{64}", args.candidate_hash):
             raise ValueError("--candidate-hash must be 64 lowercase hex characters")
@@ -134,8 +139,7 @@ def release_plan_command(args, *, now=None) -> dict:
     else:
         candidate, scope = _candidate()
     env["LEGO_CANDIDATE_HASH"] = candidate
-    for computed in ("LEGO_RELEASE_AUTHORIZATION", "LEGO_PROD_LIVE_ACK"):
-        env.pop(computed, None)                                  # derived below, never reused
+    env.pop("LEGO_RELEASE_AUTHORIZATION", None)                  # derived below, never reused
 
     price = Decimal(str(args.reference_price)) if args.reference_price else None
     base = load_runtime_config(env)
@@ -157,16 +161,11 @@ def release_plan_command(args, *, now=None) -> dict:
         inputs, now=now,
         extra=horizon.operator_findings(inputs, fee_pct=fee_pct, alert_configured=alert_configured))
     limits = runtime.deployment.execution_limits
-    funding = "initial-funding" if args.initial_funding else "prefunded"
-    acks = horizon.prod_live_acks(inputs, binding) if (
-        runtime.deployment.environment == "PROD" and inputs.live) else {}
 
     deploy_env = {"EXPECTED_CANDIDATE_HASH": candidate}
     deploy_env.update({override: env[name] for name, override in DEPLOY_OVERRIDES.items()
                        if env.get(name)})
     deploy_env["LEGO_RELEASE_AUTHORIZATION_OVERRIDE"] = binding
-    if acks.get(funding):
-        deploy_env["LEGO_PROD_LIVE_ACK"] = acks[funding]
     if args.initial_funding:
         # The deploy script judges the release again; it must be told this is the funding one.
         deploy_env["LEGO_FUNDING_MODE_OVERRIDE"] = "initial-funding"
@@ -202,13 +201,12 @@ def release_plan_command(args, *, now=None) -> dict:
         "release": {
             "LEGO_TRADING_WINDOW_END": limits[3], "LEGO_MAX_ORDER_QUANTITY": limits[0],
             "LEGO_MAX_ORDER_NOTIONAL_USD": limits[1], "LEGO_MAX_SESSION_ORDERS": limits[2],
+            "LEGO_MAX_SESSION_BUY_ORDERS": limits[4],
             "LEGO_CANDIDATE_HASH": candidate, "LEGO_RELEASE_AUTHORIZATION": binding},
         "recommended_limits": recommended,
         "assessment": assessment,
         "deploy_env": deploy_env, "next_steps": steps,
     }
-    if acks:
-        result["prod_live_acks"] = acks
     if fee_pct is not None:
         result["fee_check"] = {
             "fee_pct": format(fee_pct.normalize(), "f"),
@@ -506,7 +504,8 @@ def parser() -> argparse.ArgumentParser:
         "release-plan", help="plan the next release (window, caps, binding, ack); deploys nothing")
     window = plan.add_mutually_exclusive_group()
     window.add_argument("--window-sessions", type=int, metavar="N",
-                        help="end the approval window at the close of the Nth complete regular session")
+                        help="end the approval window at the close of the Nth complete regular "
+                             "session (default 30 when no window end is given)")
     window.add_argument("--window-end", metavar="ISO_UTC",
                         help="explicit window end, e.g. 2026-10-16T20:00:00Z")
     plan.add_argument("--env-file", help="KEY=VALUE policy (e.g. deploy/uat-continuous.env.example); "

@@ -3,6 +3,11 @@
 Notional is an estimate at the last verified quote, not a guaranteed MARKET fill
 price. Session reservations count possible attempts (including crashes) and are
 never refunded automatically.
+
+LEGO_MAX_SESSION_BUY_ORDERS bounds the BUY attempts inside the same session counter
+(``execution_session.buy_count``): a BUY spends one total and one BUY reservation, a
+SELL only a total one and never refunds a BUY. A counter written before buy_count
+existed is read as count (every earlier attempt may have been a BUY).
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,12 +16,31 @@ import hashlib
 import json
 
 
+# Appended, never reordered: index 0..3 are read positionally (ops.py, release_horizon).
 ENV_KEYS = ("LEGO_MAX_ORDER_QUANTITY", "LEGO_MAX_ORDER_NOTIONAL_USD",
-            "LEGO_MAX_SESSION_ORDERS", "LEGO_TRADING_WINDOW_END")
+            "LEGO_MAX_SESSION_ORDERS", "LEGO_TRADING_WINDOW_END",
+            "LEGO_MAX_SESSION_BUY_ORDERS")
+# The dispatch-lock document this module writes. 5 = execution_session.buy_count. A
+# revision that only knows 1..4 refuses it, so rolling back to it fails closed instead
+# of reserving BUYs against a counter it does not advance.
+WORKER_SCHEMA_VERSION = 5
 
 
 class ExecutionLimitError(ValueError):
     pass
+
+
+class SessionBuyCapReached(ExecutionLimitError):
+    """The BUY quota of this session is spent. Expected in a long fall, not a fault."""
+
+
+def buy_count_of(session) -> int:
+    """BUY reservations of a counter; one written before buy_count is read as count."""
+    if not session:
+        return 0
+    if "buy_count" in session:
+        return session["buy_count"]
+    return session.get("count", 0)
 
 
 def validate_counter(counter):
@@ -27,6 +51,9 @@ def validate_counter(counter):
     if (not isinstance(counter.get("key"), str) or not counter["key"].strip()
             or type(counter.get("count")) is not int or counter["count"] < 0):
         raise ExecutionLimitError("malformed execution counter")
+    if "buy_count" in counter and (type(counter["buy_count"]) is not int
+                                   or not 0 <= counter["buy_count"] <= counter["count"]):
+        raise ExecutionLimitError("malformed BUY counter")
     if counter["key"].startswith("XNYS:"):
         from datetime import date
         try:
@@ -77,11 +104,13 @@ def migrate_market_day(scope, *, now, apply=False):
         if str(session.get("key", "")).startswith("XNYS:") and session["key"] > key:
             raise ExecutionLimitError("market day regression")
         count = max(counts)
-        doc["execution_session"] = {"key": key, "count": count,
+        # Every attempt before buy_count existed may have been a BUY.
+        buys = max(buy_count_of(session), buy_count_of(daily))
+        doc["execution_session"] = {"key": key, "count": count, "buy_count": min(buys, count),
                                     "last_run_id": session.get("last_run_id", "")}
         doc["market_day_migration"] = {"key": key, "count": count,
                                        "at": now.isoformat()}
-        doc["worker_schema_version"] = 4
+        doc["worker_schema_version"] = WORKER_SCHEMA_VERSION
         return doc
     result = ref.transaction(plan) if apply else plan(ref.get())
     return {"dry_run": not apply, "execution_session": result["execution_session"]}
@@ -108,20 +137,25 @@ class ExecutionLimits:
     orders: int
     end: datetime
     fingerprint: str
+    buy_orders: int = 0
 
     @classmethod
     def parse(cls, values):
-        if len(values) != 4 or not all(values):
-            raise ExecutionLimitError("all four execution limits must be explicitly configured")
+        if len(values) != len(ENV_KEYS) or not all(values):
+            raise ExecutionLimitError("all five execution limits must be explicitly configured")
         quantity, notional = positive(values[0]), positive(values[1])
         try:
             orders = int(values[2])
             end = datetime.fromisoformat(values[3].replace("Z", "+00:00"))
+            buy_orders = int(values[4])
         except (TypeError, ValueError, AttributeError):
             raise ExecutionLimitError("invalid session order count or trading window") from None
         if orders <= 0 or str(orders) != str(values[2]) or end.tzinfo is None:
             raise ExecutionLimitError("session count must be positive integer; window must include timezone")
-        return cls(quantity, notional, orders, end, policy_hash(values))
+        if buy_orders <= 0 or str(buy_orders) != str(values[4]) or buy_orders > orders:
+            raise ExecutionLimitError(
+                "session BUY count must be a positive integer no larger than the session count")
+        return cls(quantity, notional, orders, end, policy_hash(values), buy_orders)
 
     def check(self, quantity, price, *, now=None) -> dict:
         now = now or datetime.now(timezone.utc)
@@ -136,13 +170,38 @@ class ExecutionLimits:
                 "quantity": str(qty), "checked_at": now.isoformat()}
 
 
-def reserve_attempt(scope, claim, run_id, limits, session_key, *, now=None):
+def buy_quota_spent(scope, limits, session_key) -> bool:
+    """Advisory, read-only: is this session's BUY quota already spent?
+
+    Lets the worker stop a BUY before it spends a broker Preview. Never the
+    authority: reserve_attempt decides inside its transaction.
+    """
+    from firebase_admin import db
+    from lego_outbox import DISPATCH_LOCK_PATH
+    doc = db.reference(f"{DISPATCH_LOCK_PATH}/{scope}").get()
+    if not isinstance(doc, dict):
+        return False
+    session = doc.get("execution_session") or {}
+    try:
+        validate_counter(session)
+    except ExecutionLimitError:
+        return False                     # malformed: reserve_attempt refuses it with its reason
+    return (session.get("key") == session_key
+            and buy_count_of(session) >= limits.buy_orders)
+
+
+def reserve_attempt(scope, claim, run_id, limits, session_key, *, side, now=None):
     """Reserve under the *same* account-symbol lease as Place, transactionally.
 
     Market-day keys are independent of release expiry and chain identity.
     Legacy window counters require an explicit idle migration to market-day.
     One bounded counter per account-symbol; keys cannot move backwards.
+    A BUY also needs a free BUY reservation (limits.buy_orders) in that counter.
     """
+    side = str(side or "").strip().upper()
+    if side not in ("BUY", "SELL"):
+        raise ExecutionLimitError("reservation needs the order side")
+    buy = side == "BUY"
     from firebase_admin import db
     from lego_outbox import DISPATCH_LOCK_PATH
     now = now or datetime.now(timezone.utc)
@@ -166,7 +225,7 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, now=None):
         session = doc.get("execution_session", {})
         validate_counter(session)
         schema = doc.get("worker_schema_version", 1)
-        if type(schema) is not int or not 1 <= schema <= 4:
+        if type(schema) is not int or not 1 <= schema <= WORKER_SCHEMA_VERSION:
             raise ExecutionLimitError("unsupported worker schema")
         if session.get("key") != session_key:
             if session_key.startswith("XNYS:"):
@@ -176,7 +235,8 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, now=None):
             elif session and (str(session.get("key", "")).startswith("XNYS:")
                               or float(session.get("end_epoch", float("inf"))) >= limits.end.timestamp()):
                 return old
-            session = {"key": session_key, "end_epoch": limits.end.timestamp(), "count": 0}
+            session = {"key": session_key, "end_epoch": limits.end.timestamp(), "count": 0,
+                       "buy_count": 0}
         count = session.get("count")
         if type(count) is not int or count < 0:
             return old
@@ -184,9 +244,13 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, now=None):
             return old
         if count >= limits.orders:
             return old
+        buys = buy_count_of(session)
+        if buy and buys >= limits.buy_orders:
+            return old
         doc["execution_session"] = {**session, "count": count + 1,
+                                    "buy_count": min(buys + (1 if buy else 0), count + 1),
                                     "last_run_id": run_id, "reserved_at": now.isoformat()}
-        doc["worker_schema_version"] = 4
+        doc["worker_schema_version"] = WORKER_SCHEMA_VERSION
         return doc
 
     result = ref.transaction(txn) or {}
@@ -201,5 +265,15 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, now=None):
             or lease.tzinfo is None or lease <= now
             or type(session.get("count")) is not int or not 0 < session["count"] <= limits.orders
             or session.get("key") != session_key or session.get("last_run_id") != run_id):
+        if (buy and result.get("owner") == claim.get("owner")
+                and result.get("claim_token") == claim.get("claim_token")
+                and result.get("inflight_run_id") == run_id
+                and lease.tzinfo is not None and lease > now
+                and session.get("key") == session_key
+                and type(session.get("count")) is int and session["count"] < limits.orders
+                and buy_count_of(session) >= limits.buy_orders):
+            raise SessionBuyCapReached(
+                f"session BUY limit reached ({limits.buy_orders} BUY orders per session)")
         raise ExecutionLimitError("session attempt limit reached or dispatch lease lost")
-    return {"session_key": session_key, "reservation_count": session["count"]}
+    return {"session_key": session_key, "reservation_count": session["count"],
+            "buy_reservation_count": buy_count_of(session)}

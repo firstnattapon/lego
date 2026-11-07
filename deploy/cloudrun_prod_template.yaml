@@ -62,6 +62,8 @@ spec:
               value: ''
             - name: LEGO_MAX_SESSION_ORDERS
               value: ''
+            - name: LEGO_MAX_SESSION_BUY_ORDERS
+              value: ''
             - name: LEGO_TRADING_WINDOW_END
               value: ''
             - name: WEBULL_ACCOUNT_ID

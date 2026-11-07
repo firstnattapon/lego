@@ -1,6 +1,13 @@
 # สถานะ candidate continuous execution v4
 
-ล่าสุด 4 พฤศจิกายน (คำขอเจ้าของ): preflight เปลี่ยน gate buying power จาก FIX_C + 1% ของทุก bot เป็น **เงินที่เปิด order ถัดไปได้** (BUY แรก หรือ 1 order เต็มเพดาน + 1 order เต็มเพดานของ bot อื่น, ทั้งหมด + 1%); ต่ำกว่า FIX_C + 1% ⇒ WARN `buying_power_principal`.
+ล่าสุด 7 พฤศจิกายน (คำขอเจ้าของ): [ตัดออร์เดอร์ให้เท่าเพดาน, BUY ≤ 3 ต่อวัน, ลบ PROD ACK, window 30 session](docs/CHANGE_20261107_TH.md).
+- ออร์เดอร์ที่หุ้นเกิน `LEGO_MAX_ORDER_QUANTITY` หรือมูลค่าเกิน `LEGO_MAX_ORDER_NOTIONAL_USD` ÷ 1.01 ถูกตัดให้เท่านั้น (BUY และ SELL) แทน `NOT_PLACED`; |gap| > 3 เพดาน ⇒ `ORDER_CLIPPED_LARGE_GAP`
+- `LEGO_MAX_SESSION_BUY_ORDERS` (ค่าที่ 5, แนะนำ 3) ⇒ `SESSION_BUY_CAP_REACHED` (WARNING); dispatch lock schema 5
+- ไม่มี `LEGO_PROD_LIVE_ACK` แล้ว: PROD deploy รอบเดียว, runtime ตรวจ binding อย่างเดียว; `release-plan` / script PROD ใช้ window 30 session (funding 2)
+- decision ในเพดาน, ledger และ chain key ไม่เปลี่ยน (audit เทียบโค้ด checkpoint ตรงทุกตัว); binding ทุก release เปลี่ยน ⇒ plan และ deploy ใหม่นอกเวลาตลาด
+- ยัง NO-GO เงินจริงเหมือนเดิม (G4 / Webull / ซื้อ call)
+
+4 พฤศจิกายน (คำขอเจ้าของ): preflight เปลี่ยน gate buying power จาก FIX_C + 1% ของทุก bot เป็น **เงินที่เปิด order ถัดไปได้** (BUY แรก หรือ 1 order เต็มเพดาน + 1 order เต็มเพดานของ bot อื่น, ทั้งหมด + 1%); ต่ำกว่า FIX_C + 1% ⇒ WARN `buying_power_principal`.
 runtime ไม่เปลี่ยน (เช็กเงินก่อน Place ทุก BUY). runbook ข้อ 18.
 
 3 พฤศจิกายน (addendum bot ตัวที่ 2): คำสั่ง USAR ของเจ้าของจะ deploy ทับ QBTS ใน `lego-tick-prod` (ชื่อ function ผูกกับ environment) และไม่มี gate ไหนห้าม.

@@ -44,16 +44,17 @@ QBTS_PROFILE = {"data": [{"symbol": "QBTS", "status": "OC", "currency": "USD",
 
 
 def trade_values(**overrides):
+    # LEGO_MAX_SESSION_BUY_ORDERS defaults to the session cap here, so the sessions below
+    # are bound by the 10 orders alone; the BUY cap has sessions of its own further down.
+    caps = {"LEGO_MAX_ORDER_QUANTITY": "20", "LEGO_MAX_ORDER_NOTIONAL_USD": "150",
+            "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "10", **overrides}
     values = paper_values(
         LEGO_SYMBOL="QBTS", LEGO_FIX_C="1500", LEGO_DIFF="50", LEGO_LEAPS="100",
         LEGO_MODE="trade", LEGO_ACTIVE="true", LEGO_ALLOW_FRACTIONAL="true",
-        FIREBASE_DB_URL=PROD_DB, LEGO_MAX_ORDER_QUANTITY="20",
-        LEGO_MAX_ORDER_NOTIONAL_USD="150", LEGO_MAX_SESSION_ORDERS="10", **overrides)
-    runtime = load_runtime_config(values)
-    ack = rh.prod_live_acks(rh.inputs_from_runtime(runtime),
-                            runtime.deployment.expected_release_binding)["prefunded"]
-    assert ack and ack.startswith("LIVE-PROD-QBTS-q20-n150-o10-")
-    return {**values, "LEGO_PROD_LIVE_ACK": ack}
+        FIREBASE_DB_URL=PROD_DB, **caps)
+    assert load_runtime_config(values).allows_new_broker_mutation      # the binding alone
+    assert rh.assess(rh.inputs_from_runtime(load_runtime_config(values)))["ok"]
+    return values
 
 
 def path(start, signs, step="0.04"):
@@ -81,7 +82,7 @@ class TradeSession:
         for key, value in values.items():
             monkeypatch.setenv(key, value)
         self.runtime = load_runtime_config(values)
-        assert self.runtime.prod_live_gate_open and self.runtime.allows_new_broker_mutation
+        assert self.runtime.allows_new_broker_mutation
         self.cfg = Config("QBTS", FIX_C, DIFF, "bypass:1000", self.runtime.operator.strategy_id,
                           leaps_shares=LEAPS)
         self.placed, self.details, self.violations = [], {}, []
@@ -242,6 +243,73 @@ def test_a_volatile_session_stops_at_the_canary_order_cap_and_pages(monkeypatch)
     assert statuses.count("EXECUTION_LIMIT_BLOCKED") == 6
     assert observability.severity_for("EXECUTION_LIMIT_BLOCKED") == "ERROR"
     assert session.real > 0
+
+
+# ------------------------------------------- the BUY cap and the clip (2026-11-07)
+def test_a_falling_session_buys_three_times_then_reports_the_spent_buy_quota(monkeypatch):
+    """LEGO_MAX_SESSION_BUY_ORDERS=3: BUY 4 onward stops before its Preview, a SELL still goes."""
+    session = TradeSession(monkeypatch, real="38.63",
+                           values=trade_values(LEGO_MAX_SESSION_BUY_ORDERS="3"))
+    prices = path("10.82", "-----+++")                               # 5 falls of 4 %, then up
+    outs = [out for _body, out in session.run(prices)]
+    rows, intents, _state = audited(session)
+    assert session.violations == []
+    sides = [p["side"] for p in session.placed]
+    assert sides.count("BUY") == 3 and "SELL" in sides
+    capped = [i for i in intents.values() if i.get("session_buy_cap_reached") is True]
+    # Falls 4 and 5 and the first rise (still below FIX_C - DIFF) ask for a BUY; all three wait.
+    assert len(capped) == 3 and all(i["status"] == "NOT_PLACED" and i["side"] == "BUY" for i in capped)
+    assert all(not i.get("place_attempted") and not i.get("preview_result") for i in capped)
+    assert all(not i.get("execution_limit_blocked") for i in intents.values())
+    assert len(session.client.order_v3.preview_order.calls) == len(session.placed)
+    statuses = [observability.business_status({"dispatch": out}, 200) for out in outs]
+    assert statuses.count("SESSION_BUY_CAP_REACHED") == 3
+    assert observability.severity_for("SESSION_BUY_CAP_REACHED") == "WARNING"
+    import alerting
+    assert "SESSION_BUY_CAP_REACHED" not in alerting.ACTION_EVENTS
+    counter = FAKE_DB.reference(outbox.DISPATCH_LOCK_PATH).get() or {}
+    session_doc = next(doc["execution_session"] for doc in counter.values()
+                       if isinstance(doc, dict) and "execution_session" in doc)
+    assert session_doc["buy_count"] == 3 and session_doc["count"] == len(session.placed)
+
+
+def test_a_gap_above_the_notional_cap_is_clipped_and_closed_by_the_next_slot(monkeypatch):
+    """The owner's rule (ก): a 220-ish USD gap buys 148.5 now and the rest next slot."""
+    session = TradeSession(monkeypatch, real="38.63")
+    prices = path("10.82", "-0", step="0.15")                        # one fall of 15 %, then flat
+    bodies = [body for body, _out in session.run(prices)]
+    rows, intents, _state = audited(session)                          # trace_audit agrees
+    assert session.violations == []
+    first, second = session.placed[0], session.placed[1]
+    assert first["side"] == second["side"] == "BUY"
+    assert Decimal("148") <= first["quantity"] * Decimal(str(prices[1])) <= Decimal("148.52")
+    assert first["notional"] <= Decimal("150")                         # the dispatch cap held
+    assert rows[1]["clipped_from_quantity"] > float(first["quantity"])
+    assert rows[1]["order_caps"] == {"quantity": "20", "notional_usd": "150", "price_margin": "0.01"}
+    assert "clipped_from_quantity" not in rows[2]                     # the rest fits the caps
+    assert bodies[1]["order_clipped"]["from_quantity"] == rows[1]["clipped_from_quantity"]
+    assert "order_clipped_large_gap" not in bodies[1]
+    clipped = next(i for i in intents.values() if i.get("clipped_from_quantity"))
+    assert clipped["order_caps"] == rows[1]["order_caps"] and clipped["status"] == "FILLED"
+    assert all(not i.get("execution_limit_blocked") for i in intents.values())
+    # The two orders together close the gap: the position is back within DIFF of FIX_C.
+    value = (session.real + 100) * prices[-1]
+    assert abs(value - Decimal("1500")) <= Decimal("50")
+
+
+def test_a_gap_of_several_caps_is_clipped_and_pages_a_person(monkeypatch):
+    session = TradeSession(monkeypatch, real="38.63")
+    prices = path("10.82", "-", step="0.35")                         # 1500 -> ~975: gap ~525
+    body, out = session.run(prices)[1]
+    rows, intents, _state = audited(session)
+    assert body["order_clipped_large_gap"] is True
+    placed = session.placed[0]
+    assert placed["side"] == "BUY" and placed["quantity"] == 20      # the share cap binds first
+    assert observability.business_status({"decision": body, "dispatch": out}, 200) == (
+        "ORDER_CLIPPED_LARGE_GAP")
+    assert observability.severity_for("ORDER_CLIPPED_LARGE_GAP") == "ERROR"
+    import alerting
+    assert "ORDER_CLIPPED_LARGE_GAP" in alerting.ACTION_EVENTS
 
 
 def test_inside_the_band_no_buy_and_above_fifteen_no_order_at_all(monkeypatch):

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Continuous UAT release (UBER, FIX_C=10000). Run `python ops.py release-plan
-# --env-file deploy/uat-continuous.env.example --window-sessions 10 --reference-price <price>`
+# --env-file deploy/uat-continuous.env.example --window-sessions 30 --reference-price <price>`
 # first: it prints the three values required below for the release you mean to deploy.
 set -Eeuo pipefail
 : "${EXPECTED_CANDIDATE_HASH:?Exact tested candidate required}"
@@ -27,6 +27,8 @@ export LEGO_CANCEL_CONFIRM_GRACE_SECONDS_OVERRIDE=120
 # order per 15-minute slot (docs/AUDIT_20261005_TH.md). The authorization above is
 # bound to these exact values, so override them only together with release-plan.
 export LEGO_MAX_SESSION_ORDERS_OVERRIDE="${LEGO_MAX_SESSION_ORDERS_OVERRIDE:-26}"
+# At most 3 of them BUYs per market day (release_horizon.RECOMMENDED_SESSION_BUY_ORDERS).
+export LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE="${LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE:-3}"
 export LEGO_MAX_ORDER_QUANTITY_OVERRIDE="${LEGO_MAX_ORDER_QUANTITY_OVERRIDE:-30}"
 export LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE="${LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE:-1500}"
 export LEGO_SCHEDULE_OVERRIDE='* * * * *'

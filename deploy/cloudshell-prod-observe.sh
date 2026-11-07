@@ -346,13 +346,13 @@ export LEGO_CANCEL_CONFIRM_GRACE_SECONDS_OVERRIDE=120 LEGO_SESSION_KEY_MODE_OVER
 # no caps (the deploy script reads the caps from the environment only).
 export LEGO_RELEASE_AUTHORIZATION_OVERRIDE='' LEGO_TRADING_WINDOW_END_OVERRIDE=''
 export LEGO_MAX_ORDER_QUANTITY_OVERRIDE='' LEGO_MAX_ORDER_NOTIONAL_USD_OVERRIDE=''
-export LEGO_MAX_SESSION_ORDERS_OVERRIDE=''
-unset LEGO_PROD_LIVE_ACK LEGO_FUNDING_MODE_OVERRIDE
+export LEGO_MAX_SESSION_ORDERS_OVERRIDE='' LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE=''
+unset LEGO_FUNDING_MODE_OVERRIDE
 if [[ "${MODE}" == preview || "${MODE}" == paper ]]; then
     # The release a trade would carry, planned for this checkout: caps proportional to
-    # FIX_C, a window of 5 regular sessions, the binding (which includes the mode, so it
+    # FIX_C, a window of 30 regular sessions, the binding (which includes the mode, so it
     # can never authorize trade). A clean environment, as in the deploy script.
-    PLAN_ARGS=(--account-id-stdin --window-sessions 5 --reference-price "${PRICE}"
+    PLAN_ARGS=(--account-id-stdin --window-sessions 30 --reference-price "${PRICE}"
                --recommended-limits --enforce)
     [[ "${FUNDING}" == prefunded ]] || PLAN_ARGS+=(--initial-funding)
     PLAN_STATUS=0
@@ -379,7 +379,7 @@ for finding in json.load(sys.stdin)["assessment"]["findings"]:
     done < <(printf '%s' "${PLAN_JSON}" | python3 -c '
 import json, re, sys
 for key, value in json.load(sys.stdin)["deploy_env"].items():
-    if re.fullmatch(r"[A-Z0-9_]+", key) and key != "LEGO_PROD_LIVE_ACK":
+    if re.fullmatch(r"[A-Z0-9_]+", key):
         print(f"{key}={value}")')
     [[ "${LEGO_MODE_OVERRIDE}" == "${MODE}" && "${LEGO_ACTIVE_OVERRIDE}" == true ]] || \
         fail "release-plan did not return a ${MODE} release"

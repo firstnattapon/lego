@@ -445,7 +445,7 @@ def _replay_runtime(monkeypatch):
         "LEGO_MODE": "trade", "LEGO_ACTIVE": "true", "LEGO_CANDIDATE_HASH": "candidate",
         "LEGO_ALLOW_FRACTIONAL": "true", "FIREBASE_DB_URL": "https://test.firebaseio.com",
         "LEGO_MAX_ORDER_QUANTITY": "1000", "LEGO_MAX_ORDER_NOTIONAL_USD": "10000",
-        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_TRADING_WINDOW_END": "2030-01-01T00:00:00Z",
+        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "10", "LEGO_TRADING_WINDOW_END": "2030-01-01T00:00:00Z",
     }
     env["LEGO_RELEASE_AUTHORIZATION"] = load_runtime_config(
         env).deployment.expected_release_binding

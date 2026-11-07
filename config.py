@@ -237,15 +237,11 @@ class DeploymentProfile:
     candidate_hash: str
     release_authorization: str
     allow_fractional: bool = True
-    execution_limits: tuple[str, ...] = ("", "", "", "")
+    execution_limits: tuple[str, ...] = ("", "", "", "", "")
     trading_symbol: str = ""
     strategy_binding: str = ""
     session_key_mode: str = "release_window"
     recovery_policy: RecoveryPolicy = RecoveryPolicy()
-    # Production only: the acknowledgement of the exact release (see
-    # release_horizon.prod_live_ack). Deliberately NOT part of
-    # expected_release_binding, so existing UAT releases keep their binding.
-    prod_live_ack: str = ""
 
     def __post_init__(self) -> None:
         if self.session_key_mode not in {"market_day", "release_window"}:
@@ -306,28 +302,14 @@ class RuntimeConfig:
     deployment: DeploymentProfile
 
     @property
-    def prod_live_gate_open(self) -> bool:
-        """Real money needs the operator to echo the ack derived from this release.
-
-        The release binding alone is a fingerprint anyone can recompute, and it
-        is checked by the runtime but not by every deploy path (deploy.ps1 and a
-        plain `gcloud` deploy never looked at it). Enforcing the ack here makes
-        the gate independent of how the service was deployed. Non-production
-        environments are unaffected.
-        """
-        if self.deployment.environment != "PROD":
-            return True
-        from release_horizon import prod_live_gate_open
-        return prod_live_gate_open(self)
-
-    @property
     def allows_new_broker_mutation(self) -> bool:
-        # Preview needs the release (caps, window, binding) but not the real-money
-        # acknowledgement: the worker stops it before the chain fence and
-        # webull_io.place_market_order refuses it as well.
+        # The release binding (caps, window, candidate, account, strategy) is the one
+        # runtime gate, in every environment. The release_horizon findings are
+        # enforced where a release is planned and deployed (ops.py release-plan
+        # --enforce, deploy/cloudshell-all-in-one.sh); a plain fingerprint is not a
+        # secret, so a deploy path that skips those scripts skips those checks.
         return (self.operator.allows_new_intents
-                and self.deployment.release_is_authorized
-                and (self.operator.preview_only or self.prod_live_gate_open))
+                and self.deployment.release_is_authorized)
 
 
 def _load_bundle(env: Mapping[str, str]) -> DNABundle:
@@ -393,7 +375,6 @@ def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
         }, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
         session_key_mode=env.get("LEGO_SESSION_KEY_MODE", "release_window"),
         recovery_policy=recovery_policy,
-        prod_live_ack=env.get("LEGO_PROD_LIVE_ACK", "").strip(),
     )
     if deployment.environment == "PROD" and env.get("WEBULL_API_DEBUG", "").strip():
         # The SDK reads this variable itself: set, it writes every request and response

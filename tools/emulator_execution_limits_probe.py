@@ -25,18 +25,18 @@ def main():
     scope = "limit-probe-" + uuid.uuid4().hex
     ref = db.reference(f"{DISPATCH_LOCK_PATH}/{scope}")
     limits = ExecutionLimits.parse(("10", "1000", "1",
-        (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()))
+        (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(), "1"))
     key = str(limits.end.timestamp())
     try:
         claim = claim_chain_dispatch(scope, "worker")
         assert fence_chain_dispatch(scope, "first", "worker", claim["claim_token"])
         with ThreadPoolExecutor(max_workers=16) as pool:
-            results = list(pool.map(lambda _: reserve_attempt(scope, claim, "first", limits, key), range(16)))
+            results = list(pool.map(lambda _: reserve_attempt(scope, claim, "first", limits, key, side="BUY"), range(16)))
         assert all(r["reservation_count"] == 1 for r in results)
         assert clear_chain_dispatch_inflight(scope, "first", "worker", claim["claim_token"])
         assert fence_chain_dispatch(scope, "second", "worker", claim["claim_token"])
         try:
-            reserve_attempt(scope, claim, "second", limits, key)
+            reserve_attempt(scope, claim, "second", limits, key, side="SELL")
         except ExecutionLimitError:
             pass
         else:
