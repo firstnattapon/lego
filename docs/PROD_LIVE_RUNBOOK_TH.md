@@ -17,7 +17,7 @@
   binding เป็น fingerprint ไม่ใช่ความลับ: ผู้ที่แก้ env ของ function ได้ย่อมคำนวณใหม่ได้ (`python ops.py release-binding`)
 - การตรวจ `release_horizon` (caps ≤ 25% ของ principal, DNA ครอบ window, `session_key_mode` ฯลฯ) บังคับ**ตอน deploy**
   (`ops.py release-plan --enforce` และ script ตรวจซ้ำ) — deploy ทางอื่นที่ข้าม script จะข้ามการตรวจนี้ด้วย
-- ออร์เดอร์ที่เกินเพดานต่อใบ (จำนวนหุ้นหรือมูลค่า) ถูกตัดให้เท่าเพดาน (มูลค่า ÷ 1.01 เผื่อราคาขยับตอน dispatch) ทั้ง BUY และ SELL
+- ออร์เดอร์ที่หุ้นเกินเพดาน หรือมูลค่าเกินเพดาน ÷ 1.01 (≈ 148.5 ที่เพดาน 150; เผื่อราคาขยับตอน dispatch) ถูกตัดให้เท่านั้น ทั้ง BUY และ SELL
   ส่วนที่เหลือรอบถัดไปไล่ต่อ; ถ้า |gap| > 3 × เพดาน ยังส่งแต่แจ้ง `ORDER_CLIPPED_LARGE_GAP` ให้คนตรวจหุ้นกับแอป
 - BUY ได้ไม่เกิน `LEGO_MAX_SESSION_BUY_ORDERS` ต่อวันตลาด (ภายในเพดานรวม `LEGO_MAX_SESSION_ORDERS`); เกินแล้ว ⇒
   `SESSION_BUY_CAP_REACHED` (WARNING ไม่ปลุกคน) และไม่เรียก Preview; SELL ยังส่งได้และไม่คืนโควตา BUY
@@ -323,7 +323,7 @@ incident ของ health-policy ปิดเองหลัง 30 นาที�
    - ทุกแถว position ของ symbol มี `instrument_type` EQUITY / OPTION
    - LEAPS ที่ถือ (long CALL × multiplier) ≥ `LEGO_LEAPS` และหมดอายุหลัง window (อ่านไม่ได้ ⇒ BLOCK เว้นแต่ `LEGO_LEAPS_CONFIRMED=yes`)
    - ราคา < FIX_C/LEAPS
-   - order แรกพอดี caps canary (ไม่พอดี ⇒ WARN: จะถูกตัดให้เท่าเพดานและไล่ครบในประมาณ k order พร้อมบอกช่วงหุ้นจริงที่ควรถือก่อน)
+   - order แรกพอดี caps canary (ไม่พอดี ⇒ INFO: จะถูกตัดให้เท่าเพดานและไล่ครบในประมาณ k order พร้อมบอกช่วงหุ้นจริงที่ควรถือก่อน; WARN เมื่อ |gap| > 3 เพดาน เพราะจะมี `ORDER_CLIPPED_LARGE_GAP`)
    - route order history
 6. `ops.py release-plan` ที่ราคาจาก snapshot: `--recommended-limits` (canary 10%, BUY 3/วัน), `--window-sessions 30`, `--enforce`, finding `leaps_value` (BLOCK ≥ FIX_C/LEAPS)
 7. พิมพ์หัวสรุป release, kill switch และ rollback **ก่อน** deploy ⇒ `deploy/cloudshell-all-in-one.sh` ตรวจซ้ำแล้ว deploy **export ของ git HEAD** (`--source=<export>`) ⇒ พิสูจน์ DB อีกรอบ (รอบเดียว ไม่มี ack)

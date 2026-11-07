@@ -4,7 +4,8 @@
 An order the caps used to refuse slot after slot (`NOT_PLACED`) is now clipped to the caps, BUY and SELL alike, and the next slots rebalance the rest; a gap above three caps
 is still sent but raises `ORDER_CLIPPED_LARGE_GAP`. `LEGO_MAX_SESSION_BUY_ORDERS` (the fifth execution limit) bounds the BUYs inside the session counter
 (`SESSION_BUY_CAP_REACHED`, a warning). `LEGO_PROD_LIVE_ACK` is gone: a PROD release is judged and deployed in one run and the runtime checks its binding, as in UAT.
-`ops.py release-plan` and the PROD scripts plan 30 sessions by default (funding: 2). Decisions inside the caps, the ledger and the chain key are unchanged;
+`ops.py release-plan` and the PROD scripts plan 30 sessions by default (funding: 2). Decisions within the caps (at most the share cap and
+the notional cap / 1.01, which a 1 % dispatch drift cannot push over the cap), the ledger and the chain key are unchanged;
 every release binding changes, so every release is planned again. Live acceptance remains **NO-GO** ([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)).
 
 30 October Webull API audit: [every endpoint LEGO calls checked against Webull Thailand's official reference, the SDK and PROD's own answers](docs/WEBULL_API_AUDIT_20261030_TH.md).

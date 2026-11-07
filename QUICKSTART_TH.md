@@ -124,8 +124,10 @@ python ops.py release-binding
 ```
 
 นำค่าที่ได้ไป deploy revision เดิมด้วย `-Mode trade -Active $true
--ReleaseAuthorization VALUE`. Binding เปลี่ยนตาม candidate, environment และ account;
-นำของ UAT ไปเปิด PROD ไม่ได้
+-ReleaseAuthorization VALUE` พร้อม execution limits ครบ 5 ค่า (`-MaxOrderQuantity`,
+`-MaxOrderNotionalUsd`, `-MaxSessionOrders`, `-MaxSessionBuyOrders`, `-TradingWindowEnd`;
+ขาดค่าใด = ไม่มี order ใหม่). Binding เปลี่ยนตาม candidate, environment, account และ limits;
+นำของ UAT ไปเปิด PROD ไม่ได้ (`deploy.ps1` ไม่เปิด PROD เงินจริง ใช้ `deploy/cloudshell-prod-live.sh`)
 
 การทดสอบ UAT lifecycle ต้องระบุ account alias, symbol, side, quantity และวงเงินสูงสุด,
 แตะเฉพาะ order ID ของตัวเอง และต้องได้ nonzero fill จริงจึงผ่าน A19. Shared test account

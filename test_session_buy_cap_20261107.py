@@ -14,6 +14,7 @@ from datetime import timedelta
 import pytest
 
 import alerting
+import execution_limits as limits_module
 import observability
 from conftest import FAKE_DB
 from execution_limits import (ENV_KEYS, WORKER_SCHEMA_VERSION, ExecutionLimitError,
@@ -166,3 +167,48 @@ def test_the_new_statuses_page_only_for_the_large_clipped_gap():
     assert observability.business_status({"dispatch": {"results": [
         {"status": "NOT_PLACED", "session_buy_cap_reached": True},
         {"status": "NOT_PLACED", "execution_limit_blocked": True}]}}, 200) == "EXECUTION_LIMIT_BLOCKED"
+
+
+# ------------------------------------------------------------------ the dispatch, both paths
+def spent_buy_quota_runtime(monkeypatch):
+    """A UAT dispatch of one BUY whose session already holds its single BUY reservation."""
+    from dataclasses import replace
+    from test_dispatch_overshoot import dispatch_fixture
+    runtime, intent, claim, client, _ = dispatch_fixture(monkeypatch)
+    values = ("1000", "10000", "10", "2030-01-01T00:00:00Z", "1")
+    deployment = replace(runtime.deployment, execution_limits=values)
+    runtime = replace(runtime, deployment=replace(
+        deployment, release_authorization=deployment.expected_release_binding))
+    policy = ExecutionLimits.parse(values)
+    key = limits_module.session_key_for(runtime.deployment.session_key_mode, policy, now=NOW)
+    scope = str(claim.get("dispatch_scope_key") or intent["chain_key"])
+    FAKE_DB.reference(f"{DISPATCH_LOCK_PATH}/{scope}").update({"execution_session": {
+        "key": key, "end_epoch": policy.end.timestamp(), "count": 1, "buy_count": 1,
+        "last_run_id": "earlier-buy"}, "worker_schema_version": WORKER_SCHEMA_VERSION})
+    assert intent["side"] == "BUY"
+    return runtime, intent, claim, client
+
+
+def test_a_spent_buy_quota_stops_the_buy_before_its_preview(monkeypatch):
+    import execution_service as execution
+    from test_dispatch_overshoot import CFG
+    runtime, intent, claim, client = spent_buy_quota_runtime(monkeypatch)
+    result = execution._dispatch_or_reconcile_one(client, None, CFG, intent, claim, runtime)
+    assert result["status"] == "NOT_PLACED" and result["session_buy_cap_reached"] is True
+    assert not result.get("execution_limit_blocked")
+    assert not client.order_v3.preview_order.calls and not client.order_v3.place_order.calls
+
+
+def test_the_reservation_itself_reports_the_buy_quota_when_the_advisory_read_missed_it(monkeypatch):
+    """The transactional reservation is the authority: same status, never EXECUTION_LIMIT_BLOCKED."""
+    import execution_service as execution
+    from test_dispatch_overshoot import CFG
+    runtime, intent, claim, client = spent_buy_quota_runtime(monkeypatch)
+    monkeypatch.setattr(limits_module, "buy_quota_spent", lambda *_a: False)   # a stale advisory read
+    result = execution._dispatch_or_reconcile_one(client, None, CFG, intent, claim, runtime)
+    assert result["status"] == "NOT_PLACED" and result["session_buy_cap_reached"] is True
+    assert not result.get("execution_limit_blocked")
+    assert len(client.order_v3.preview_order.calls) == 1               # it got as far as the Preview
+    assert not client.order_v3.place_order.calls
+    assert observability.business_status({"dispatch": {"results": [result]}}, 200) == (
+        "SESSION_BUY_CAP_REACHED")

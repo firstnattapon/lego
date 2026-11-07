@@ -379,10 +379,12 @@ def judge(facts: dict, params: Params) -> dict:
                         "no whole number of real shares fits these caps")
                 funding_hint = (" or, for this first BUY, deploy the one-off funding release "
                                 "(LEGO_FUNDING_MODE_OVERRIDE=initial-funding)" if side == "BUY" else "")
+                large = abs(gap) > notional_cap * LARGE_GAP_CAP_MULTIPLE
                 big = (f"; |gap| is more than {int(LARGE_GAP_CAP_MULTIPLE)} caps, so every clipped "
-                       "order raises ORDER_CLIPPED_LARGE_GAP until it is closer"
-                       if abs(gap) > notional_cap * LARGE_GAP_CAP_MULTIPLE else "")
-                add("first_order", WARN, f"the first order would be a {side} of about "
+                       "order raises ORDER_CLIPPED_LARGE_GAP (a page) until it is closer"
+                       if large else "")
+                # INFO: clipping is the rule now. WARN only when the clipped order will page.
+                add("first_order", WARN if large else INFO, f"the first order would be a {side} of about "
                     f"{_money(abs(gap))} USD ({_plain(quantity)} shares), more than the canary caps "
                     f"({_plain(notional_cap)} USD / {_plain(quantity_cap)} shares): it is clipped to "
                     f"the caps and the gap closes over about {steps} orders "

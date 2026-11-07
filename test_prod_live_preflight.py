@@ -230,18 +230,19 @@ def test_the_live_price_is_judged_against_the_leaps_band(price, severity):
     assert finding(report, "leaps_value")["severity"] == severity
 
 
-@pytest.mark.parametrize("real,fits,side", [
-    ("0", False, "BUY"), ("24", False, "BUY"), ("25", True, "BUY"), ("38", True, None),
-    ("52", True, "SELL"), ("53", False, "SELL"), ("120", False, "SELL"),
+@pytest.mark.parametrize("real,fits,side,severity", [
+    ("0", False, "BUY", "INFO"), ("24", False, "BUY", "INFO"), ("25", True, "BUY", "INFO"),
+    ("38", True, None, "INFO"), ("52", True, "SELL", "INFO"), ("53", False, "SELL", "INFO"),
+    ("120", False, "SELL", "WARN"),                               # |gap| 880 > 3 x 150: it pages
 ])
-def test_a_first_order_above_the_canary_caps_is_clipped_not_refused(real, fits, side):
-    """Since 2026-11-07 an order above the caps is clipped to them (a WARN), never a BLOCK."""
+def test_a_first_order_above_the_canary_caps_is_clipped_not_refused(real, fits, side, severity):
+    """Since 2026-11-07 an order above the caps is clipped to them: INFO, or WARN when it pages."""
     report = pf.judge(facts(positions=[equity(real), option()]), params())
     assert "first_order" not in report["blocking"]
     first = report["derived"]["first_order"]
     assert (first or {}).get("side") == side
-    severity = finding(report, "first_order")["severity"]
-    assert severity == ("INFO" if fits else "WARN")
+    assert finding(report, "first_order")["severity"] == severity
+    assert ("ORDER_CLIPPED_LARGE_GAP" in finding(report, "first_order")["message"]) is (severity == "WARN")
     if not fits:
         assert first["clipped"] is True
         message = finding(report, "first_order")["message"]
@@ -253,7 +254,7 @@ def test_a_flat_account_is_told_how_many_shares_to_buy_first():
     report = pf.judge(facts(positions=[option()]), params())
     first = report["derived"]["first_order"]
     assert (first["side"], first["notional_usd"]) == ("BUY", "418.00")
-    assert finding(report, "first_order")["severity"] == "WARN"
+    assert finding(report, "first_order")["severity"] == "INFO"            # 418 USD: below 3 caps
     assert "about 3 orders (3 BUYs per session)" in finding(report, "first_order")["message"]
 
 

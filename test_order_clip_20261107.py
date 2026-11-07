@@ -21,7 +21,7 @@ from decimal import Decimal
 import pytest
 
 import execution_service as execution
-from execution_limits import ExecutionLimits
+from execution_limits import ExecutionLimitError, ExecutionLimits
 from lego_one_row import (CLIP_PRICE_MARGIN, PASS_SELL_EXCEEDS_REAL, READY_BUY, READY_SELL,
                           Config, OrderCaps, build_decision, clip_quantity, compute_row)
 from lego_state import chain_key, config_hash
@@ -42,13 +42,13 @@ def shares_for(value_usd, price):
 def test_a_220_usd_gap_buys_148_5_now_and_the_70_usd_rest_next_slot():
     price = 10.0
     holdings = shares_for(1500 - 220, price)                   # 128 shares: short 220 USD
-    first = build_decision(QBTS, price, holdings, 1, CAPS)
+    first = build_decision(QBTS, price, holdings, 1, caps=CAPS)
     assert (first.status, first.side) == (READY_BUY, "BUY")
     assert first.quantity == 14.85                             # 148.51 / 10, rounded down
     assert first.quantity * price <= 150 / 1.01 + 1e-9
     assert build_decision(QBTS, price, holdings, 1).quantity == 22.0   # unclipped: 220 USD
     after = holdings + first.quantity                          # filled: short ~71.5 USD
-    second = build_decision(QBTS, price, after, 1, CAPS)
+    second = build_decision(QBTS, price, after, 1, caps=CAPS)
     assert second.quantity == build_decision(QBTS, price, after, 1).quantity   # fits: untouched
     assert abs((after + second.quantity) * price - 1500) <= QBTS.diff
 
@@ -56,34 +56,66 @@ def test_a_220_usd_gap_buys_148_5_now_and_the_70_usd_rest_next_slot():
 def test_a_sell_above_the_cap_is_clipped_the_same_way():
     price = 10.0
     holdings = shares_for(1500 + 400, price)                   # 400 USD above FIX_C
-    sell = build_decision(QBTS, price, holdings, 1, CAPS)
+    sell = build_decision(QBTS, price, holdings, 1, caps=CAPS)
     assert (sell.status, sell.side, sell.quantity) == (READY_SELL, "SELL", 14.85)
 
 
 def test_the_share_cap_binds_when_it_is_tighter_than_the_notional_cap():
     price = 5.0                                                # 20 shares = 100 USD < 148.5
     holdings = shares_for(1500 - 400, price)
-    assert build_decision(QBTS, price, holdings, 1, CAPS).quantity == 20.0
+    assert build_decision(QBTS, price, holdings, 1, caps=CAPS).quantity == 20.0
 
 
 # ------------------------------------------------------------------ nothing else moves
+BUDGET = Decimal("150") / (1 + CLIP_PRICE_MARGIN)              # ~148.51 USD
+
+
 @pytest.mark.parametrize("price,gap", list(itertools.product(
     (0.37, 1.0, 7.03, 9.99, 10.82, 14.6, 27.68, 148.0),
-    (-149.99, -140.0, -60.0, -50.01, 0.0, 50.01, 60.0, 140.0, 149.99))))
-def test_every_order_inside_the_caps_is_sized_exactly_as_before(price, gap):
+    (-149.99, -149.0, -148.6, -148.4, -140.0, -60.0, -50.01, 0.0, 50.01, 60.0, 140.0, 148.4,
+     148.6, 149.0, 149.99))))
+def test_every_order_inside_the_budget_is_sized_exactly_as_before(price, gap):
+    """Within quantity cap and notional / 1.01 nothing moves; above it the clip applies."""
     holdings = (1500 + gap) / price
     plain = build_decision(QBTS, price, holdings, 1)
-    capped = build_decision(QBTS, price, holdings, 1, OrderCaps(Decimal("1000000"), Decimal("150")))
-    if Decimal(str(plain.quantity)) * Decimal(str(price)) <= 150:
+    capped = build_decision(QBTS, price, holdings, 1, caps=OrderCaps(Decimal("1000000"), Decimal("150")))
+    if Decimal(str(plain.quantity)) * Decimal(str(price)) <= BUDGET:
         assert capped == plain
+    else:
+        assert capped.quantity < plain.quantity and (capped.status, capped.side) == (plain.status, plain.side)
+        assert Decimal(str(capped.quantity)) * Decimal(str(price)) <= BUDGET
+
+
+def test_an_order_between_the_budget_and_the_cap_is_clipped_so_dispatch_never_refuses_it():
+    """149.50 USD fits 150 at the decision price but not after a 1 % rise: the plan clips it."""
+    limits = ExecutionLimits.parse(("20", "150", "10", "2030-01-01T00:00:00Z", "3"))
+    holdings = shares_for(1500 - 149.5, 10.0)
+    plain = build_decision(QBTS, 10.0, holdings, 1)
+    assert plain.quantity == 14.95
+    with pytest.raises(ExecutionLimitError):
+        limits.check(str(plain.quantity), "10.1", now=NOW)           # unclipped: refused at +1 %
+    clipped = build_decision(QBTS, 10.0, holdings, 1, caps=CAPS)
+    assert clipped.quantity == 14.85
+    limits.check(str(clipped.quantity), "10.1", now=NOW)               # clipped: always sent
+
+
+def test_the_clip_margin_is_the_dispatch_drift_limit():
+    import release_horizon
+    assert CLIP_PRICE_MARGIN == Decimal(str(execution.DEFAULT_MAX_DISPATCH_PRICE_DRIFT_BPS)) / 10000
+    assert CLIP_PRICE_MARGIN == release_horizon.MAX_DISPATCH_DRIFT
+
+
+def test_the_caps_are_keyword_only():
+    with pytest.raises(TypeError):
+        build_decision(QBTS, 10.0, 128.0, 1, CAPS)
 
 
 @pytest.mark.parametrize("signal", [0, 1])
 def test_pass_rows_are_untouched_by_the_caps(signal):
     for holdings in (shares_for(1500, 10), shares_for(1530, 10)):   # inside DIFF
-        assert build_decision(QBTS, 10.0, holdings, signal, CAPS) == build_decision(
+        assert build_decision(QBTS, 10.0, holdings, signal, caps=CAPS) == build_decision(
             QBTS, 10.0, holdings, signal)
-    zero = build_decision(QBTS, 10.0, shares_for(1000, 10), 0, CAPS)
+    zero = build_decision(QBTS, 10.0, shares_for(1000, 10), 0, caps=CAPS)
     assert zero.status != READY_BUY and zero.quantity == 0.0
 
 
@@ -101,7 +133,7 @@ def test_whole_shares_that_cannot_fit_keep_the_old_refusal():
                    decimal_precision=0, quantity_increment=1.0)
     price = 200.0                                              # one share > 148.5 USD
     holdings = 5.0                                             # 1000 USD: short 500
-    plain, capped = build_decision(whole, price, holdings, 1), build_decision(whole, price, holdings, 1, CAPS)
+    plain, capped = build_decision(whole, price, holdings, 1), build_decision(whole, price, holdings, 1, caps=CAPS)
     assert capped == plain and plain.quantity == 2.0           # dispatch refuses it, as it always did
 
 
@@ -115,7 +147,7 @@ def test_a_leaps_sell_that_needs_more_than_the_real_shares_stays_a_pass():
     """The SELL-exceeds-real test runs on the unclipped quantity, as before the clip."""
     leaps = Config("QBTS", 1500.0, 50.0, "bypass:6500", "shannon_demon_lego_v2",
                    decimal_precision=2, quantity_increment=0.01, leaps_shares=100.0)
-    decision = build_decision(leaps, 16.0, 5.0, 1, CAPS)       # (100 + 5) x 16 = 1680: SELL 11.25 > 5
+    decision = build_decision(leaps, 16.0, 5.0, 1, caps=CAPS)       # (100 + 5) x 16 = 1680: SELL 11.25 > 5
     assert decision.status == PASS_SELL_EXCEEDS_REAL
     assert decision == build_decision(leaps, 16.0, 5.0, 1)
 
@@ -130,7 +162,7 @@ def test_the_clip_target_survives_the_largest_dispatch_drift():
 
 
 def intent(cfg, price, holdings, caps):
-    decision = build_decision(cfg, price, holdings, 1, caps)
+    decision = build_decision(cfg, price, holdings, 1, caps=caps)
     out = {"run_id": "c" * 32, "chain_key": chain_key(cfg), "status": "PENDING_DISPATCH",
            "row_status": decision.status, "symbol": cfg.symbol, "side": decision.side,
            "quantity": decision.quantity, "step": 0, "signal": 1, "decision_price": price,
@@ -201,7 +233,7 @@ def test_only_a_clipped_row_carries_the_clip_and_its_caps():
 
 @pytest.mark.parametrize("price,holdings", [(10.0, 128.0), (10.0, 190.0), (5.0, 220.0), (7.03, 138.63)])
 def test_trace_audit_recomputes_a_clipped_decision(price, holdings):
-    engine = build_decision(QBTS, price, holdings, 1, CAPS)
+    engine = build_decision(QBTS, price, holdings, 1, caps=CAPS)
     audit = trace_audit.recompute_decision({
         "P_n": price, "holdings": holdings, "FIX_C": 1500.0, "DIFF": 50.0, "signal": 1, "P0": None,
         "dp": 2, "inc": 0.01, "strategy": "x_v2", "order_caps": CAPS.snapshot()})

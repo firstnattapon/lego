@@ -194,9 +194,10 @@ def recompute_decision(i: dict) -> dict:
             qty = min(qty, float(ceiling))
         caps = i.get("order_caps")
         if caps and qty > 0 and not exceeds_real:       # lego_one_row.clip_quantity
-            cap_qty, cap_usd = _dec(caps["quantity"]), _dec(caps["notional_usd"])
-            if _dec(qty) > cap_qty or _dec(qty) * _dec(price) > cap_usd:
-                limit = min(cap_qty, cap_usd / (1 + _dec(caps["price_margin"])) / _dec(price))
+            cap_qty = _dec(caps["quantity"])
+            budget = _dec(caps["notional_usd"]) / (1 + _dec(caps["price_margin"]))
+            if _dec(qty) > cap_qty or _dec(qty) * _dec(price) > budget:
+                limit = min(cap_qty, budget / _dec(price))
                 clipped = (float((limit / _dec(inc)).to_integral_value(rounding=ROUND_DOWN) * _dec(inc))
                            if v2 else float(limit.quantize(Decimal(1).scaleb(-dp), rounding=ROUND_DOWN)))
                 qty = clipped if clipped > 0 else qty

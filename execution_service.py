@@ -1218,8 +1218,8 @@ def _dispatch_quote_safety(cfg, intent: dict, fresh: dict, *,
     price_drift_bps = abs(fresh_price / decision_price - 1.0) * 10_000.0
     # The caps the decision clipped with (None for an intent written before clipping).
     caps = OrderCaps.from_snapshot(intent.get("order_caps"))
-    original = build_decision(cfg, decision_price, decision_holdings, signal, caps)
-    current = build_decision(cfg, fresh_price, fresh_holdings, signal, caps)
+    original = build_decision(cfg, decision_price, decision_holdings, signal, caps=caps)
+    current = build_decision(cfg, fresh_price, fresh_holdings, signal, caps=caps)
     intent_side = str(intent.get("side") or "").strip().upper()
     quantum = 10.0 ** (-cfg.decimal_precision)
     quantity_tolerance = max(1e-12, quantum / 2.0)

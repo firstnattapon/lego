@@ -304,21 +304,22 @@ class Decision:
 
 
 def clip_quantity(cfg: Config, qty: float, price: float, caps: OrderCaps | None) -> float:
-    """*qty*, or the largest broker quantity within *caps* when *qty* would breach them.
+    """*qty*, or the largest broker quantity within the budget of *caps*.
 
-    Only an order that execution_limits.check would refuse at the decision price is
-    touched (quantity above the cap, or quantity x price above the notional cap), so
-    every order that was sent before is sized bit for bit as before. A clipped order
-    targets notional / (1 + margin), rounded down to the broker's increment. When not
-    even one increment fits, *qty* is returned unchanged and the dispatch refuses it
-    as it always did.
+    The budget is the quantity cap and the notional cap divided by (1 + margin): an
+    order within it still fits the notional cap at every dispatch price the drift guard
+    lets through, and is sized bit for bit as before. An order above it is clipped to
+    it, min(quantity cap, notional / (1 + margin) / price), rounded down to the broker's
+    increment. When not even one increment fits, *qty* is returned unchanged and the
+    dispatch refuses it as it always did.
     """
     if caps is None or not qty > 0:
         return qty
     q, p = Decimal(str(qty)), Decimal(str(price))
-    if q <= caps.quantity and q * p <= caps.notional:
+    budget = caps.notional / (1 + caps.price_margin)
+    if q <= caps.quantity and q * p <= budget:
         return qty
-    limit = min(caps.quantity, caps.notional / (1 + caps.price_margin) / p)
+    limit = min(caps.quantity, budget / p)
     if cfg.strategy_id.endswith("_v2"):
         increment = Decimal(str(cfg.quantity_increment))
         clipped = (limit / increment).to_integral_value(rounding=ROUND_DOWN) * increment
@@ -328,7 +329,7 @@ def clip_quantity(cfg: Config, qty: float, price: float, caps: OrderCaps | None)
     return clipped if clipped > 0 else qty
 
 
-def build_decision(cfg: Config, price: float, holdings: float, signal: int,
+def build_decision(cfg: Config, price: float, holdings: float, signal: int, *,
                    caps: OrderCaps | None = None) -> Decision:
     """One slot's decision from the quote and the broker's REAL shares.
 
@@ -550,7 +551,7 @@ def compute_row(cfg: Config, snapshot: dict, anchor: Anchor | None,
     # itself from the real reading.
     real_holdings = float(snapshot.get("holdings", 0.0) or 0.0)
     holdings = effective_holdings(real_holdings, cfg.leaps_shares)
-    dec = build_decision(cfg, price, real_holdings, signal, caps)
+    dec = build_decision(cfg, price, real_holdings, signal, caps=caps)
     # The same decision without caps: equal unless the caps clipped the order.
     clipped_from = (build_decision(cfg, price, real_holdings, signal).quantity
                     if caps is not None else dec.quantity)
