@@ -69,7 +69,7 @@ gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.serv
 - บัญชีที่ว่างจะได้ทุกแถวเป็น `READY_BUY ≈ FIX_C` เพราะระบบใช้ holdings จริง
   observe พิสูจน์การอ่าน token และ quote ได้ แต่ไม่ได้จำลองกำไร ถ้าจะจำลองด้วยเงินปลอมให้ใช้ UAT
 - หยุดได้ด้วย `gcloud scheduler jobs pause lego-tick-prod --location=asia-southeast1 --project=lego-firebase` เพราะไม่มี order ให้ reconcile
-- เงินจริงเป็น release แยกที่ต้องมี acknowledgement ดู [PROD_LIVE_RUNBOOK_TH.md](PROD_LIVE_RUNBOOK_TH.md) สคริปต์นี้เปิดเงินจริงไม่ได้
+- เงินจริงเป็น release แยก (`deploy/cloudshell-prod-live.sh`) ดู [PROD_LIVE_RUNBOOK_TH.md](PROD_LIVE_RUNBOOK_TH.md) สคริปต์นี้เปิดเงินจริงไม่ได้
 
 ## Preview: ทุกขั้นเหมือนเงินจริง ยกเว้น Place
 
@@ -94,8 +94,10 @@ LEGO_MODE_OVERRIDE=preview bash deploy/cloudshell-prod-observe.sh
 | บัญชีมีหุ้นประมาณ FIX_C แล้วหรือยัง | ยังไม่มี: ใช้ caps แบบ funding (≤ 125% ของ FIX_C) เพราะ order แรกของบัญชีว่างคือ FIX_C ทั้งก้อน; มีแล้ว: ใช้ caps แบบ canary | `LEGO_FUNDING_MODE_OVERRIDE=initial-funding` หรือ `prefunded` |
 | Webull ยืนยันแล้วหรือยังว่า Preview ไม่สร้าง order | repo ยังไม่ได้ยืนยันเรื่องนี้กับหน้าเอกสารเต็ม ([runbook ข้อ 11](PROD_LIVE_RUNBOOK_TH.md)) | `LEGO_PREVIEW_CONFIRMED=yes` |
 
-caps, window 5 session และ release authorization คำนวณให้เองด้วย `ops.py release-plan --recommended-limits`
-release นี้ผูกกับ mode จึงใช้เปิด trade ไม่ได้ และ preview ไม่มี `LEGO_PROD_LIVE_ACK` ไม่ว่ากรณีใด
+caps (รวม BUY 3 ต่อ session), window 30 session และ release authorization คำนวณให้เองด้วย `ops.py release-plan --recommended-limits`
+release นี้ผูกกับ mode จึงใช้เปิด trade ไม่ได้ (ไม่มี `LEGO_PROD_LIVE_ACK` แล้วตั้งแต่ 7 พ.ย. 2026)
+หมายเหตุ: preview/paper ไม่ผ่านตัวนับ order ต่อวัน (เพดานรวมและเพดาน BUY) จึงซื้อได้เกิน 3 ครั้งต่อวัน ต่างจากเงินจริง;
+ส่วนการตัดออร์เดอร์ให้เท่าเพดานต่อใบมีผลใน preview/paper เหมือนเงินจริง
 
 **ก่อนรัน**
 - **มีเงินสด USD อย่างน้อยเท่าขนาด order:** บัญชีว่างจะได้ BUY ประมาณ FIX_C ทุก slot จึงต้องมีเงินสดประมาณ FIX_C + fee เช่น FIX_C 450 ต้องมีประมาณ 460
@@ -120,7 +122,7 @@ intent ที่ถูกกันก่อนถึงจุดตัดจะ�
 - fill, fee จาก fill, การกู้ order และ cancel
 
 **กลับไป observe:** รันคำสั่งเดิมโดยไม่ใส่ `LEGO_MODE_OVERRIDE` chain เดิมยังใช้ต่อได้ เพราะ mode ไม่ได้อยู่ใน chain key
-**ต่ออายุหลังครบ 5 session:** รันคำสั่ง preview เดิมซ้ำ
+**ต่ออายุหลังครบ 30 session:** รันคำสั่ง preview เดิมซ้ำ
 
 ## Paper: หุ้นและ fill ปลอม ให้ตาราง 17 คอลัมน์เดิน
 

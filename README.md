@@ -1,5 +1,12 @@
 # LEGO PRINCIPAL v2
 
+7 November change: [orders above the per-order caps are clipped to them, at most 3 BUYs per market day, no PROD acknowledgement, a 30-session window](docs/CHANGE_20261107_TH.md).
+An order the caps used to refuse slot after slot (`NOT_PLACED`) is now clipped to the caps, BUY and SELL alike, and the next slots rebalance the rest; a gap above three caps
+is still sent but raises `ORDER_CLIPPED_LARGE_GAP`. `LEGO_MAX_SESSION_BUY_ORDERS` (the fifth execution limit) bounds the BUYs inside the session counter
+(`SESSION_BUY_CAP_REACHED`, a warning). `LEGO_PROD_LIVE_ACK` is gone: a PROD release is judged and deployed in one run and the runtime checks its binding, as in UAT.
+`ops.py release-plan` and the PROD scripts plan 30 sessions by default (funding: 2). Decisions inside the caps, the ledger and the chain key are unchanged;
+every release binding changes, so every release is planned again. Live acceptance remains **NO-GO** ([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)).
+
 30 October Webull API audit: [every endpoint LEGO calls checked against Webull Thailand's official reference, the SDK and PROD's own answers](docs/WEBULL_API_AUDIT_20261030_TH.md).
 All 20 routes match. The order-history route was misnamed in the operation map (the reconcile fallback ran as an unclassified call), and a PROD token was
 judged by the expiry copied into Secret Manager when it was issued instead of the one Webull's Check Token answers now; both are fixed, and the wrapper asks
@@ -58,7 +65,7 @@ The 1–4 October UAT stall was not a money-path defect: a 24-hour approval wind
 session, the DNA (`bypass:500`) was due to end that week and the caps (36,000 USD vs a 10,000 USD
 principal) could never bind. `python ops.py release-plan` now checks window, DNA and caps before
 every release and prints the values to deploy; renewal alerts fire 48 hours ahead; a PROD live
-release needs `LEGO_PROD_LIVE_ACK` bound to its caps and window
+release needed `LEGO_PROD_LIVE_ACK` bound to its caps and window (removed 7 November, below)
 ([runbook](docs/PROD_LIVE_RUNBOOK_TH.md)). Nothing renews itself and PROD stays observe/inactive
 by default. Live acceptance remains **NO-GO** (no UAT BUY/SELL fills or alert delivery proven yet).
 
@@ -73,7 +80,7 @@ Continuous execution v4: [final implementation review](docs/implementation_plan_
 This candidate adds one-shot durable cancellation, market-day quotas, release
 binding v4 and immutable transition audit. Production remains **NO-GO** pending
 live UAT fill/endurance, deployment and alert evidence. Until those gates pass, deploy
-Production only in observe/inactive mode (the acknowledged live path is documented in
+Production only in observe/inactive mode (the live path is documented in
 [PROD_LIVE_RUNBOOK_TH.md](docs/PROD_LIVE_RUNBOOK_TH.md)). The older review below is historical.
 
 23 September readiness hardening: [implementation plan and incident evidence](docs/IMPLEMENTATION_PLAN_20260923_TH.md).

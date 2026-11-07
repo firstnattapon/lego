@@ -1,4 +1,8 @@
-# Runbook: เปิดเงินจริง (PROD live) แบบมี acknowledgement
+# Runbook: เปิดเงินจริง (PROD live)
+
+> **เปลี่ยน 7 พ.ย. 2026** ([CHANGE_20261107_TH.md](CHANGE_20261107_TH.md)): ลบ `LEGO_PROD_LIVE_ACK` แล้ว (deploy รอบเดียว),
+> เพิ่ม `LEGO_MAX_SESSION_BUY_ORDERS` (BUY ≤ 3 ต่อวัน), ออร์เดอร์ที่เกินเพดานถูก **ตัดให้เท่าเพดาน** แทนการไม่ส่ง,
+> window ตั้งต้น **30 session**. ข้อความเรื่อง ack ในหัวข้ออื่นด้านล่าง (บันทึกเก่า) ให้ถือตามหัวข้อนี้แทน
 
 **สถานะ: NO-GO จนกว่า gate ด้านล่างผ่านด้วยหลักฐานจริง** — เอกสารนี้อธิบายเส้นทางที่ source รองรับ ไม่ได้อนุมัติให้เปิด
 ค่าเริ่มต้นของ PROD คือ observe/inactive; PR ที่เพิ่มเส้นทางนี้ไม่ได้เปิดเงินจริงให้ใคร
@@ -6,13 +10,17 @@
 
 ## หลักการ
 
-- runtime ส่ง order PROD ได้เมื่อครบทุกข้อ: `LEGO_MODE=trade`, `LEGO_ACTIVE=true`, release authorization ตรง,
-  caps 4 ค่า (`LEGO_MAX_ORDER_QUANTITY`, `LEGO_MAX_ORDER_NOTIONAL_USD`, `LEGO_MAX_SESSION_ORDERS`, `LEGO_TRADING_WINDOW_END`)
-  อยู่ในหน้าต่างอนุมัติ และ **`LEGO_PROD_LIVE_ACK` ตรงกับ release นี้** — ขาดข้อใดข้อหนึ่ง = ไม่ส่ง (fail closed)
-- ack ผูกกับ symbol, quantity cap, notional cap, orders cap, เวลาสิ้นสุด window, โหมด funding และ release binding
-  จึงนำ ack ของ release อื่นมาใช้ไม่ได้ และ release ที่ไม่ผ่านการตรวจแบบ static จะไม่มี ack ให้เลย
-- ack เป็น **จุดตรวจทานของมนุษย์ ไม่ใช่ลายเซ็นเข้ารหัส**: ผู้ที่แก้ env ของ function ได้ย่อมใส่ ack เองได้
-  ป้องกันการ deploy ผิดพลาดและ rollout ที่ไม่ได้อ่านตัวเลข ไม่ได้ป้องกันผู้ที่มีสิทธิ์ IAM แก้ deployment
+- runtime ส่ง order PROD ได้เมื่อครบทุกข้อ: `LEGO_MODE=trade`, `LEGO_ACTIVE=true`, release authorization ตรง และ
+  caps 5 ค่า (`LEGO_MAX_ORDER_QUANTITY`, `LEGO_MAX_ORDER_NOTIONAL_USD`, `LEGO_MAX_SESSION_ORDERS`, `LEGO_TRADING_WINDOW_END`,
+  `LEGO_MAX_SESSION_BUY_ORDERS`) อยู่ในหน้าต่างอนุมัติ — ขาดข้อใดข้อหนึ่ง = ไม่ส่ง (fail closed)
+- release binding เป็น gate เดียวตอน runtime (เหมือน UAT): เปลี่ยนค่าใดค่าหนึ่งของ release ⇒ binding ไม่ตรง ⇒ ไม่ส่ง
+  binding เป็น fingerprint ไม่ใช่ความลับ: ผู้ที่แก้ env ของ function ได้ย่อมคำนวณใหม่ได้ (`python ops.py release-binding`)
+- การตรวจ `release_horizon` (caps ≤ 25% ของ principal, DNA ครอบ window, `session_key_mode` ฯลฯ) บังคับ**ตอน deploy**
+  (`ops.py release-plan --enforce` และ script ตรวจซ้ำ) — deploy ทางอื่นที่ข้าม script จะข้ามการตรวจนี้ด้วย
+- ออร์เดอร์ที่เกินเพดานต่อใบ (จำนวนหุ้นหรือมูลค่า) ถูกตัดให้เท่าเพดาน (มูลค่า ÷ 1.01 เผื่อราคาขยับตอน dispatch) ทั้ง BUY และ SELL
+  ส่วนที่เหลือรอบถัดไปไล่ต่อ; ถ้า |gap| > 3 × เพดาน ยังส่งแต่แจ้ง `ORDER_CLIPPED_LARGE_GAP` ให้คนตรวจหุ้นกับแอป
+- BUY ได้ไม่เกิน `LEGO_MAX_SESSION_BUY_ORDERS` ต่อวันตลาด (ภายในเพดานรวม `LEGO_MAX_SESSION_ORDERS`); เกินแล้ว ⇒
+  `SESSION_BUY_CAP_REACHED` (WARNING ไม่ปลุกคน) และไม่เรียก Preview; SELL ยังส่งได้และไม่คืนโควตา BUY
 - ไม่มีอะไรต่ออายุเอง: window, DNA และ token หมดแล้วระบบหยุดส่ง order (และเตือนล่วงหน้า 48 ชม.) จนกว่าคนจะออก release ใหม่
 
 ## 0. ก่อนเริ่ม (ทุกข้อต้องมีหลักฐาน)
@@ -46,15 +54,16 @@ B คือ order ก้อนเดียวที่ใหญ่ที่ส�
 cp deploy/prod-canary.env.example private-prod.env   # กรอก LEGO_SYMBOL, LEGO_FIX_C, LEGO_DNA_BUNDLE ด้วยตัวเอง
 gcloud secrets versions access latest --secret=webull-account-id-prod --project=lego-firebase | \
   python ops.py release-plan --env-file private-prod.env --account-id-stdin \
-      --window-sessions 5 --reference-price <ราคาล่าสุด> --recommended-limits --fee-pct <fee% ที่วัดด้วย Preview> \
+      --window-sessions 30 --reference-price <ราคาล่าสุด> --recommended-limits --fee-pct <fee% ที่วัดด้วย Preview> \
       --enforce > private-plan.json
 # release funding (วิธี B รอบแรก): เพิ่ม --initial-funding
 ```
 
-- `--window-sessions N` สิ้นสุดที่ปิดตลาดของ session ที่ N (ต้องครอบ ≥ 2 session สมบูรณ์); canary แนะนำช่วงสั้น เช่น 5 session
-- `--recommended-limits` ให้ notional 10% ของ principal, orders 10 ต่อ session, quantity = 1.3 × notional ÷ ราคา ปัดขึ้นเป็นเลขกลม — เป็นจุดเริ่ม
+- `--window-sessions N` สิ้นสุดที่ปิดตลาดของ session ที่ N (ต้องครอบ ≥ 2 session สมบูรณ์); ไม่ระบุ window เลย ⇒ 30 session (`DEFAULT_WINDOW_SESSIONS`)
+- `--recommended-limits` ให้ notional 10% ของ principal, orders 10 ต่อ session, BUY 3 ต่อ session, quantity = 1.3 × notional ÷ ราคา ปัดขึ้นเป็นเลขกลม — เป็นจุดเริ่ม
   ตัดสินใจเองได้ แต่ notional > 25% ของ principal เป็น BLOCK; DNA ต้องจบหลัง window (เตือนถ้าเหลือ < 2 session)
-- `--enforce` exit 1 เมื่อมี BLOCK; ผลลัพธ์เป็น private: มี release authorization และ ack; ไม่พิมพ์ account id
+- `--enforce` exit 1 เมื่อมี BLOCK; ผลลัพธ์เป็น private: มี release authorization; ไม่พิมพ์ account id
+- `LEGO_SESSION_KEY_MODE=release_window` กับ release ที่เทรด ⇒ BLOCK (ตัวนับจะนับรวมทั้ง window ไม่ใช่รายวัน) ใช้ `market_day`
 - PROD เริ่มด้วย whole shares (`LEGO_ALLOW_FRACTIONAL=false`) — `true` บน PROD เป็น WARN ให้ทบทวนอย่างชัดเจน
 - candidate hash คำนวณจาก checkout ที่ commit แล้วและสะอาด (script ปฏิเสธ working tree ที่ไม่สะอาด)
 
@@ -96,13 +105,13 @@ export LEGO_FEE_PCT_OVERRIDE=<fee% ที่วัดด้วย Preview>      
 # ค่าจาก private-plan.json -> deploy_env: EXPECTED_CANDIDATE_HASH, LEGO_RELEASE_AUTHORIZATION_OVERRIDE,
 # LEGO_TRADING_WINDOW_END_OVERRIDE, LEGO_MAX_*_OVERRIDE, LEGO_SYMBOL_OVERRIDE, LEGO_FIX_C_OVERRIDE, LEGO_DNA_BUNDLE_OVERRIDE ฯลฯ
 export LEGO_FUNDING_MODE_OVERRIDE=initial-funding   # เฉพาะ release funding ของวิธี B (release-plan --initial-funding พิมพ์ไว้ใน deploy_env)
-bash deploy/cloudshell-all-in-one.sh        # รอบแรก: พิมพ์ ack ที่คาดหวังแล้ว exit 3 ก่อน deploy function
+bash deploy/cloudshell-all-in-one.sh        # รอบเดียว: ตรวจ release ทั้งชุด ไม่มี BLOCK ⇒ deploy
 ```
 
-1. รอบแรกทำขั้นเตรียม (API, service account, secret, IAM — idempotent) ตรวจ release ทั้งชุด แล้ว**หยุดที่ exit 3** พร้อมพิมพ์
-   `LEGO_PROD_LIVE_ACK=LIVE-PROD-<SYMBOL>-q<qty>-n<notional>-o<orders>-<window end>-<prefunded|initial-funding>-<binding[:16]>`
-2. อ่านทุกค่าให้ตรงกับที่ตั้งใจ (symbol, caps, window, โหมด funding) แล้วรันคำสั่งเดิมซ้ำพร้อม `LEGO_PROD_LIVE_ACK=<ค่าที่พิมพ์>`
-3. ack ผิดหรือเป็นของ release อื่น → fail; release ที่ไม่ผ่านการตรวจ → ไม่มี ack ให้ ต้องแก้ตาม `[BLOCK]` ก่อน
+1. ทำขั้นเตรียม (API, service account, secret, IAM — idempotent) ตรวจ release ทั้งชุด (`release-plan --enforce`) แล้ว deploy
+   ในรอบเดียว — อ่านค่าใน `private-plan.json` (symbol, caps, window, โหมด funding) **ก่อน**สั่ง
+2. release ที่ไม่ผ่านการตรวจ ⇒ หยุดก่อน deploy ต้องแก้ตาม `[BLOCK]` ก่อน
+3. `LEGO_PROD_LIVE_ACK` ที่ค้างใน shell ไม่มีผลใดๆ แล้ว
 4. script ตรวจ release ซ้ำก่อน deploy โดยถือเป็น release steady ตามค่าเริ่มต้น (`prefunded`): caps เกิน 25% ของ principal จึงถูก BLOCK
    — ตั้งใจให้เป็นเช่นนั้นเพื่อไม่ให้ caps หลวมหลุดไปโดยบังเอิญ; release funding ต้องตั้ง `LEGO_FUNDING_MODE_OVERRIDE=initial-funding` เองอย่างชัดเจน
    (ค่านี้ตรวจ caps แบบ funding: notional ≥ 101% ของ principal และไม่เกิน 125% — caps steady จะถูก BLOCK ถ้าขอโหมดนี้)
@@ -119,8 +128,10 @@ python tools/verify_deployment.py --service private-service.json --scheduler pri
 - ทำซ้ำ `curl` ของหัวข้อ 2b ข้อ 3 กับ `DATABASE_URL_OVERRIDE` — ต้องยังได้ `Permission denied`
 - `release-plan` แสดง WARN `alert_unset` เมื่อไม่มี `ALERT_WEBHOOK_SECRET_OVERRIDE`; ถ้าใช้ Monitoring policy (`tools/monitoring_config.py`) แทน webhook
   ให้ยืนยันว่า policy ส่งถึงคนจริงด้วย drill (G4) — คำเตือนนี้ไม่รู้เรื่อง policy จึงไม่หายเอง
-- `verify_deployment` ตรวจ `production_mode`: observe/inactive หรือ trade/active ที่มี ack, authorization และ caps ครบ — ไม่ได้ตรวจว่าค่าถูกต้องต่อบัญชี
-- `business_status=RELEASE_UNAUTHORIZED` (severity ERROR, `operational_health.orders_blocked_by_release=true`) = deployment เป็น trade/active แต่ไม่ส่ง order เพราะ release authorization หรือ `LEGO_PROD_LIVE_ACK` ไม่ตรงกับ release (มักเกิดจากการแก้ env ของ function ภายหลัง) — `python ops.py check` แสดง `release_authorized`, `prod_live_gate_open`, `new_orders_authorized`; แก้ด้วยการ deploy ใหม่ผ่าน script ไม่ใช่แก้ env ทีละค่า
+- `verify_deployment` ตรวจ `production_mode`: observe/inactive หรือ trade/active ที่มี authorization และ caps ครบ 5 ค่า — ไม่ได้ตรวจว่าค่าถูกต้องต่อบัญชี
+- `business_status=RELEASE_UNAUTHORIZED` (severity ERROR, `operational_health.orders_blocked_by_release=true`) = deployment เป็น trade/active แต่ไม่ส่ง order เพราะ release authorization ไม่ตรงกับ release (มักเกิดจากการแก้ env ของ function ภายหลัง) — `python ops.py check` แสดง `release_authorized`, `new_orders_authorized`; แก้ด้วยการ deploy ใหม่ผ่าน script ไม่ใช่แก้ env ทีละค่า
+- `SESSION_BUY_CAP_REACHED` (WARNING) = BUY ครบโควตาของวันแล้ว เป็นเรื่องปกติของวันที่ราคาลงยาว; วันถัดไปโควตาเริ่มใหม่
+- `ORDER_CLIPPED_LARGE_GAP` (ERROR, webhook) = ออร์เดอร์ถูกตัด และ |gap| > 3 × เพดาน: ตรวจหุ้นจริงกับแอปทันที (อาจเป็นการอ่านหุ้นผิด)
 - เฝ้า tick แรกของ session ถัดไปด้วยตัวเอง: `business_status`, `release_expiring`, order แรกและ fill ตรงกับ caps ที่อนุมัติ
 - วิธี B: ทันทีที่ funding fill ยืนยันและ holdings ตรง broker ให้ออก release steady (caps แน่น, `--initial-funding` ออก) — อย่าปล่อย release funding ไว้
 
@@ -186,7 +197,8 @@ python ops.py bootstrap-auth --token-file PRIVATE_TOKEN --secret projects/lego-f
 ## 9. Rollback
 
 ปิด new orders (ข้อ 6) แล้วคง worker ที่เข้าใจ schema v4 ไว้เพื่อ reconcile ต่อ — ไม่ย้อนกลับไป binary ที่ไม่รู้จักสถานะใหม่,
-ไม่ลบ outbox/fence, ไม่ refund quota (`LEGO_MAX_SESSION_ORDERS` นับก่อน Place และไม่คืน), ไม่ clear operator halt อัตโนมัติ
+ไม่ลบ outbox/fence, ไม่ refund quota (`LEGO_MAX_SESSION_ORDERS` และ `LEGO_MAX_SESSION_BUY_ORDERS` นับก่อน Place และไม่คืน), ไม่ clear operator halt อัตโนมัติ
+- dispatch lock เป็น schema 5 แล้ว (`buy_count`): revision เก่าที่รู้จักแค่ 1..4 จะปฏิเสธการจอง order ใหม่ (fail closed) — rollback ไป observe ได้ตามปกติ
 หลัง order ค้างทั้งหมด terminal และ ledger ปิดครบ จึงออก release ใหม่
 ถ้า chain ถูกผูกกับ quantity contract ที่แคบลงแล้ว (เช่น 5→2 ตำแหน่ง) revision ที่ใช้ contract กว้างกว่าจะ commit ไม่ได้ (`CONFIG_ERROR`, ไม่มี order, DNA clock หยุด) — roll forward ไม่ roll back (`docs/UAT_20261005_INCIDENT_TH.md`)
 
@@ -311,26 +323,20 @@ incident ของ health-policy ปิดเองหลัง 30 นาที�
    - ทุกแถว position ของ symbol มี `instrument_type` EQUITY / OPTION
    - LEAPS ที่ถือ (long CALL × multiplier) ≥ `LEGO_LEAPS` และหมดอายุหลัง window (อ่านไม่ได้ ⇒ BLOCK เว้นแต่ `LEGO_LEAPS_CONFIRMED=yes`)
    - ราคา < FIX_C/LEAPS
-   - order แรกพอดี caps canary (ไม่พอดี ⇒ บอกช่วงหุ้นจริงที่ต้องถือก่อน)
+   - order แรกพอดี caps canary (ไม่พอดี ⇒ WARN: จะถูกตัดให้เท่าเพดานและไล่ครบในประมาณ k order พร้อมบอกช่วงหุ้นจริงที่ควรถือก่อน)
    - route order history
-6. `ops.py release-plan` ที่ราคาจาก snapshot: `--recommended-limits` (canary 10%), `--window-sessions 5`, `--enforce`, finding `leaps_value` (BLOCK ≥ FIX_C/LEAPS)
-7. `deploy/cloudshell-all-in-one.sh`: รอบแรก exit 3 + ack; รอบสองพร้อม `LEGO_PROD_LIVE_ACK` ⇒ deploy **export ของ git HEAD** (`--source=<export>`) ⇒ พิสูจน์ DB อีกรอบ
+6. `ops.py release-plan` ที่ราคาจาก snapshot: `--recommended-limits` (canary 10%, BUY 3/วัน), `--window-sessions 30`, `--enforce`, finding `leaps_value` (BLOCK ≥ FIX_C/LEAPS)
+7. พิมพ์หัวสรุป release, kill switch และ rollback **ก่อน** deploy ⇒ `deploy/cloudshell-all-in-one.sh` ตรวจซ้ำแล้ว deploy **export ของ git HEAD** (`--source=<export>`) ⇒ พิสูจน์ DB อีกรอบ (รอบเดียว ไม่มี ack)
 
 ตัวอย่าง QBTS (ค่าที่เจ้าของกำหนด 3 พ.ย.). ก่อนรัน ถือหุ้นจริงตามช่วงที่ preflight บอก (ที่ $10.82 = 25–52 หุ้น แนะนำ 38).
 
-รอบแรก (ตรวจทุก gate แล้วพิมพ์ ack, ยังไม่ deploy):
+รันครั้งเดียว (ตรวจทุก gate ⇒ พิมพ์หัวสรุป ⇒ deploy):
 
 ```bash
 git clone https://github.com/firstnattapon/lego ~/lego-live && cd ~/lego-live && LEGO_SYMBOL_OVERRIDE=QBTS LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_ALERTS_CONFIRMED=yes ALERT_WEBHOOK_SECRET_OVERRIDE=<ชื่อ secret ของ webhook> LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod-live.sh
 ```
 
-รอบสอง (deploy):
-
-```bash
-cd ~/lego-live && LEGO_PROD_LIVE_ACK=<ค่าที่พิมพ์> LEGO_SYMBOL_OVERRIDE=QBTS LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_ALERTS_CONFIRMED=yes ALERT_WEBHOOK_SECRET_OVERRIDE=<ชื่อ secret ของ webhook> LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod-live.sh
-```
-
-script พิมพ์ kill switch (`ops.py halt-orders`) และ rollback บรรทัดเดียวไว้ทั้งสองรอบ. rollback เป็น observe บน chain เดิม (DNA, policy และ DIFF เดียวกัน ⇒ chain key เดิม; order ที่ส่งแล้วยังถูก reconcile):
+script พิมพ์ kill switch (`ops.py halt-orders`) และ rollback บรรทัดเดียวไว้ก่อน deploy และอีกครั้งหลัง deploy สำเร็จ. rollback เป็น observe บน chain เดิม (DNA, policy และ DIFF เดียวกัน ⇒ chain key เดิม; order ที่ส่งแล้วยังถูก reconcile):
 
 ```bash
 cd ~/lego-live && LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_SYMBOL_OVERRIDE=QBTS LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 bash deploy/cloudshell-prod-observe.sh
@@ -361,7 +367,7 @@ Go / No-Go เต็มอยู่ใน `docs/AUDIT_20261103_TH.md`.
   - QBTS: 1875 USD / 200 หุ้น / 2 order ต่อ session (125% ของ FIX_C ไม่ปัดขึ้นเกิน; ≥ FIX_C + 1%)
   - window **2 session** (สั้นที่สุดที่ release_horizon ยอม)
 - preflight ปฏิเสธ (`funding_not_needed`) ถ้าใบแรกไม่ใช่ BUY ที่เกิน canary: มีหุ้นอยู่แล้ว, เข้า canary ได้ หรือเป็น SELL
-- runtime เปิด gate ได้เฉพาะ ack `-initial-funding-`: ที่เพดานนี้ไม่มี ack แบบ prefunded และ ack funding ก็เปิด canary ไม่ได้
+- release funding มี binding ของตัวเอง (caps ต่างกัน ⇒ binding ต่างกัน): binding ของ canary เปิด release funding ไม่ได้ และกลับกัน
 - ledger: LEAPS ทำให้ตำแหน่งไม่เป็น 0 ⇒ fill ใบแรกเป็นแถวปกติ (ไม่ใช่ funding baseline) ของ chain เดียวกับ canary
 - ยังไม่ได้ซื้อ call: `LEGO_LEAPS_CONFIRMED=yes` ทำให้ preflight ผ่านแบบ WARN และหัวสรุปพิมพ์ว่า "owner-confirmed, NOT seen in the positions"
   - ระบบจะคำนวณจากหุ้นเทียบเท่า ~148 แต่ถือจริง ~48 จนกว่าจะซื้อ call
@@ -370,9 +376,10 @@ Go / No-Go เต็มอยู่ใน `docs/AUDIT_20261103_TH.md`.
 cd ~/lego-live && git pull --ff-only && LEGO_FUNDING_MODE_OVERRIDE=initial-funding LEGO_LEAPS_CONFIRMED=yes LEGO_SYMBOL_OVERRIDE=QBTS LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_ALERTS_CONFIRMED=yes LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod-live.sh
 ```
 
-ได้ ack (`LIVE-PROD-QBTS-q200-n1875-o2-…-initial-funding-…`) ⇒ รันซ้ำโดยเติม `LEGO_PROD_LIVE_ACK=<ค่า>` ด้านหน้า.
+รันครั้งเดียว deploy release funding (1875 / 200 / 2 order / 2 BUY ต่อ session, 2 session).
 
-**ขั้น B – canary (เย็นวันที่ fill ยืนยันและหุ้นในแอปตรง)**: คำสั่งเดิม**ตัด** `LEGO_FUNDING_MODE_OVERRIDE=initial-funding` ⇒ ack ใหม่ (`…-q20-n150-o10-…-prefunded-…`) ⇒ deploy.
+**ขั้น B – canary (เย็นวันที่ fill ยืนยันและหุ้นในแอปตรง)**: คำสั่งเดิม**ตัด** `LEGO_FUNDING_MODE_OVERRIDE=initial-funding` ⇒ deploy canary (20 / 150 / 10 order / 3 BUY ต่อ session, 30 session).
+ไม่ทำขั้น A ก็ได้: canary จะตัด BUY แรกให้เท่าเพดานแล้วสะสมหุ้นวันละไม่เกิน ~445 USD (ประมาณ 4 session จนครบ)
 
 - อย่าปล่อย release funding ค้าง
 - fill ไม่ยืนยันภายใน 1 tick ⇒ kill switch
@@ -414,7 +421,7 @@ cd ~/lego-live && git pull --ff-only && LEGO_FUNDING_MODE_OVERRIDE=initial-fundi
 **ลำดับ (USAR: FIX_C 1500, DIFF 50, LEAPS 100):**
 1. ทำ QBTS ขั้น B (16.1) ให้เสร็จก่อน
 2. `git pull --ff-only` (checkout เก่าไม่รู้จัก `LEGO_BOT_OVERRIDE` และจะ deploy ทับ `lego-tick-prod`)
-3. USAR ขั้น A รอบ 1 (ไม่ใส่ ack):
+3. USAR ขั้น A (รันครั้งเดียว):
 
 ```bash
 cd ~/lego-live && git pull --ff-only && LEGO_BOT_OVERRIDE=usar LEGO_FUNDING_MODE_OVERRIDE=initial-funding LEGO_LEAPS_CONFIRMED=yes LEGO_SYMBOL_OVERRIDE=USAR LEGO_FIX_C_OVERRIDE=1500 LEGO_DIFF_OVERRIDE=50 LEGO_LEAPS_OVERRIDE=100 LEGO_ALLOW_FRACTIONAL_OVERRIDE=true LEGO_ALERTS_CONFIRMED=yes LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod-live.sh
@@ -426,7 +433,7 @@ cd ~/lego-live && git pull --ff-only && LEGO_BOT_OVERRIDE=usar LEGO_FUNDING_MODE
    - `Buying power / required: … USD (this bot … + one order of other bots 151.50)`
    - `FIX_C + 1 % of every bot: 3030.00 USD: covered` หรือ `NOT covered (…)` (WARN ไม่ BLOCK)
    - ขึ้น `lego-tick-prod` ⇒ **หยุด** (ยังไม่ได้ pull)
-5. รอบ 2: คำสั่งเดิมเติม `LEGO_PROD_LIVE_ACK=<ค่าที่พิมพ์>` (ค่าจริง ไม่ใช่ข้อความตัวอย่าง)
+5. หัวสรุปพิมพ์ก่อน deploy เสมอ: ถ้าค่าใดไม่ตรงให้ kill switch / rollback ทันทีหลัง deploy (ไม่มีรอบยืนยันแล้ว)
 6. หลัง fill ของ USAR ยืนยันและหุ้นในแอปตรง ⇒ ขั้น B: คำสั่งเดิมตัด `LEGO_FUNDING_MODE_OVERRIDE=initial-funding`
 
 **หยุด / ย้อน:**
