@@ -127,7 +127,8 @@ python ops.py release-binding
 -ReleaseAuthorization VALUE` พร้อม execution limits ครบ 5 ค่า (`-MaxOrderQuantity`,
 `-MaxOrderNotionalUsd`, `-MaxSessionOrders`, `-MaxSessionBuyOrders`, `-TradingWindowEnd`;
 ขาดค่าใด = ไม่มี order ใหม่). Binding เปลี่ยนตาม candidate, environment, account และ limits;
-นำของ UAT ไปเปิด PROD ไม่ได้ (`deploy.ps1` ไม่เปิด PROD เงินจริง ใช้ `deploy/cloudshell-prod-live.sh`)
+นำของ UAT ไปเปิด PROD ไม่ได้ (`deploy.ps1` ไม่เปิด PROD เงินจริง ใช้ `deploy/cloudshell-prod-live.sh`;
+ทุก bot ในคำสั่งเดียว: `deploy/cloudshell-prod-live-all.sh`, docs/PROD_LIVE_RUNBOOK_TH.md ข้อ 19)
 
 การทดสอบ UAT lifecycle ต้องระบุ account alias, symbol, side, quantity และวงเงินสูงสุด,
 แตะเฉพาะ order ID ของตัวเอง และต้องได้ nonzero fill จริงจึงผ่าน A19. Shared test account
