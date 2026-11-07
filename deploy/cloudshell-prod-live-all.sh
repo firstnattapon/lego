@@ -26,8 +26,8 @@ set -Eeuo pipefail
 #   LEAPS_CONFIRMED  yes = the owner confirms LEAPS the positions do not show (LEGO_LEAPS_CONFIRMED);
 #                    no  = the preflight must see them
 readonly BOTS=(
-    "QBTS  1500  50  100  true  -     no"
-    "RGTI  1500  50  100  true  rgti  no"
+    "QBTS  1500  50  100  true  -     yes"
+    "RGTI  1500  50  100  true  rgti  yes"
     "USAR  1500  50  100  true  usar  yes"
 )
 readonly PASS_THROUGH=(LEGO_FEE_PCT_OVERRIDE ALERT_WEBHOOK_SECRET_OVERRIDE)

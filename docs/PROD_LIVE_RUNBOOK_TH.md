@@ -484,8 +484,8 @@ LEGO_ALERTS_CONFIRMED=yes LEGO_FEE_PCT_OVERRIDE=0.35 bash deploy/cloudshell-prod
 
 | SYMBOL | FIX_C | DIFF | LEAPS | FRACTIONAL | BOT (function) | LEAPS_CONFIRMED |
 |---|---|---|---|---|---|---|
-| QBTS | 1500 | 50 | 100 | true | `-` (`lego-tick-prod`) | no |
-| RGTI | 1500 | 50 | 100 | true | `rgti` (`lego-tick-prod-rgti`) | no |
+| QBTS | 1500 | 50 | 100 | true | `-` (`lego-tick-prod`) | yes |
+| RGTI | 1500 | 50 | 100 | true | `rgti` (`lego-tick-prod-rgti`) | yes |
 | USAR | 1500 | 50 | 100 | true | `usar` (`lego-tick-prod-usar`) | yes |
 
 - แก้ค่า = แก้ตารางแล้ว commit (script deploy เฉพาะ checkout ที่ commit แล้ว จึงได้ค่าที่อยู่ใน git เสมอ)

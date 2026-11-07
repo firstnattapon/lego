@@ -40,10 +40,11 @@ CLOCK = ('import os\n\n\ndef is_regular_session(at=None):\n'
          '    return os.environ.get("FAKE_SESSION") == "1"\n')
 EXPECTED = {
     "QBTS": {"LEGO_SYMBOL_OVERRIDE": "QBTS", "LEGO_FIX_C_OVERRIDE": "1500", "LEGO_DIFF_OVERRIDE": "50",
-             "LEGO_LEAPS_OVERRIDE": "100", "LEGO_ALLOW_FRACTIONAL_OVERRIDE": "true"},
+             "LEGO_LEAPS_OVERRIDE": "100", "LEGO_ALLOW_FRACTIONAL_OVERRIDE": "true",
+             "LEGO_LEAPS_CONFIRMED": "yes"},
     "RGTI": {"LEGO_SYMBOL_OVERRIDE": "RGTI", "LEGO_FIX_C_OVERRIDE": "1500", "LEGO_DIFF_OVERRIDE": "50",
              "LEGO_LEAPS_OVERRIDE": "100", "LEGO_ALLOW_FRACTIONAL_OVERRIDE": "true",
-             "LEGO_BOT_OVERRIDE": "rgti"},
+             "LEGO_BOT_OVERRIDE": "rgti", "LEGO_LEAPS_CONFIRMED": "yes"},
     "USAR": {"LEGO_SYMBOL_OVERRIDE": "USAR", "LEGO_FIX_C_OVERRIDE": "1500", "LEGO_DIFF_OVERRIDE": "50",
              "LEGO_LEAPS_OVERRIDE": "100", "LEGO_ALLOW_FRACTIONAL_OVERRIDE": "true",
              "LEGO_BOT_OVERRIDE": "usar", "LEGO_LEAPS_CONFIRMED": "yes"},
@@ -130,6 +131,18 @@ def test_nothing_an_earlier_command_left_in_the_shell_reaches_a_bot(stubbed):
         assert call == {**EXPECTED[call["LEGO_SYMBOL_OVERRIDE"]], "LEGO_ALERTS_CONFIRMED": "yes"}
 
 
+def test_a_row_without_the_confirmation_never_takes_the_shells(stubbed):
+    script = stubbed["repo"] / SCRIPT
+    script.write_text(script.read_text(encoding="utf-8").replace(
+        '    "RGTI  1500  50  100  true  rgti  yes"', '    "RGTI  1500  50  100  true  rgti  no"'))
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "no"],
+                   cwd=stubbed["repo"], check=True)
+    result = run(stubbed, LEGO_LEAPS_CONFIRMED="yes")
+    assert result.returncode == 0, result.stderr
+    confirmed = {c["LEGO_SYMBOL_OVERRIDE"]: c.get("LEGO_LEAPS_CONFIRMED") for c in calls(stubbed)}
+    assert confirmed == {"QBTS": "yes", "RGTI": None, "USAR": "yes"}
+
+
 def test_the_account_wide_values_reach_every_bot(stubbed):
     result = run(stubbed, LEGO_FEE_PCT_OVERRIDE="0.35", ALERT_WEBHOOK_SECRET_OVERRIDE="lego-alert-webhook",
                  LEGO_PROD_DB_INSTANCE="lego-firebase-prod")
@@ -211,7 +224,7 @@ def test_a_bad_row_stops_the_whole_run_before_any_bot(stubbed, row, message):
         text = text.replace('    "USAR  1500  50  100  true  usar  yes"\n',
                             f'    "USAR  1500  50  100  true  usar  yes"\n    "{row}"\n')
     else:
-        text = text.replace('    "QBTS  1500  50  100  true  -     no"', f'    "{row}"')
+        text = text.replace('    "QBTS  1500  50  100  true  -     yes"', f'    "{row}"')
     script.write_text(text)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "row"],
                    cwd=stubbed["repo"], check=True)
@@ -252,7 +265,7 @@ def test_each_running_bot_is_redeployed_to_its_own_function_with_the_new_caps(sa
         assert "LEGO_PROD_LIVE_ACK" not in line
     preflights = [line for line in recorded.splitlines()
                   if line.startswith("python3 tools/prod_live_preflight.py")]
-    assert ["--leaps-confirmed" in line for line in preflights] == [False, False, True]
+    assert ["--leaps-confirmed" in line for line in preflights] == [True, True, True]
     assert [re.search(r"--symbol (\S+)", line).group(1) for line in preflights] == ["QBTS", "RGTI", "USAR"]
     assert all("--funding prefunded" in line and "--window-sessions 30" in line for line in preflights)
     assert ("--reserve lego-tick-prod-rgti:RGTI:1500:150" in preflights[0]
