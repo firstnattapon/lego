@@ -73,6 +73,17 @@ def test_the_policy_file_caps_equal_the_recommendation():
         "30", "1500", "26", "2")
 
 
+def test_every_default_buy_cap_is_the_recommendation():
+    """One owner value (2026-11-21): every deploy path defaults to the same net BUY cap."""
+    import re
+    import release_horizon
+    want = str(release_horizon.RECOMMENDED_SESSION_BUY_ORDERS)
+    assert want == "2"
+    assert f"\nLEGO_MAX_SESSION_BUY_ORDERS={want}\n" in UAT_POLICY.read_text(encoding="utf-8")
+    script = (ROOT / "deploy" / "continuous-uat.sh").read_text(encoding="utf-8")
+    assert re.findall(r'LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE:-(\d+)\}', script) == [want]
+
+
 SCRIPT_BINDING_NAMES = (
     "WEBULL_ENV", "LEGO_CANDIDATE_HASH", "LEGO_SYMBOL", "LEGO_MAX_ORDER_QUANTITY",
     "LEGO_MAX_ORDER_NOTIONAL_USD", "LEGO_MAX_SESSION_ORDERS", "LEGO_TRADING_WINDOW_END",
