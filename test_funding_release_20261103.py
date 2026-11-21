@@ -104,7 +104,7 @@ def test_the_prefunded_preflight_clips_the_first_buy_and_names_the_funding_relea
     first = finding(report, "first_order")
     assert first["severity"] == "WARN"
     message = first["message"]
-    assert "clipped to the caps" in message and "about 4 orders" in message and "3 BUYs per session" in message
+    assert "clipped to the caps" in message and "about 4 orders" in message and "3 net BUYs per session" in message
     assert "ORDER_CLIPPED_LARGE_GAP" in message                    # 491 USD > 3 x 150
     assert "hold between 34 and 63" in message and "LEGO_FUNDING_MODE_OVERRIDE=initial-funding" in message
     # The cash that opens the next order: one clipped order at the cap, not the whole gap.
@@ -165,7 +165,7 @@ def test_step_a_deploys_the_funding_release_for_two_sessions_in_one_run(sandbox)
     call = preflight_call(sandbox)
     assert "--window-sessions 2 --funding initial-funding" in call and "--leaps-confirmed" in call
     for text in ("one-off FUNDING: caps up to 1875 USD per order; expect one BUY of about 491.00 USD",
-                 "200 / 1875 USD / 2 per session / 2 BUY", "owner-confirmed (LEGO_LEAPS_CONFIRMED=yes), NOT seen",
+                 "200 / 1875 USD / 2 per session / 2 net BUY", "owner-confirmed (LEGO_LEAPS_CONFIRMED=yes), NOT seen",
                  "WITHOUT LEGO_FUNDING_MODE_OVERRIDE", "Funding mode   : initial-funding"):
         assert text in result.stdout, text
     deployed = deployed_line(sandbox)

@@ -258,7 +258,8 @@ def test_buy_cap_is_reported_with_the_money_it_allows():
     result = rh.assess(prod())
     finding = next(f for f in result["findings"] if f["id"] == "session_buy_orders_cap")
     assert finding["severity"] == "INFO"
-    assert "at most 3 of the 10" in finding["message"] and "3000 USD" in finding["message"]
+    assert "net BUYs (BUY - filled SELL) at most 3 per session, within the 10" in finding["message"]
+    assert "3000 USD net bought" in finding["message"]
     assert rh.assess(prod(), now=NOW)["limits"]["session_buy_orders"] == 3
 
 

@@ -349,6 +349,18 @@ def alert_drill_command(args) -> dict:
     return result
 
 
+def _execution_session_status(session) -> dict:
+    """The session counter with its net BUY count (BUY reservations − filled SELLs)."""
+    if not isinstance(session, dict) or not session:
+        return {}
+    from execution_limits import ExecutionLimitError, net_buy_count_of, validate_counter
+    try:
+        validate_counter(session)
+    except ExecutionLimitError as exc:
+        return {**session, "malformed": str(exc)}
+    return {**session, "net_buy_count": net_buy_count_of(session)}
+
+
 def status_command(_args) -> dict:
     import main
     main._init_firebase()
@@ -382,6 +394,7 @@ def status_command(_args) -> dict:
         "expiry_proof_checked_at": intent.get("expiry_proof_checked_at"),
         "expiry_basis": intent.get("expiry_basis"),
         "broker_reject_circuit": fence.get("broker_reject_circuit") or {},
+        "execution_session": _execution_session_status(fence.get("execution_session")),
         "operator_halt": fence.get("operator_halt") or {},
         "allow_fractional": runtime.deployment.allow_fractional,
         "broker_fee_status": intent.get("broker_fee_status"),

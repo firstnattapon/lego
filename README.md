@@ -1,8 +1,11 @@
 # LEGO PRINCIPAL v2
 
+21 November change: [`LEGO_MAX_SESSION_BUY_ORDERS` counts net BUYs per market day (BUY reservations − filled SELLs)](docs/CHANGE_20261121_TH.md):
+a SELL frees a BUY once the broker reports it filled; net may go below zero; SELLs and the total cap are unchanged.
+
 7 November change: [orders above the per-order caps are clipped to them, at most 3 BUYs per market day, no PROD acknowledgement, a 30-session window](docs/CHANGE_20261107_TH.md).
 An order the caps used to refuse slot after slot (`NOT_PLACED`) is now clipped to the caps, BUY and SELL alike, and the next slots rebalance the rest; a gap above three caps
-is still sent but raises `ORDER_CLIPPED_LARGE_GAP`. `LEGO_MAX_SESSION_BUY_ORDERS` (the fifth execution limit) bounds the BUYs inside the session counter
+is still sent but raises `ORDER_CLIPPED_LARGE_GAP`. `LEGO_MAX_SESSION_BUY_ORDERS` (the fifth execution limit) bounds the net BUYs inside the session counter
 (`SESSION_BUY_CAP_REACHED`, a warning). `LEGO_PROD_LIVE_ACK` is gone: a PROD release is judged and deployed in one run and the runtime checks its binding, as in UAT.
 `ops.py release-plan` and the PROD scripts plan 30 sessions by default (funding: 2). Decisions within the caps (at most the share cap and
 the notional cap / 1.01, which a 1 % dispatch drift cannot push over the cap), the ledger and the chain key are unchanged;

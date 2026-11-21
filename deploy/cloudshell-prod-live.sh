@@ -437,7 +437,7 @@ rows = [
         derived.get("real_shares"), derived.get("leaps_held"), derived.get("real_target"))),
     ("First order", "none: within DIFF of FIX_C" if not first else
      "%s about %s USD (%s shares)" % (first["side"], first["notional_usd"], first["quantity"])),
-    ("Caps (quantity / notional / orders / BUYs)", "%s / %s USD / %s per session / %s BUY" % (
+    ("Caps (quantity / notional / orders / net BUYs)", "%s / %s USD / %s per session / %s net BUY" % (
         plan["LEGO_MAX_ORDER_QUANTITY"], plan["LEGO_MAX_ORDER_NOTIONAL_USD"],
         plan["LEGO_MAX_SESSION_ORDERS"], plan["LEGO_MAX_SESSION_BUY_ORDERS"])),
     ("Window ends", plan["LEGO_TRADING_WINDOW_END"]),

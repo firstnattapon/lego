@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 import uuid
 
 from firebase_admin import db
+from execution_limits import credit_filled_sell
 from lego_orders import TERMINAL_STATUSES, normalize_status
 from lego_outbox import DISPATCH_LOCK_PATH, account_symbol_fence_key
 
@@ -134,6 +135,7 @@ def record_outcome(intent, summary):
         return {}  # Unbound legacy records cannot alter another account's halt.
     scope = account_symbol_fence_key(identity, symbol)
     run_id = intent["run_id"]
+    sell = str(intent.get("side") or "").strip().upper() == "SELL"
     try:
         qty = Decimal(str(summary.get("filled_quantity", "0")))
         positive_fill = qty.is_finite() and qty > 0
@@ -158,6 +160,10 @@ def record_outcome(intent, summary):
             cleared = True
         circuit.update(last_outcome_run_id=run_id, last_broker_status=broker_status,
                        consecutive_broker_rejects=count, updated_at=now)
+        if sell and positive_fill:
+            # The net BUY cap (execution_limits): a filled SELL frees one BUY of this
+            # session, in this same write so the receipt above makes it count once.
+            credit_filled_sell(doc, run_id, now)
         if count >= MAX_CONSECUTIVE_BROKER_REJECTS and not circuit.get("halted"):
             circuit.update(halted=True, status=HALT, halted_at=now,
                            halt_id=run_id)

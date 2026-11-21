@@ -1,6 +1,8 @@
 # สถานะ candidate continuous execution v4
 
-ล่าสุด 7 พฤศจิกายน (คำขอเจ้าของ): [ตัดออร์เดอร์ให้เท่าเพดาน, BUY ≤ 3 ต่อวัน, ลบ PROD ACK, window 30 session](docs/CHANGE_20261107_TH.md).
+ล่าสุด 21 พฤศจิกายน (คำขอเจ้าของ): [เพดาน BUY ต่อวันนับแบบ net = BUY ที่จอง − SELL ที่ fill แล้ว](docs/CHANGE_20261121_TH.md); net ติดลบได้, SELL และเพดานรวมเหมือนเดิม, dispatch lock ยัง schema 5
+
+7 พฤศจิกายน (คำขอเจ้าของ): [ตัดออร์เดอร์ให้เท่าเพดาน, BUY ≤ 3 ต่อวัน, ลบ PROD ACK, window 30 session](docs/CHANGE_20261107_TH.md).
 - ออร์เดอร์ที่หุ้นเกิน `LEGO_MAX_ORDER_QUANTITY` หรือมูลค่าเกิน `LEGO_MAX_ORDER_NOTIONAL_USD` ÷ 1.01 ถูกตัดให้เท่านั้น (BUY และ SELL) แทน `NOT_PLACED`; |gap| > 3 เพดาน ⇒ `ORDER_CLIPPED_LARGE_GAP`
 - `LEGO_MAX_SESSION_BUY_ORDERS` (ค่าที่ 5, แนะนำ 3) ⇒ `SESSION_BUY_CAP_REACHED` (WARNING); dispatch lock schema 5
 - ไม่มี `LEGO_PROD_LIVE_ACK` แล้ว: PROD deploy รอบเดียว, runtime ตรวจ binding อย่างเดียว; `release-plan` / script PROD ใช้ window 30 session (funding 2)
