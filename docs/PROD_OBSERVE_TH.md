@@ -94,7 +94,7 @@ LEGO_MODE_OVERRIDE=preview bash deploy/cloudshell-prod-observe.sh
 | บัญชีมีหุ้นประมาณ FIX_C แล้วหรือยัง | ยังไม่มี: ใช้ caps แบบ funding (≤ 125% ของ FIX_C) เพราะ order แรกของบัญชีว่างคือ FIX_C ทั้งก้อน; มีแล้ว: ใช้ caps แบบ canary | `LEGO_FUNDING_MODE_OVERRIDE=initial-funding` หรือ `prefunded` |
 | Webull ยืนยันแล้วหรือยังว่า Preview ไม่สร้าง order | repo ยังไม่ได้ยืนยันเรื่องนี้กับหน้าเอกสารเต็ม ([runbook ข้อ 11](PROD_LIVE_RUNBOOK_TH.md)) | `LEGO_PREVIEW_CONFIRMED=yes` |
 
-caps (รวม BUY 3 ต่อ session), window 30 session และ release authorization คำนวณให้เองด้วย `ops.py release-plan --recommended-limits`
+caps (รวม net BUY 2 ต่อ session), window 30 session และ release authorization คำนวณให้เองด้วย `ops.py release-plan --recommended-limits`
 release นี้ผูกกับ mode จึงใช้เปิด trade ไม่ได้ (ไม่มี `LEGO_PROD_LIVE_ACK` แล้วตั้งแต่ 7 พ.ย. 2026)
 หมายเหตุ: preview/paper ไม่ผ่านตัวนับ order ต่อวัน (เพดานรวมและเพดาน BUY) จึงซื้อได้เกิน 3 ครั้งต่อวัน ต่างจากเงินจริง;
 ส่วนการตัดออร์เดอร์ให้เท่าเพดานต่อใบมีผลใน preview/paper เหมือนเงินจริง

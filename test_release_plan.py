@@ -67,10 +67,10 @@ def test_the_policy_file_caps_equal_the_recommendation():
     recommended = result["recommended_limits"]
     assert (release["LEGO_MAX_ORDER_QUANTITY"], release["LEGO_MAX_ORDER_NOTIONAL_USD"],
             release["LEGO_MAX_SESSION_ORDERS"], release["LEGO_MAX_SESSION_BUY_ORDERS"]) == (
-        "30", "1500", "26", "3")
+        "30", "1500", "26", "2")
     assert (recommended["LEGO_MAX_ORDER_QUANTITY"], recommended["LEGO_MAX_ORDER_NOTIONAL_USD"],
             recommended["LEGO_MAX_SESSION_ORDERS"], recommended["LEGO_MAX_SESSION_BUY_ORDERS"]) == (
-        "30", "1500", "26", "3")
+        "30", "1500", "26", "2")
 
 
 SCRIPT_BINDING_NAMES = (
@@ -147,8 +147,8 @@ def test_production_plan_carries_the_release_and_no_acknowledgement(tmp_path):
                   reference_price=PRICE, enforce=True)
     assert result["environment"] == "PROD" and result["blocked"] is False
     assert "prod_live_acks" not in result and "LEGO_PROD_LIVE_ACK" not in result["deploy_env"]
-    assert result["release"]["LEGO_MAX_SESSION_BUY_ORDERS"] == "3"
-    assert result["deploy_env"]["LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE"] == "3"
+    assert result["release"]["LEGO_MAX_SESSION_BUY_ORDERS"] == "2"
+    assert result["deploy_env"]["LEGO_MAX_SESSION_BUY_ORDERS_OVERRIDE"] == "2"
     assert "LEGO_FUNDING_MODE_OVERRIDE" not in result["deploy_env"]
     assert any("WEBULL_TOKEN_SECRET_OVERRIDE" in step for step in result["next_steps"])
     assert result["deploy_env"]["LEGO_RELEASE_AUTHORIZATION_OVERRIDE"] == (

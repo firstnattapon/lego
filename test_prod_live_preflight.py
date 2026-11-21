@@ -91,7 +91,7 @@ def test_a_prefunded_account_holding_its_leaps_passes_with_the_numbers_it_trades
     assert derived["required_cash_usd"] == "151.50" and derived["own_cash_usd"] == "151.50"
     assert derived["principal_cash_usd"] == "1515.00"
     assert derived["caps"] == {"LEGO_MAX_ORDER_QUANTITY": "20", "LEGO_MAX_ORDER_NOTIONAL_USD": "150",
-                               "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "3"}
+                               "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "2"}
     assert derived["prefund_range"] == ["25", "52"] and derived["suggested_real_shares"] == "38"
     assert derived["price_band"] == {"buy_below": "14.5", "sell_below": "15"}
     assert derived["leaps_earliest_expiry"] == "2028-01-21"
@@ -255,7 +255,7 @@ def test_a_flat_account_is_told_how_many_shares_to_buy_first():
     first = report["derived"]["first_order"]
     assert (first["side"], first["notional_usd"]) == ("BUY", "418.00")
     assert finding(report, "first_order")["severity"] == "INFO"            # 418 USD: below 3 caps
-    assert "about 3 orders (3 net BUYs per session)" in finding(report, "first_order")["message"]
+    assert "about 3 orders (2 net BUYs per session)" in finding(report, "first_order")["message"]
 
 
 @pytest.mark.parametrize("change,blocked", [

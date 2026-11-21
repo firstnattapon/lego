@@ -67,9 +67,9 @@ QUANTITY_MARGIN = Decimal("1.3")
 FUNDING_SESSION_ORDERS = 2
 PROD_CANARY_SESSION_ORDERS = 10
 # Net BUYs per session (LEGO_MAX_SESSION_BUY_ORDERS = BUY reservations − filled SELLs,
-# execution_limits): with the PROD notional cap at 10% of FIX_C this adds at most about 30%
+# execution_limits): with the PROD notional cap at 10% of FIX_C this adds at most about 20%
 # of FIX_C to the position over a session, net of what it sold.
-RECOMMENDED_SESSION_BUY_ORDERS = 3
+RECOMMENDED_SESSION_BUY_ORDERS = 2
 FUNDING_MODES = ("prefunded", "initial-funding")
 # The approval window a release gets when none is given (ops.py release-plan,
 # deploy/cloudshell-prod-live.sh, deploy/cloudshell-prod-observe.sh). The one-off

@@ -64,7 +64,7 @@ gcloud secrets versions access latest --secret=webull-account-id-prod --project=
 ```
 
 - `--window-sessions N` สิ้นสุดที่ปิดตลาดของ session ที่ N (ต้องครอบ ≥ 2 session สมบูรณ์); ไม่ระบุ window เลย ⇒ 30 session (`DEFAULT_WINDOW_SESSIONS`)
-- `--recommended-limits` ให้ notional 10% ของ principal, orders 10 ต่อ session, BUY 3 ต่อ session, quantity = 1.3 × notional ÷ ราคา ปัดขึ้นเป็นเลขกลม — เป็นจุดเริ่ม
+- `--recommended-limits` ให้ notional 10% ของ principal, orders 10 ต่อ session, net BUY 2 ต่อ session (`release_horizon.RECOMMENDED_SESSION_BUY_ORDERS`), quantity = 1.3 × notional ÷ ราคา ปัดขึ้นเป็นเลขกลม — เป็นจุดเริ่ม
   ตัดสินใจเองได้ แต่ notional > 25% ของ principal เป็น BLOCK; DNA ต้องจบหลัง window (เตือนถ้าเหลือ < 2 session)
 - `--enforce` exit 1 เมื่อมี BLOCK; ผลลัพธ์เป็น private: มี release authorization; ไม่พิมพ์ account id
 - `LEGO_SESSION_KEY_MODE=release_window` กับ release ที่เทรด ⇒ BLOCK (ตัวนับจะนับรวมทั้ง window ไม่ใช่รายวัน) ใช้ `market_day`

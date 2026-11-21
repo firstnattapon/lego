@@ -183,7 +183,7 @@ def test_release_plan_of_the_exact_parameters_at_todays_price(tmp_path, monkeypa
     assert assessment["ok"] and not result["blocked"], assessment["blocking"]
     assert (result["release"]["LEGO_MAX_ORDER_QUANTITY"], result["release"]["LEGO_MAX_ORDER_NOTIONAL_USD"],
             result["release"]["LEGO_MAX_SESSION_ORDERS"],
-            result["release"]["LEGO_MAX_SESSION_BUY_ORDERS"]) == ("20", "150", "10", "3")
+            result["release"]["LEGO_MAX_SESSION_BUY_ORDERS"]) == ("20", "150", "10", "2")
     assert "fractional_policy" in assessment["warnings"]
     finding = next(f for f in assessment["findings"] if f["id"] == "leaps_value")
     assert finding["severity"] == "INFO" and "38.63" in finding["message"]
@@ -545,14 +545,14 @@ def test_the_exact_release_deploys_in_one_run(sandbox):
     summary = result.stdout.index("REAL-MONEY RELEASE (prefunded canary)")
     assert summary < result.stdout.index("5/5 Deploy")
     for text in ("QBTS / 1500 / 50 / 100 / true", "10.82", "38.63", "1515.00",
-                 "20 / 150 USD / 10 per session / 3 net BUY", "BUY below 14.5, SELL below 15"):
+                 "20 / 150 USD / 10 per session / 2 net BUY", "BUY below 14.5, SELL below 15"):
         assert text in result.stdout, text
     deployed = deployed_line(sandbox)
     for value in (f"WEBULL_ENV=PROD,FIREBASE_DB_URL={PROD_DB},LEGO_SYMBOL=QBTS,LEGO_FIX_C=1500,"
                   "LEGO_ALLOW_FRACTIONAL=true,LEGO_DIFF=50,LEGO_DNA_BUNDLE=strategy.uat-continuous.json,"
                   "LEGO_MODE=trade,LEGO_ACTIVE=true,",
                   "LEGO_MAX_ORDER_QUANTITY=20,LEGO_MAX_ORDER_NOTIONAL_USD=150,LEGO_MAX_SESSION_ORDERS=10,"
-                  "LEGO_MAX_SESSION_BUY_ORDERS=3,",
+                  "LEGO_MAX_SESSION_BUY_ORDERS=2,",
                   "LEGO_LEAPS=100,", "LEGO_STALE_ORDER_ACTION=hold,", "LEGO_SESSION_KEY_MODE=market_day",
                   f"LEGO_CANDIDATE_HASH={sandbox['candidate']},",
                   "WEBULL_TOKEN_SECRET=projects/lego-firebase/secrets/webull-token-prod",
