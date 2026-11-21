@@ -165,7 +165,7 @@ def test_step_a_deploys_the_funding_release_for_two_sessions_in_one_run(sandbox)
     call = preflight_call(sandbox)
     assert "--window-sessions 2 --funding initial-funding" in call and "--leaps-confirmed" in call
     for text in ("one-off FUNDING: caps up to 1875 USD per order; expect one BUY of about 491.00 USD",
-                 "200 / 1875 USD / 2 per session / 2 BUY", "owner-confirmed (LEGO_LEAPS_CONFIRMED=yes), NOT seen",
+                 "200 / 1875 USD / 2 per session / 2 net BUY", "owner-confirmed (LEGO_LEAPS_CONFIRMED=yes), NOT seen",
                  "WITHOUT LEGO_FUNDING_MODE_OVERRIDE", "Funding mode   : initial-funding"):
         assert text in result.stdout, text
     deployed = deployed_line(sandbox)
