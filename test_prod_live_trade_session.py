@@ -296,6 +296,72 @@ def test_a_filled_sell_frees_one_buy_of_the_net_quota(monkeypatch):
     assert (session_doc["count"], session_doc["buy_count"], session_doc["sell_count"]) == (5, 4, 1)
 
 
+def hold_sell_fills(session):
+    """Order Detail answers SUBMITTED for every SELL, and the shares stay, until release()."""
+    held = {}
+
+    def place(account, orders):
+        answer = session._place(account, orders)
+        order = orders[0]
+        if order["side"] == "SELL":
+            cid, qty = order["client_order_id"], Decimal(order["quantity"])
+            filled = session.details[cid]
+            held[cid] = (filled, qty, session.placed[-1]["price"])
+            session.details[cid] = {**filled, "orders": [{
+                **filled["orders"][0], "status": "SUBMITTED",
+                "filled_quantity": "0.000000", "filled_price": "0.000000"}]}
+            session.real += qty                                # the position moves on the fill
+            session.buying_power -= qty * session.placed[-1]["price"]
+        return answer
+
+    def release():
+        for cid, (filled, qty, price) in held.items():
+            session.details[cid] = filled
+            session.real -= qty
+            session.buying_power += qty * price
+        held.clear()
+
+    session.client.order_v3.place_order.payload = place
+    return release
+
+
+def test_a_sell_filled_on_a_later_tick_frees_one_buy_of_the_net_quota(monkeypatch):
+    """The SELL is still SUBMITTED after its tick: it frees nothing, no BUY may overtake it
+    (PASS_RECOVERY_BLOCKED), and the reconcile that finds it FILLED frees one BUY."""
+    session = TradeSession(monkeypatch, real="38.63",
+                           values=trade_values(LEGO_MAX_SESSION_BUY_ORDERS="3"))
+    release = hold_sell_fills(session)
+    prices = path("10.82", "-+-----")                                # fall, rise, five falls
+    bodies, outs, counters = [], [], []
+    for index, price in enumerate(prices):
+        bodies.append(session.decide(index, price))
+        if index == 3:
+            release()                                                # the broker fills the SELL
+        outs.append(session.dispatch())
+        lock = FAKE_DB.reference(outbox.DISPATCH_LOCK_PATH).get() or {}
+        counters.append(next((dict(doc["execution_session"]) for doc in lock.values()
+                              if isinstance(doc, dict) and "execution_session" in doc), {}))
+    statuses = [[r.get("status") for r in out.get("results", [])] for out in outs]
+    rows, intents, _state = audited(session)
+    assert session.violations == []
+    sell = next(i for i in intents.values() if i["side"] == "SELL")
+    # Slot 2: the SELL is placed but not filled; its reservation alone frees no BUY.
+    assert statuses[2] == ["SUBMITTED"]
+    assert (counters[2]["count"], counters[2]["buy_count"], counters[2]["sell_count"]) == (2, 1, 0)
+    # Slot 3: no BUY overtakes the unresolved SELL; the reconcile finds it FILLED and credits it.
+    assert rows[3][STATUS] == "PASS_RECOVERY_BLOCKED"
+    assert statuses[3] == ["FILLED"]
+    assert counters[3]["sell_count"] == 1 and counters[3]["last_sell_credit_run_id"] == sell["run_id"]
+    # Then three BUYs (net 3), and the next BUY waits.
+    assert [p["side"] for p in session.placed] == ["BUY", "SELL", "BUY", "BUY", "BUY"]
+    assert (counters[-1]["count"], counters[-1]["buy_count"], counters[-1]["sell_count"]) == (5, 4, 1)
+    capped = [i for i in intents.values() if i.get("session_buy_cap_reached") is True]
+    assert len(capped) == 1 and capped[0]["side"] == "BUY" and capped[0]["status"] == "NOT_PLACED"
+    assert "net 3 = 4 BUY - 1 filled SELL" in capped[0]["terminal_reason"]
+    assert not capped[0].get("place_attempted") and not capped[0].get("preview_result")
+    assert all(not i.get("execution_limit_blocked") for i in intents.values())
+
+
 def test_a_gap_above_the_notional_cap_is_clipped_and_closed_by_the_next_slot(monkeypatch):
     """The owner's rule (ก): a 220-ish USD gap buys 148.5 now and the rest next slot."""
     session = TradeSession(monkeypatch, real="38.63")
