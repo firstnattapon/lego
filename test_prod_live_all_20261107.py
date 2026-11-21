@@ -260,7 +260,7 @@ def test_each_running_bot_is_redeployed_to_its_own_function_with_the_new_caps(sa
         line = re.search(rf"gcloud functions deploy {target} .*", recorded).group(0)
         for part in (f"LEGO_SYMBOL={symbol},", "WEBULL_ENV=PROD,", "LEGO_MODE=trade,",
                      "LEGO_FIX_C=1500,", "LEGO_DIFF=50,", "LEGO_LEAPS=100,",
-                     "LEGO_MAX_ORDER_NOTIONAL_USD=150,", "LEGO_MAX_SESSION_BUY_ORDERS=3,"):
+                     "LEGO_MAX_ORDER_NOTIONAL_USD=150,", "LEGO_MAX_SESSION_BUY_ORDERS=2,"):
             assert part in line, (target, part)
         assert "LEGO_PROD_LIVE_ACK" not in line
     preflights = [line for line in recorded.splitlines()

@@ -218,10 +218,10 @@ def test_funding_release_is_always_flagged_as_temporary():
 def test_recommended_limits_for_a_ten_thousand_principal():
     assert rh.recommend_limits(10000, "67.4") == {
         "profile": "UAT", "initial_funding": False, "LEGO_MAX_ORDER_NOTIONAL_USD": "1500",
-        "LEGO_MAX_SESSION_ORDERS": "26", "LEGO_MAX_SESSION_BUY_ORDERS": "3", "LEGO_MAX_ORDER_QUANTITY": "30"}
+        "LEGO_MAX_SESSION_ORDERS": "26", "LEGO_MAX_SESSION_BUY_ORDERS": "2", "LEGO_MAX_ORDER_QUANTITY": "30"}
     assert rh.recommend_limits(10000, "67.4", profile="PROD") == {
         "profile": "PROD", "initial_funding": False, "LEGO_MAX_ORDER_NOTIONAL_USD": "1000",
-        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "3", "LEGO_MAX_ORDER_QUANTITY": "20"}
+        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "2", "LEGO_MAX_ORDER_QUANTITY": "20"}
     assert rh.recommend_limits(10000, "67.4", profile="PROD", initial_funding=True) == {
         "profile": "PROD", "initial_funding": True, "LEGO_MAX_ORDER_NOTIONAL_USD": "12500",
         "LEGO_MAX_SESSION_ORDERS": "2", "LEGO_MAX_SESSION_BUY_ORDERS": "2", "LEGO_MAX_ORDER_QUANTITY": "200"}

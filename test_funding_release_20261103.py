@@ -53,7 +53,7 @@ def test_the_recommended_funding_release_never_blocks_its_own_ratio(principal):
 def test_the_steady_caps_are_unchanged():
     assert rh.recommend_limits(Decimal("1500"), Decimal("10.82"), profile="PROD") == {
         "profile": "PROD", "initial_funding": False, "LEGO_MAX_ORDER_NOTIONAL_USD": "150",
-        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "3", "LEGO_MAX_ORDER_QUANTITY": "20"}
+        "LEGO_MAX_SESSION_ORDERS": "10", "LEGO_MAX_SESSION_BUY_ORDERS": "2", "LEGO_MAX_ORDER_QUANTITY": "20"}
     assert rh.recommend_limits(10000, "67.4", profile="PROD", initial_funding=True)[
         "LEGO_MAX_ORDER_NOTIONAL_USD"] == "12500"
 
@@ -104,7 +104,7 @@ def test_the_prefunded_preflight_clips_the_first_buy_and_names_the_funding_relea
     first = finding(report, "first_order")
     assert first["severity"] == "WARN"
     message = first["message"]
-    assert "clipped to the caps" in message and "about 4 orders" in message and "3 net BUYs per session" in message
+    assert "clipped to the caps" in message and "about 4 orders" in message and "2 net BUYs per session" in message
     assert "ORDER_CLIPPED_LARGE_GAP" in message                    # 491 USD > 3 x 150
     assert "hold between 34 and 63" in message and "LEGO_FUNDING_MODE_OVERRIDE=initial-funding" in message
     # The cash that opens the next order: one clipped order at the cap, not the whole gap.
@@ -186,7 +186,7 @@ def test_step_b_is_the_canary_once_the_shares_are_held(sandbox):
     assert "--window-sessions 30 --funding prefunded" in preflight_call(sandbox)
     assert "one-off FUNDING" not in result.stdout and "WITHOUT LEGO_FUNDING_MODE_OVERRIDE" not in result.stdout
     assert ("LEGO_MAX_ORDER_QUANTITY=20,LEGO_MAX_ORDER_NOTIONAL_USD=150,LEGO_MAX_SESSION_ORDERS=10,"
-            "LEGO_MAX_SESSION_BUY_ORDERS=3,") in deployed_line(sandbox)
+            "LEGO_MAX_SESSION_BUY_ORDERS=2,") in deployed_line(sandbox)
 
 
 # ------------------------------------------------------------------ a whole funding, then canary
