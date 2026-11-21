@@ -104,7 +104,7 @@ def test_the_prefunded_preflight_clips_the_first_buy_and_names_the_funding_relea
     first = finding(report, "first_order")
     assert first["severity"] == "WARN"
     message = first["message"]
-    assert "clipped to the caps" in message and "about 4 orders" in message and "3 BUYs per session" in message
+    assert "clipped to the caps" in message and "about 4 orders" in message and "3 net BUYs per session" in message
     assert "ORDER_CLIPPED_LARGE_GAP" in message                    # 491 USD > 3 x 150
     assert "hold between 34 and 63" in message and "LEGO_FUNDING_MODE_OVERRIDE=initial-funding" in message
     # The cash that opens the next order: one clipped order at the cap, not the whole gap.

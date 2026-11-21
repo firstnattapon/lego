@@ -255,7 +255,7 @@ def test_a_flat_account_is_told_how_many_shares_to_buy_first():
     first = report["derived"]["first_order"]
     assert (first["side"], first["notional_usd"]) == ("BUY", "418.00")
     assert finding(report, "first_order")["severity"] == "INFO"            # 418 USD: below 3 caps
-    assert "about 3 orders (3 BUYs per session)" in finding(report, "first_order")["message"]
+    assert "about 3 orders (3 net BUYs per session)" in finding(report, "first_order")["message"]
 
 
 @pytest.mark.parametrize("change,blocked", [

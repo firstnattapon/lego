@@ -1706,17 +1706,18 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                 and not _preview_only(runtime, intent)):
             # Advisory and read-only: a BUY whose session quota is already spent stops
             # here, before it spends a broker Preview. reserve_attempt stays the authority.
-            from execution_limits import buy_quota_spent, session_key_for
+            from execution_limits import buy_cap_reason, buy_quota_spent, session_key_for
             try:
                 quota_key = session_key_for(runtime.deployment.session_key_mode, limits,
                                             now=datetime.now(UTC))
             except ExecutionLimitError:
                 quota_key = None                  # reserve_attempt refuses it with its reason
-            if quota_key and buy_quota_spent(
-                    str(dispatch_claim.get("dispatch_scope_key") or ck), limits, quota_key):
+            spent = quota_key and buy_quota_spent(
+                str(dispatch_claim.get("dispatch_scope_key") or ck), limits, quota_key)
+            if spent:
                 return _stop(ck, run_id, "NOT_PLACED", {
-                    "terminal_reason": f"session BUY limit reached ({limits.buy_orders} "
-                                       "BUY orders per session)",
+                    "terminal_reason": buy_cap_reason(
+                        limits, spent if isinstance(spent, dict) else {}),
                     "session_buy_cap_reached": True, "dispatch_check_phase": "pre_preview"},
                     claim=intent, session_buy_cap_reached=True)
 
@@ -2071,6 +2072,7 @@ def _dispatch_or_reconcile_one(trade_client, data_client, cfg, intent: dict,
                      claim=intent)
             fr.node("W24", "reserved", run_id=run_id,
                     **fr.pick(evidence, "session_key", "reservation_count",
+                              "buy_reservation_count", "net_buy_count",
                               "estimated_notional_usd", "quantity"))
             # Reservation and audit persistence are network operations too.
             limits.check(intent["quantity"], final_fresh["price"], now=datetime.now(UTC))

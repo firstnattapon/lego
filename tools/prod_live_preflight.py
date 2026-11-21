@@ -371,7 +371,7 @@ def judge(facts: dict, params: Params) -> dict:
                     f"fits the canary caps ({_plain(notional_cap)} USD / {_plain(quantity_cap)} shares)")
             else:
                 # Clipped to the caps (lego_one_row.clip_quantity): one order per slot, at
-                # most LEGO_MAX_SESSION_BUY_ORDERS BUYs a session, until the gap is within DIFF.
+                # most LEGO_MAX_SESSION_BUY_ORDERS net BUYs a session, until the gap is within DIFF.
                 derived["first_order"]["clipped"] = True
                 steps = math.ceil(abs(gap) / notional_cap)
                 hold = (f"to start rebalanced, hold between {low} and {high} real {symbol} shares "
@@ -388,7 +388,7 @@ def judge(facts: dict, params: Params) -> dict:
                     f"{_money(abs(gap))} USD ({_plain(quantity)} shares), more than the canary caps "
                     f"({_plain(notional_cap)} USD / {_plain(quantity_cap)} shares): it is clipped to "
                     f"the caps and the gap closes over about {steps} orders "
-                    f"({caps['LEGO_MAX_SESSION_BUY_ORDERS'] + ' BUYs per session' if side == 'BUY' else 'one per slot'})"
+                    f"({caps['LEGO_MAX_SESSION_BUY_ORDERS'] + ' net BUYs per session' if side == 'BUY' else 'one per slot'})"
                     f"{big}. To avoid that, {hold}{funding_hint}")
     elif real is not None and price is not None:
         derived["real_target"] = "0"

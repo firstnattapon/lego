@@ -4,10 +4,19 @@ Notional is an estimate at the last verified quote, not a guaranteed MARKET fill
 price. Session reservations count possible attempts (including crashes) and are
 never refunded automatically.
 
-LEGO_MAX_SESSION_BUY_ORDERS bounds the BUY attempts inside the same session counter
-(``execution_session.buy_count``): a BUY spends one total and one BUY reservation, a
-SELL only a total one and never refunds a BUY. A counter written before buy_count
-existed is read as count (every earlier attempt may have been a BUY).
+LEGO_MAX_SESSION_BUY_ORDERS bounds the *net* BUYs of a session (owner, 2026-11-21):
+net = ``execution_session.buy_count`` (BUY reservations, counted before Place and never
+refunded) − ``execution_session.sell_count`` (SELLs the broker reported filled,
+credited by broker_circuit.record_outcome inside the same lock-document transaction).
+A BUY is reserved only while net < LEGO_MAX_SESSION_BUY_ORDERS; net may go below zero
+(SELL, SELL, then up to N + 2 BUYs). A SELL spends one total reservation, is never
+blocked by the BUY cap, and frees a BUY only once it fills. A counter written before
+buy_count existed is read as count (every earlier attempt may have been a BUY); one
+written before sell_count existed has no filled SELL.
+
+The dispatch-lock document stays schema 5: a revision that does not know sell_count
+reads only buy_count, i.e. the stricter gross rule, so a rollback fails closed without a
+schema bump and still carries sell_count over in ``{**session}``.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,7 +40,7 @@ class ExecutionLimitError(ValueError):
 
 
 class SessionBuyCapReached(ExecutionLimitError):
-    """The BUY quota of this session is spent. Expected in a long fall, not a fault."""
+    """The net BUY quota of this session is spent. Expected in a long fall, not a fault."""
 
 
 def buy_count_of(session) -> int:
@@ -41,6 +50,24 @@ def buy_count_of(session) -> int:
     if "buy_count" in session:
         return session["buy_count"]
     return session.get("count", 0)
+
+
+def sell_count_of(session) -> int:
+    """Filled SELLs credited to a counter; one written before sell_count has none."""
+    if not session:
+        return 0
+    return session.get("sell_count", 0)
+
+
+def net_buy_count_of(session) -> int:
+    """BUY reservations minus filled SELLs; below zero after a session that sold first."""
+    return buy_count_of(session) - sell_count_of(session)
+
+
+def buy_cap_reason(limits, session) -> str:
+    return (f"session net BUY limit reached (net {net_buy_count_of(session)} = "
+            f"{buy_count_of(session)} BUY - {sell_count_of(session)} filled SELL; "
+            f"max {limits.buy_orders} net BUY per session)")
 
 
 def validate_counter(counter):
@@ -54,6 +81,12 @@ def validate_counter(counter):
     if "buy_count" in counter and (type(counter["buy_count"]) is not int
                                    or not 0 <= counter["buy_count"] <= counter["count"]):
         raise ExecutionLimitError("malformed BUY counter")
+    # Each reservation is one BUY or one SELL, and only a reserved SELL can be credited.
+    if "sell_count" in counter and (type(counter["sell_count"]) is not int
+                                    or counter["sell_count"] < 0
+                                    or buy_count_of(counter) + counter["sell_count"]
+                                    > counter["count"]):
+        raise ExecutionLimitError("malformed SELL counter")
     if counter["key"].startswith("XNYS:"):
         from datetime import date
         try:
@@ -170,8 +203,8 @@ class ExecutionLimits:
                 "quantity": str(qty), "checked_at": now.isoformat()}
 
 
-def buy_quota_spent(scope, limits, session_key) -> bool:
-    """Advisory, read-only: is this session's BUY quota already spent?
+def buy_quota_spent(scope, limits, session_key):
+    """Advisory, read-only: the session counter when its net BUY quota is spent, else None.
 
     Lets the worker stop a BUY before it spends a broker Preview. Never the
     authority: reserve_attempt decides inside its transaction.
@@ -180,14 +213,45 @@ def buy_quota_spent(scope, limits, session_key) -> bool:
     from lego_outbox import DISPATCH_LOCK_PATH
     doc = db.reference(f"{DISPATCH_LOCK_PATH}/{scope}").get()
     if not isinstance(doc, dict):
-        return False
+        return None
     session = doc.get("execution_session") or {}
     try:
         validate_counter(session)
     except ExecutionLimitError:
-        return False                     # malformed: reserve_attempt refuses it with its reason
-    return (session.get("key") == session_key
-            and buy_count_of(session) >= limits.buy_orders)
+        return None                      # malformed: reserve_attempt refuses it with its reason
+    if (session.get("key") == session_key
+            and net_buy_count_of(session) >= limits.buy_orders):
+        return dict(session)
+    return None
+
+
+def credit_filled_sell(doc, run_id, now) -> bool:
+    """Credit one filled SELL to the counter this run reserved in; pure, never raises.
+
+    Called by broker_circuit.record_outcome inside its lock-document transaction, so the
+    credit and the outcome receipt are one write. ``doc`` is that transaction's working
+    copy: the counter is replaced by a new dict, never edited in place, because a
+    transaction callback may run again on the same input. No credit unless the counter's
+    latest reservation is this run (same session), this run was not credited before, the
+    counter is well formed and still has an uncredited SELL reservation.
+    """
+    session = doc.get("execution_session")
+    if not isinstance(session, dict) or not session or not run_id:
+        return False
+    try:
+        validate_counter(session)
+    except ExecutionLimitError:
+        return False
+    if (session.get("last_run_id") != run_id
+            or session.get("last_sell_credit_run_id") == run_id):
+        return False
+    sells = sell_count_of(session)
+    if sells >= session["count"] - buy_count_of(session):
+        return False
+    doc["execution_session"] = {**session, "sell_count": sells + 1,
+                                "last_sell_credit_run_id": run_id,
+                                "sell_credited_at": str(now)}
+    return True
 
 
 def reserve_attempt(scope, claim, run_id, limits, session_key, *, side, now=None):
@@ -196,7 +260,7 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, side, now=None
     Market-day keys are independent of release expiry and chain identity.
     Legacy window counters require an explicit idle migration to market-day.
     One bounded counter per account-symbol; keys cannot move backwards.
-    A BUY also needs a free BUY reservation (limits.buy_orders) in that counter.
+    A BUY also needs net BUYs (BUY reservations − filled SELLs) below limits.buy_orders.
     """
     side = str(side or "").strip().upper()
     if side not in ("BUY", "SELL"):
@@ -236,7 +300,7 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, side, now=None
                               or float(session.get("end_epoch", float("inf"))) >= limits.end.timestamp()):
                 return old
             session = {"key": session_key, "end_epoch": limits.end.timestamp(), "count": 0,
-                       "buy_count": 0}
+                       "buy_count": 0, "sell_count": 0}
         count = session.get("count")
         if type(count) is not int or count < 0:
             return old
@@ -245,7 +309,7 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, side, now=None
         if count >= limits.orders:
             return old
         buys = buy_count_of(session)
-        if buy and buys >= limits.buy_orders:
+        if buy and net_buy_count_of(session) >= limits.buy_orders:
             return old
         doc["execution_session"] = {**session, "count": count + 1,
                                     "buy_count": min(buys + (1 if buy else 0), count + 1),
@@ -271,9 +335,10 @@ def reserve_attempt(scope, claim, run_id, limits, session_key, *, side, now=None
                 and lease.tzinfo is not None and lease > now
                 and session.get("key") == session_key
                 and type(session.get("count")) is int and session["count"] < limits.orders
-                and buy_count_of(session) >= limits.buy_orders):
-            raise SessionBuyCapReached(
-                f"session BUY limit reached ({limits.buy_orders} BUY orders per session)")
+                and net_buy_count_of(session) >= limits.buy_orders):
+            raise SessionBuyCapReached(buy_cap_reason(limits, session))
         raise ExecutionLimitError("session attempt limit reached or dispatch lease lost")
     return {"session_key": session_key, "reservation_count": session["count"],
-            "buy_reservation_count": buy_count_of(session)}
+            "buy_reservation_count": buy_count_of(session),
+            "sell_fill_count": sell_count_of(session),
+            "net_buy_count": net_buy_count_of(session)}

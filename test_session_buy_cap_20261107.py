@@ -3,9 +3,12 @@
 LEGO_MAX_SESSION_ORDERS counted BUY and SELL together, so every one of its 10 orders could
 be a BUY. The BUY cap is a second bound inside the same transactional session counter
 (execution_session.buy_count): a BUY spends one total and one BUY reservation, a SELL only
-a total one and never refunds a BUY. A counter written before buy_count existed is read as
-count, and the dispatch-lock document is schema 5 so a revision that does not advance
-buy_count refuses it instead of reserving BUYs it does not count.
+a total one. A counter written before buy_count existed is read as count, and the
+dispatch-lock document is schema 5 so a revision that does not advance buy_count refuses it
+instead of reserving BUYs it does not count.
+
+Since 2026-11-21 the cap is net (test_session_net_buy_cap_20261121.py): a SELL frees a BUY
+once the broker reports it filled, never at its reservation.
 """
 from __future__ import annotations
 
@@ -54,14 +57,14 @@ def test_three_buys_then_the_fourth_is_refused_and_a_sell_still_goes():
     for n in range(1, 4):
         result = reserve(ref, f"buy{n}", "BUY")
         assert (result["reservation_count"], result["buy_reservation_count"]) == (n, n)
-    with pytest.raises(SessionBuyCapReached, match="3 BUY orders per session"):
+    with pytest.raises(SessionBuyCapReached, match="max 3 net BUY per session"):
         reserve(ref, "buy4", "BUY")
     session = ref.get()["execution_session"]
     assert (session["count"], session["buy_count"]) == (3, 3)      # the refused BUY spent nothing
     sell = reserve(ref, "sell1", "sell")
     assert (sell["reservation_count"], sell["buy_reservation_count"]) == (4, 3)
     with pytest.raises(SessionBuyCapReached):
-        reserve(ref, "buy5", "BUY")                                # a SELL never refunds a BUY
+        reserve(ref, "buy5", "BUY")                # a SELL reservation alone frees no BUY
     assert ref.get()["worker_schema_version"] == WORKER_SCHEMA_VERSION == 5
 
 

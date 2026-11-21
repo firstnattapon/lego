@@ -66,8 +66,9 @@ FUNDING_NOTIONAL_FRACTION = Decimal("1.25")
 QUANTITY_MARGIN = Decimal("1.3")
 FUNDING_SESSION_ORDERS = 2
 PROD_CANARY_SESSION_ORDERS = 10
-# BUY orders per session (LEGO_MAX_SESSION_BUY_ORDERS): with the PROD notional cap at 10%
-# of FIX_C this puts at most about 30% of FIX_C into the position in one session.
+# Net BUYs per session (LEGO_MAX_SESSION_BUY_ORDERS = BUY reservations − filled SELLs,
+# execution_limits): with the PROD notional cap at 10% of FIX_C this adds at most about 30%
+# of FIX_C to the position over a session, net of what it sold.
 RECOMMENDED_SESSION_BUY_ORDERS = 3
 FUNDING_MODES = ("prefunded", "initial-funding")
 # The approval window a release gets when none is given (ops.py release-plan,
@@ -213,7 +214,7 @@ def findings(inp: ReleaseInputs, *, now: datetime | None = None) -> list[dict]:
             # Every valid window covers at least MIN_SESSIONS_COVERED sessions.
             add("session_key_mode", fail,
                 f"LEGO_SESSION_KEY_MODE=release_window counts the {limits.orders} orders and "
-                f"{limits.buy_orders} BUY orders over the whole approval window, not per "
+                f"{limits.buy_orders} net BUY orders over the whole approval window, not per "
                 "market day; use LEGO_SESSION_KEY_MODE=market_day")
 
     if inp.production and inp.allow_fractional:
@@ -380,8 +381,9 @@ def _limit_findings(inp: ReleaseInputs, limits: ExecutionLimits, add, fail) -> N
         add("session_orders_cap", INFO,
             f"max session orders {limits.orders} of {slots} slots per session")
     add("session_buy_orders_cap", INFO,
-        f"at most {limits.buy_orders} of the {limits.orders} session orders may be BUYs "
-        f"(up to about {_plain(limits.notional * limits.buy_orders)} USD bought per session)")
+        f"net BUYs (BUY - filled SELL) at most {limits.buy_orders} per session, within the "
+        f"{limits.orders} session orders (up to about {_plain(limits.notional * limits.buy_orders)} "
+        "USD net bought per session)")
 
 
 def recommend_limits(principal, reference_price=None, *, profile: str = "UAT",

@@ -1,5 +1,8 @@
 # Runbook: เปิดเงินจริง (PROD live)
 
+> **เปลี่ยน 21 พ.ย. 2026** ([CHANGE_20261121_TH.md](CHANGE_20261121_TH.md)): `LEGO_MAX_SESSION_BUY_ORDERS` นับ **net BUY**
+> (BUY ที่จอง − SELL ที่ fill แล้ว) ต่อวันตลาด แทนการนับ BUY รวม; net ติดลบได้
+
 > **เปลี่ยน 7 พ.ย. 2026** ([CHANGE_20261107_TH.md](CHANGE_20261107_TH.md)): ลบ `LEGO_PROD_LIVE_ACK` แล้ว (deploy รอบเดียว),
 > เพิ่ม `LEGO_MAX_SESSION_BUY_ORDERS` (BUY ≤ 3 ต่อวัน), ออร์เดอร์ที่เกินเพดานถูก **ตัดให้เท่าเพดาน** แทนการไม่ส่ง,
 > window ตั้งต้น **30 session**. ข้อความเรื่อง ack ในหัวข้ออื่นด้านล่าง (บันทึกเก่า) ให้ถือตามหัวข้อนี้แทน
@@ -19,8 +22,9 @@
   (`ops.py release-plan --enforce` และ script ตรวจซ้ำ) — deploy ทางอื่นที่ข้าม script จะข้ามการตรวจนี้ด้วย
 - ออร์เดอร์ที่หุ้นเกินเพดาน หรือมูลค่าเกินเพดาน ÷ 1.01 (≈ 148.5 ที่เพดาน 150; เผื่อราคาขยับตอน dispatch) ถูกตัดให้เท่านั้น ทั้ง BUY และ SELL
   ส่วนที่เหลือรอบถัดไปไล่ต่อ; ถ้า |gap| > 3 × เพดาน ยังส่งแต่แจ้ง `ORDER_CLIPPED_LARGE_GAP` ให้คนตรวจหุ้นกับแอป
-- BUY ได้ไม่เกิน `LEGO_MAX_SESSION_BUY_ORDERS` ต่อวันตลาด (ภายในเพดานรวม `LEGO_MAX_SESSION_ORDERS`); เกินแล้ว ⇒
-  `SESSION_BUY_CAP_REACHED` (WARNING ไม่ปลุกคน) และไม่เรียก Preview; SELL ยังส่งได้และไม่คืนโควตา BUY
+- net BUY (BUY ที่จอง − SELL ที่ fill แล้ว) ได้ไม่เกิน `LEGO_MAX_SESSION_BUY_ORDERS` ต่อวันตลาด (ภายในเพดานรวม
+  `LEGO_MAX_SESSION_ORDERS`); เกินแล้ว ⇒ `SESSION_BUY_CAP_REACHED` (WARNING ไม่ปลุกคน) และไม่เรียก Preview;
+  SELL ยังส่งได้เสมอ และเมื่อ fill แล้วปลด BUY ได้ 1 ครั้ง (SELL ที่ไม่ fill ไม่ปลด)
 - ไม่มีอะไรต่ออายุเอง: window, DNA และ token หมดแล้วระบบหยุดส่ง order (และเตือนล่วงหน้า 48 ชม.) จนกว่าคนจะออก release ใหม่
 
 ## 0. ก่อนเริ่ม (ทุกข้อต้องมีหลักฐาน)
@@ -130,7 +134,8 @@ python tools/verify_deployment.py --service private-service.json --scheduler pri
   ให้ยืนยันว่า policy ส่งถึงคนจริงด้วย drill (G4) — คำเตือนนี้ไม่รู้เรื่อง policy จึงไม่หายเอง
 - `verify_deployment` ตรวจ `production_mode`: observe/inactive หรือ trade/active ที่มี authorization และ caps ครบ 5 ค่า — ไม่ได้ตรวจว่าค่าถูกต้องต่อบัญชี
 - `business_status=RELEASE_UNAUTHORIZED` (severity ERROR, `operational_health.orders_blocked_by_release=true`) = deployment เป็น trade/active แต่ไม่ส่ง order เพราะ release authorization ไม่ตรงกับ release (มักเกิดจากการแก้ env ของ function ภายหลัง) — `python ops.py check` แสดง `release_authorized`, `new_orders_authorized`; แก้ด้วยการ deploy ใหม่ผ่าน script ไม่ใช่แก้ env ทีละค่า
-- `SESSION_BUY_CAP_REACHED` (WARNING) = BUY ครบโควตาของวันแล้ว เป็นเรื่องปกติของวันที่ราคาลงยาว; วันถัดไปโควตาเริ่มใหม่
+- `SESSION_BUY_CAP_REACHED` (WARNING) = net BUY ครบโควตาของวันแล้ว เป็นเรื่องปกติของวันที่ราคาลงยาว; SELL ที่ fill ปลดได้ทีละ 1,
+  วันถัดไปโควตาเริ่มใหม่; ดูตัวเลขด้วย `python ops.py status` (`execution_session.net_buy_count`)
 - `ORDER_CLIPPED_LARGE_GAP` (ERROR, webhook) = ออร์เดอร์ถูกตัด และ |gap| > 3 × เพดาน: ตรวจหุ้นจริงกับแอปทันที (อาจเป็นการอ่านหุ้นผิด)
 - เฝ้า tick แรกของ session ถัดไปด้วยตัวเอง: `business_status`, `release_expiring`, order แรกและ fill ตรงกับ caps ที่อนุมัติ
 - วิธี B: ทันทีที่ funding fill ยืนยันและ holdings ตรง broker ให้ออก release steady (caps แน่น, `--initial-funding` ออก) — อย่าปล่อย release funding ไว้
@@ -197,8 +202,9 @@ python ops.py bootstrap-auth --token-file PRIVATE_TOKEN --secret projects/lego-f
 ## 9. Rollback
 
 ปิด new orders (ข้อ 6) แล้วคง worker ที่เข้าใจ schema v4 ไว้เพื่อ reconcile ต่อ — ไม่ย้อนกลับไป binary ที่ไม่รู้จักสถานะใหม่,
-ไม่ลบ outbox/fence, ไม่ refund quota (`LEGO_MAX_SESSION_ORDERS` และ `LEGO_MAX_SESSION_BUY_ORDERS` นับก่อน Place และไม่คืน), ไม่ clear operator halt อัตโนมัติ
+ไม่ลบ outbox/fence, ไม่ refund quota (`LEGO_MAX_SESSION_ORDERS` และ BUY ของ `LEGO_MAX_SESSION_BUY_ORDERS` นับก่อน Place และไม่คืน; มีแค่ SELL ที่ fill ที่หักจาก net BUY), ไม่ clear operator halt อัตโนมัติ
 - dispatch lock เป็น schema 5 แล้ว (`buy_count`): revision เก่าที่รู้จักแค่ 1..4 จะปฏิเสธการจอง order ใหม่ (fail closed) — rollback ไป observe ได้ตามปกติ
+- `sell_count` (21 พ.ย.) ไม่เปลี่ยน schema: revision schema 5 ก่อนหน้านี้ไม่รู้จัก ⇒ นับ BUY รวม (เข้มกว่า) จึง rollback ได้
 หลัง order ค้างทั้งหมด terminal และ ledger ปิดครบ จึงออก release ใหม่
 ถ้า chain ถูกผูกกับ quantity contract ที่แคบลงแล้ว (เช่น 5→2 ตำแหน่ง) revision ที่ใช้ contract กว้างกว่าจะ commit ไม่ได้ (`CONFIG_ERROR`, ไม่มี order, DNA clock หยุด) — roll forward ไม่ roll back (`docs/UAT_20261005_INCIDENT_TH.md`)
 

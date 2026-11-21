@@ -545,7 +545,7 @@ def test_the_exact_release_deploys_in_one_run(sandbox):
     summary = result.stdout.index("REAL-MONEY RELEASE (prefunded canary)")
     assert summary < result.stdout.index("5/5 Deploy")
     for text in ("QBTS / 1500 / 50 / 100 / true", "10.82", "38.63", "1515.00",
-                 "20 / 150 USD / 10 per session / 3 BUY", "BUY below 14.5, SELL below 15"):
+                 "20 / 150 USD / 10 per session / 3 net BUY", "BUY below 14.5, SELL below 15"):
         assert text in result.stdout, text
     deployed = deployed_line(sandbox)
     for value in (f"WEBULL_ENV=PROD,FIREBASE_DB_URL={PROD_DB},LEGO_SYMBOL=QBTS,LEGO_FIX_C=1500,"
